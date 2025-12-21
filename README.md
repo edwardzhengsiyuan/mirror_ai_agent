@@ -87,4 +87,4 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
   ```
 
 ## 深入阅读
-- 设计、依赖、缓存、工具接口、测试矩阵等详见《Agent开发文档.md》。
+- 设计、依赖、缓存、工具接口、测试矩阵等详见 `docs/Agent开发文档.md`。
