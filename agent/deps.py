@@ -1,0 +1,51 @@
+"""Node dependency graph and helpers."""
+
+from __future__ import annotations
+
+from typing import Dict, Iterable, List, Set
+
+COMMON_PREREQS = [
+    "PAIPAN",
+    "OVERALL",
+    "SHISHEN",
+    "GEJU",
+    "WUXING_PREFS",
+]
+
+DEPS: Dict[str, List[str]] = {
+    "PAIPAN": [],
+    "OVERALL": ["PAIPAN"],
+    "SHISHEN": ["PAIPAN"],
+    "GEJU": ["PAIPAN", "OVERALL"],
+    "WUXING_PREFS": ["PAIPAN", "OVERALL", "SHISHEN", "GEJU"],
+    "CAREER": COMMON_PREREQS,
+    "RELATIONSHIP": COMMON_PREREQS,
+    "HEALTH": COMMON_PREREQS,
+    "GUIREN": COMMON_PREREQS,
+    "LIUQIN": COMMON_PREREQS,
+    "XINGGE": COMMON_PREREQS,
+    "OTHER": COMMON_PREREQS,
+}
+
+
+def _visit(node: str, deps: Dict[str, List[str]], visiting: Set[str], visited: Set[str], order: List[str]) -> None:
+    if node in visited:
+        return
+    if node in visiting:
+        raise ValueError(f"Dependency cycle detected at {node}")
+    visiting.add(node)
+    for dep in deps.get(node, []):
+        _visit(dep, deps, visiting, visited, order)
+    visiting.remove(node)
+    visited.add(node)
+    order.append(node)
+
+
+def toposort(nodes: Iterable[str], deps: Dict[str, List[str]] | None = None) -> List[str]:
+    graph = deps or DEPS
+    order: List[str] = []
+    visiting: Set[str] = set()
+    visited: Set[str] = set()
+    for node in nodes:
+        _visit(node, graph, visiting, visited, order)
+    return order

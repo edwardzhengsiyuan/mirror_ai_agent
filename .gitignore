@@ -1,0 +1,15 @@
+# Virtual env & caches
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Local config / secrets
+.env
+
+# Generated logs and conversations
+storage/logs/
+storage/conversations/
+storage/profile_demo.json
+
+# Editor/OS noise
+.DS_Store
