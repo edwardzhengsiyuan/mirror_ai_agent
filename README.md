@@ -67,6 +67,15 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 - 本地多轮回放（默认 stub）：`python tests/run_local_tester.py`
 - 在线 LLM：`python tests/test_llm_live.py`，或测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`
 
+## 命令行聊天前端
+- 交互式 TUI（节点可展开/折叠、流式刷新）：`python cli_chatbot.py`
+- 支持创建用户 profile、选择已有用户、续聊/新会话；运行时展示节点/工具调用状态。
+
+## Web 前端（推荐）
+- 启动后端服务：`python web_server.py`
+- 浏览器访问：`http://localhost:8000/`
+- 功能：创建用户、选择会话、流式展示节点输出与工具调用日志。
+
 ## 常见问题
 - API key 缺失：设置 `.env` 中的 `LLM_API_BASE`/`LLM_API_KEY`，或使用 `LLM_MODE=stub`。
 - 档案缺字段：`birth`（含时分秒）、`gender`、`prompt_config`、`node_cache` 必填；`birth_time_unknown` 为布尔值。

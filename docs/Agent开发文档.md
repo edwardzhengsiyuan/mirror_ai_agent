@@ -108,7 +108,8 @@
 - Stub 自检：`python tests/test_llm_tool_stub.py`（无需 API）。
 - 并发与缓存：`python tests/test_parallel_execution.py`（依赖 stub）。
 - 缓存失败重跑：`python -m pytest tests/test_cache_retry_on_error.py`。
-- 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/profile_demo.json` 与 `storage/conversations/demo.jsonl`。\n- 在线 LLM：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`（`LLM_LIVE_FULL=1` 才跑全流程）。
+- 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/profile_demo.json` 与 `storage/conversations/demo.jsonl`。
+- 在线 LLM：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`（`LLM_LIVE_FULL=1` 才跑全流程）。
 - 断点恢复示例：`python -m pytest tests/test_resume_cache_live_profiles.py`（使用 `storage/users/*/profile.json` 作为夹具）。
 
 ## 12. 已知限制与改进建议
@@ -125,7 +126,19 @@
 - 并发阻塞：确认 `LLM_PARALLEL_WORKERS` 是否过小；in-flight 去重会导致同节点等待同一个执行完成。
 - 时间定位为空：`ref_text` 未命中规则或排盘无对应年份；可打印 `plan["time"]` 及 `time_context_tool` 返回值排查。
 
-## 14. 前端/服务对接指南
+## 14. 流式事件与节点输出
+- 接口：`run_turn(profile, question, now=None, event_sink=..., stream=True)`。
+- 事件回调：`event_sink(event: dict)`，会在节点开始/结束、工具调用、流式输出时被调用。
+- 关键事件类型：
+  - `plan`：规划结果（包含 `aspects` 与 `time`）。
+  - `node_start` / `node_end`：节点开始/结束；`node_end.output` 为最终输出；缓存命中会带 `cached=true`。
+  - `node_delta`：流式输出片段（`delta`/`reasoning_delta`）。
+  - `tool_call` / `tool_result`：工具调用与完成（PAIPAN/TIME_CONTEXT/LLM）。
+  - `time_context`：时间定位结果（可能为 `None`）。
+- 工具节点流式：PAIPAN/TIME_CONTEXT 在计算完成后以分片形式回放输出，保证前端统一接收流式事件。
+- 线程安全：执行引擎可能并发调用事件回调，建议在回调中使用线程安全队列或锁。
+
+## 15. 前端/服务对接指南
 - 当前不内置 HTTP 层，建议自行封装薄的 API 服务，调用链：加载 profile → `run_turn(profile, question, now=None)` → 保存 profile → 返回 `result`。
 - Profile 位置：推荐 `storage/users/<user_id>/profile.json`（可用 `agent/storage/paths.py` 生成）；会话日志可选写入 `storage/users/<user_id>/conversations/<session>.jsonl`（使用 `conversation_store.append_event`）。
 - 新会话：
@@ -154,6 +167,28 @@
   save_profile(profile_path, profile)
   ```
 - 如需 HTTP JSON 形态，可封装接口：`POST /ask`，请求 `{user_id, question, session_id?}`，响应 `{plan, time_context, response, cache_keys?}`；内部逻辑与上述相同。
+
+## 16. CLI 聊天前端
+- 启动：`python cli_chatbot.py`。
+- 功能：选择/创建用户、选择会话、流式显示节点输出与工具调用，节点可展开/折叠。
+- 操作：`Tab` 切换视图，`↑/↓` 选择节点，`Space` 展开/折叠，`Enter` 发送，`q` 退出。
+
+## 17. Web 前端
+- 后端服务：`python web_server.py`，默认监听 `0.0.0.0:8000`。
+- 前端入口：`http://localhost:8000/`（静态页面 `web/index.html`）。
+- 交互能力：
+  - 创建用户与会话、加载历史消息。
+  - 通过 SSE 订阅 `ask_stream` 的事件流，流式更新节点输出与工具调用日志。
+  - 节点输出以 `<details>` 展开/折叠，流式输出自动刷新。
+- API 约定（JSON）：
+  - `GET /api/users` → `{users: []}`
+  - `POST /api/users` → `{user_id, birth, gender, birth_time_unknown, prompt_config}` 创建用户
+  - `GET /api/profile?user_id=...` → profile JSON
+  - `GET /api/sessions?user_id=...` → `{sessions: []}`
+  - `POST /api/sessions` → `{user_id, session_id?}` 创建会话
+  - `GET /api/history?user_id=...&session_id=...` → `{messages:[{role,text}]}` 
+  - `POST /api/ask` → 非流式 `{plan, time_context, response}`
+  - `POST /api/ask_stream` → `text/event-stream`，逐条返回事件 JSON（含 `session`、`plan`、`node_*`、`tool_*`、`assistant_final`）
 
 ---
 

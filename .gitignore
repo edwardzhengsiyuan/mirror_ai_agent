@@ -10,6 +10,7 @@ __pycache__/
 storage/logs/
 storage/conversations/
 storage/profile_demo.json
+storage/users/
 
 # Editor/OS noise
 .DS_Store

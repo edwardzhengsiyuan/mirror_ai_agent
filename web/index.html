@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bazi Agent Web</title>
+    <style>
+      :root {
+        --bg: #f6f4ef;
+        --panel: #ffffff;
+        --ink: #1b1b1b;
+        --muted: #6c6c6c;
+        --accent: #2c6e6c;
+        --border: #e1ded8;
+        --danger: #b04c4c;
+        --ok: #2d7a55;
+        --warn: #b2782d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at top, #fbfaf7, var(--bg));
+      }
+
+      header {
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: flex-end;
+        justify-content: space-between;
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: 1px;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        width: min(820px, 100%);
+      }
+
+      label {
+        font-size: 12px;
+        color: var(--muted);
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      select,
+      input,
+      textarea,
+      button {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        font-size: 14px;
+      }
+
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #3a3a3a;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(280px, 1.1fr) minmax(300px, 1fr);
+        gap: 16px;
+        padding: 16px 24px 24px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+        min-height: 200px;
+      }
+
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      .message {
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        background: #f3f2ef;
+      }
+
+      .message.user {
+        background: #e7efe9;
+      }
+
+      .message.assistant {
+        background: #f5efe5;
+      }
+
+      .chat-input {
+        display: grid;
+        grid-template-columns: 1fr 120px;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .nodes details {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-bottom: 10px;
+        background: #faf9f6;
+      }
+
+      .nodes summary {
+        cursor: pointer;
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .status {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #ddd;
+      }
+
+      .status.running {
+        background: var(--warn);
+        color: #fff;
+      }
+
+      .status.done {
+        background: var(--ok);
+        color: #fff;
+      }
+
+      .status.error {
+        background: var(--danger);
+        color: #fff;
+      }
+
+      .status.cache {
+        background: #55698a;
+        color: #fff;
+      }
+
+      pre {
+        margin: 8px 0 0;
+        padding: 10px;
+        border-radius: 6px;
+        background: #f3f3f3;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 240px;
+        overflow: auto;
+      }
+
+      .log {
+        grid-column: 1 / -1;
+      }
+
+      .log-list {
+        font-size: 12px;
+        color: var(--muted);
+        max-height: 160px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .inline {
+        display: flex;
+        gap: 8px;
+      }
+
+      .inline > * {
+        flex: 1;
+      }
+
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+
+        .chat-input {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Bazi Agent Web</h1>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+          选择用户与会话，输入问题后将流式展示节点输出
+        </div>
+      </div>
+      <div class="controls">
+        <div>
+          <label>用户</label>
+          <select id="userSelect"></select>
+        </div>
+        <div>
+          <label>会话</label>
+          <select id="sessionSelect"></select>
+        </div>
+        <div class="inline">
+          <button id="newSessionBtn" class="secondary">新会话</button>
+          <button id="refreshBtn">刷新</button>
+        </div>
+        <details>
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted);">创建新用户</summary>
+          <div style="margin-top:10px;display:grid;gap:8px;">
+            <input id="newUserId" placeholder="user_id" />
+            <div class="inline">
+              <input id="birthYear" type="number" placeholder="年" />
+              <input id="birthMonth" type="number" placeholder="月" />
+              <input id="birthDay" type="number" placeholder="日" />
+            </div>
+            <div class="inline">
+              <input id="birthHour" type="number" placeholder="时" />
+              <input id="birthMinute" type="number" placeholder="分" />
+              <input id="birthSecond" type="number" placeholder="秒" />
+            </div>
+            <div class="inline">
+              <select id="gender">
+                <option value="male">male</option>
+                <option value="female">female</option>
+              </select>
+              <select id="timeUnknown">
+                <option value="false">已知时辰</option>
+                <option value="true">未知时辰</option>
+              </select>
+            </div>
+            <button id="createUserBtn">创建用户</button>
+          </div>
+        </details>
+      </div>
+    </header>
+    <main>
+      <section class="panel">
+        <h2>对话</h2>
+        <div id="messages"></div>
+        <div class="chat-input">
+          <textarea id="question" rows="3" placeholder="输入问题..."></textarea>
+          <button id="sendBtn">发送</button>
+        </div>
+      </section>
+      <section class="panel nodes">
+        <h2>节点输出</h2>
+        <div id="nodes"></div>
+      </section>
+      <section class="panel log">
+        <h2>事件日志</h2>
+        <div id="eventLog" class="log-list"></div>
+      </section>
+    </main>
+
+    <script>
+      const nodeOrder = [
+        "PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS",
+        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER","TIME_CONTEXT"
+      ];
+      const nodes = new Map();
+      const messagesEl = document.getElementById("messages");
+      const eventLogEl = document.getElementById("eventLog");
+      const nodesEl = document.getElementById("nodes");
+      const userSelect = document.getElementById("userSelect");
+      const sessionSelect = document.getElementById("sessionSelect");
+
+      function logEvent(text) {
+        const line = document.createElement("div");
+        line.textContent = text;
+        eventLogEl.appendChild(line);
+        eventLogEl.scrollTop = eventLogEl.scrollHeight;
+      }
+
+      function appendMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `message ${role}`;
+        div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function createNodeCards() {
+        nodesEl.innerHTML = "";
+        nodes.clear();
+        nodeOrder.forEach((node) => {
+          const detail = document.createElement("details");
+          detail.dataset.node = node;
+          const summary = document.createElement("summary");
+          const title = document.createElement("span");
+          title.textContent = node;
+          const status = document.createElement("span");
+          status.className = "status";
+          status.textContent = "idle";
+          summary.appendChild(title);
+          summary.appendChild(status);
+          const pre = document.createElement("pre");
+          pre.textContent = "";
+          detail.appendChild(summary);
+          detail.appendChild(pre);
+          nodesEl.appendChild(detail);
+          nodes.set(node, { detail, status, pre });
+        });
+      }
+
+      function setNodeStatus(node, status) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.status.className = `status ${status}`;
+        entry.status.textContent = status;
+      }
+
+      function appendNodeOutput(node, text) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.pre.textContent += text;
+      }
+
+      function setNodeOutput(node, text) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.pre.textContent = text;
+      }
+
+      function formatOutput(node, output) {
+        if (!output) return "";
+        if (node === "PAIPAN") {
+          return [output.paipan_results, output.liupan_results, output.guji_results]
+            .filter(Boolean)
+            .join("\n");
+        }
+        if (node === "TIME_CONTEXT") {
+          return JSON.stringify(output, null, 2);
+        }
+        if (output.content) return output.content;
+        return JSON.stringify(output, null, 2);
+      }
+
+      function handleEvent(evt) {
+        if (!evt || !evt.type) return;
+        switch (evt.type) {
+          case "session":
+            if (evt.session_id) {
+              ensureSessionOption(evt.session_id);
+            }
+            break;
+          case "plan":
+            logEvent(`plan: ${JSON.stringify(evt.plan)}`);
+            break;
+          case "tool_call":
+            logEvent(`tool_call: ${evt.tool} (${evt.node})`);
+            break;
+          case "tool_result":
+            logEvent(`tool_result: ${evt.tool} (${evt.node})`);
+            break;
+          case "node_start":
+            setNodeStatus(evt.node, "running");
+            setNodeOutput(evt.node, "");
+            break;
+          case "node_cache_hit":
+            setNodeStatus(evt.node, "cache");
+            if (evt.output) {
+              setNodeOutput(evt.node, formatOutput(evt.node, evt.output));
+            }
+            break;
+          case "node_delta":
+            if (evt.delta) appendNodeOutput(evt.node, evt.delta);
+            break;
+          case "node_end":
+            if (evt.output && evt.output.error) {
+              setNodeStatus(evt.node, "error");
+            } else if (evt.cached) {
+              setNodeStatus(evt.node, "cache");
+            } else {
+              setNodeStatus(evt.node, "done");
+            }
+            if (evt.output) {
+              const formatted = formatOutput(evt.node, evt.output);
+              if (formatted && !nodes.get(evt.node).pre.textContent) {
+                setNodeOutput(evt.node, formatted);
+              }
+            }
+            break;
+          case "assistant_final":
+            appendMessage("assistant", evt.text || "");
+            break;
+          case "user_message":
+            appendMessage("user", evt.text || "");
+            break;
+          case "time_context":
+            logEvent("time_context: " + (evt.value ? "matched" : "none"));
+            break;
+          case "server_error":
+            logEvent("server_error: " + evt.error);
+            break;
+        }
+      }
+
+      async function fetchJson(url, options = {}) {
+        const resp = await fetch(url, options);
+        if (!resp.ok) {
+          throw new Error(await resp.text());
+        }
+        return resp.json();
+      }
+
+      function ensureSessionOption(sessionId) {
+        const options = Array.from(sessionSelect.options);
+        if (!options.find((opt) => opt.value === sessionId)) {
+          const opt = document.createElement("option");
+          opt.value = sessionId;
+          opt.textContent = sessionId;
+          sessionSelect.appendChild(opt);
+        }
+        sessionSelect.value = sessionId;
+      }
+
+      async function loadUsers() {
+        const data = await fetchJson("/api/users");
+        userSelect.innerHTML = "";
+        data.users.forEach((uid) => {
+          const opt = document.createElement("option");
+          opt.value = uid;
+          opt.textContent = uid;
+          userSelect.appendChild(opt);
+        });
+        if (data.users.length) {
+          userSelect.value = data.users[0];
+        }
+        await loadSessions();
+        await loadProfileCache();
+        await loadHistory();
+      }
+
+      async function loadSessions() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const data = await fetchJson(`/api/sessions?user_id=${encodeURIComponent(userId)}`);
+        sessionSelect.innerHTML = "";
+        data.sessions.forEach((sid) => {
+          const opt = document.createElement("option");
+          opt.value = sid;
+          opt.textContent = sid;
+          sessionSelect.appendChild(opt);
+        });
+        if (data.sessions.length) sessionSelect.value = data.sessions[0];
+      }
+
+      async function loadProfileCache() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+        createNodeCards();
+        if (profile.node_cache) {
+          Object.entries(profile.node_cache).forEach(([node, entry]) => {
+            if (entry.output) {
+              setNodeStatus(node, "cache");
+              setNodeOutput(node, formatOutput(node, entry.output));
+            }
+          });
+        }
+      }
+
+      async function loadHistory() {
+        messagesEl.innerHTML = "";
+        const userId = userSelect.value;
+        const sessionId = sessionSelect.value;
+        if (!userId || !sessionId) return;
+        try {
+          const data = await fetchJson(
+            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+          );
+          data.messages.forEach((msg) => appendMessage(msg.role, msg.text));
+        } catch (err) {
+          logEvent("history: " + err.message);
+        }
+      }
+
+      async function createUser() {
+        const payload = {
+          user_id: document.getElementById("newUserId").value,
+          birth: {
+            year: Number(document.getElementById("birthYear").value || 0),
+            month: Number(document.getElementById("birthMonth").value || 0),
+            day: Number(document.getElementById("birthDay").value || 0),
+            hour: Number(document.getElementById("birthHour").value || 0),
+            minute: Number(document.getElementById("birthMinute").value || 0),
+            second: Number(document.getElementById("birthSecond").value || 0),
+          },
+          gender: document.getElementById("gender").value,
+          birth_time_unknown: document.getElementById("timeUnknown").value === "true",
+          prompt_config: "lingyun_cat",
+        };
+        await fetchJson("/api/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await loadUsers();
+      }
+
+      async function createSession() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const data = await fetchJson("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+        });
+        ensureSessionOption(data.session_id);
+        await loadHistory();
+      }
+
+      async function askStream() {
+        const userId = userSelect.value;
+        const sessionId = sessionSelect.value;
+        const question = document.getElementById("question").value.trim();
+        if (!userId || !question) return;
+        document.getElementById("question").value = "";
+        appendMessage("user", question);
+
+        const resp = await fetch("/api/ask_stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId, question, session_id: sessionId }),
+        });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+          parts.forEach((chunk) => {
+            const lines = chunk.split("\n");
+            lines.forEach((line) => {
+              if (line.startsWith("data:")) {
+                const payload = line.replace("data:", "").trim();
+                if (!payload) return;
+                try {
+                  handleEvent(JSON.parse(payload));
+                } catch (err) {
+                  logEvent("parse error: " + err.message);
+                }
+              }
+            });
+          });
+        }
+        await loadProfileCache();
+      }
+
+      document.getElementById("sendBtn").addEventListener("click", askStream);
+      document.getElementById("refreshBtn").addEventListener("click", async () => {
+        await loadUsers();
+        await loadHistory();
+      });
+      document.getElementById("newSessionBtn").addEventListener("click", createSession);
+      document.getElementById("createUserBtn").addEventListener("click", createUser);
+      userSelect.addEventListener("change", async () => {
+        await loadSessions();
+        await loadProfileCache();
+        await loadHistory();
+      });
+      sessionSelect.addEventListener("change", loadHistory);
+
+      createNodeCards();
+      loadUsers().catch((err) => logEvent("init error: " + err.message));
+    </script>
+  </body>
+</html>

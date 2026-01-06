@@ -9,9 +9,10 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .deps import DEPS, toposort
+from .events import EventSink, emit_event, emit_text_chunks
 from .nodes.prompt_builder import build_prompt
 from .tools.llm_tool import llm_report_tool
 from .tools.paipan_tool import paipan_tool
@@ -42,7 +43,26 @@ def _is_failure_output(output: Any) -> bool:
     return isinstance(content, str) and content.startswith("[LLM_ERROR:")
 
 
-def ensure_node(profile: Dict[str, Any], node: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+def _format_tool_output(node: str, output: Dict[str, Any]) -> str:
+    if node == "PAIPAN":
+        parts = [
+            output.get("paipan_results", ""),
+            output.get("liupan_results", ""),
+            output.get("guji_results", ""),
+        ]
+        return "\n".join([p for p in parts if p])
+    if node == "TIME_CONTEXT":
+        return json.dumps(output, ensure_ascii=False, indent=2)
+    return json.dumps(output, ensure_ascii=False, indent=2)
+
+
+def ensure_node(
+    profile: Dict[str, Any],
+    node: str,
+    inputs: Dict[str, Any],
+    event_sink: Optional[EventSink] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
     cache = profile.setdefault("node_cache", {})
     inputs_hash = _hash_inputs(inputs)
     with _LOCK:
@@ -53,6 +73,24 @@ def ensure_node(profile: Dict[str, Any], node: str, inputs: Dict[str, Any]) -> D
                 cache.pop(node, None)
             else:
                 _debug(f"cache hit for {node} hash={inputs_hash[:8]}")
+                emit_event(
+                    event_sink,
+                    {
+                        "type": "node_cache_hit",
+                        "node": node,
+                        "inputs_hash": inputs_hash,
+                        "output": cached_output,
+                    },
+                )
+                emit_event(
+                    event_sink,
+                    {
+                        "type": "node_end",
+                        "node": node,
+                        "output": cached_output,
+                        "cached": True,
+                    },
+                )
                 return cached_output
         if node in _IN_FLIGHT:
             event = _IN_FLIGHT[node]
@@ -70,27 +108,65 @@ def ensure_node(profile: Dict[str, Any], node: str, inputs: Dict[str, Any]) -> D
 
     started_at = dt.datetime.utcnow().isoformat() + "Z"
     started_ts = time.perf_counter()
+    emit_event(
+        event_sink,
+        {
+            "type": "node_start",
+            "node": node,
+            "inputs_hash": inputs_hash,
+        },
+    )
     if node == "PAIPAN":
+        emit_event(event_sink, {"type": "tool_call", "tool": "paipan_tool", "node": node})
         output = paipan_tool(inputs)
+        emit_event(event_sink, {"type": "tool_result", "tool": "paipan_tool", "node": node})
+        if stream:
+            emit_text_chunks(
+                _format_tool_output(node, output),
+                lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
+            )
     elif node == "TIME_CONTEXT":
+        emit_event(event_sink, {"type": "tool_call", "tool": "time_context_tool", "node": node})
         output = time_context_tool(
             inputs.get("paipan_output", {}),
             inputs.get("ref_text", ""),
             inputs.get("now"),
         )
+        emit_event(event_sink, {"type": "tool_result", "tool": "time_context_tool", "node": node})
+        if output and stream:
+            emit_text_chunks(
+                _format_tool_output(node, output),
+                lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
+            )
     else:
         prompt_config = inputs.get("prompt_config", "lingyun_cat")
         prompt = build_prompt(node, cache, prompt_config=prompt_config)
         system_prompt = prompt.get("system_prompt", "")
         user_prompt = prompt.get("user_prompt", "")
         sleep_ms = inputs.get("sleep_ms")
+        emit_event(event_sink, {"type": "tool_call", "tool": "llm_report_tool", "node": node})
         output = llm_report_tool(
             system_prompt,
             user_prompt,
             model=inputs.get("model"),
             node=node,
             sleep_ms=sleep_ms,
+            stream=stream,
+            on_delta=(
+                lambda chunk: emit_event(
+                    event_sink,
+                    {
+                        "type": "node_delta",
+                        "node": node,
+                        "delta": chunk.get("content", ""),
+                        "reasoning_delta": chunk.get("reasoning_content", ""),
+                    },
+                )
+            )
+            if event_sink
+            else None,
         )
+        emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": node})
 
     ended_at = dt.datetime.utcnow().isoformat() + "Z"
     duration_ms = int((time.perf_counter() - started_ts) * 1000)
@@ -111,21 +187,42 @@ def ensure_node(profile: Dict[str, Any], node: str, inputs: Dict[str, Any]) -> D
             inflight.set()
     summary = list(output.keys()) if isinstance(output, dict) else type(output).__name__
     _debug(f"completed node {node} duration={duration_ms}ms output_keys={summary}")
+    emit_event(
+        event_sink,
+        {
+            "type": "node_end",
+            "node": node,
+            "output": output,
+            "duration_ms": duration_ms,
+        },
+    )
     return output
 
 
-def run_nodes(profile: Dict[str, Any], nodes: List[str], inputs: Dict[str, Any]) -> Dict[str, Any]:
+def run_nodes(
+    profile: Dict[str, Any],
+    nodes: List[str],
+    inputs: Dict[str, Any],
+    event_sink: Optional[EventSink] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
     ordered = toposort(nodes, DEPS)
     outputs: Dict[str, Any] = {}
     for node in ordered:
         if node == "TIME_CONTEXT":
             continue
-        output = ensure_node(profile, node, inputs.get(node, {}))
+        output = ensure_node(profile, node, inputs.get(node, {}), event_sink=event_sink, stream=stream)
         outputs[node] = output
     return outputs
 
 
-def run_nodes_parallel(profile: Dict[str, Any], nodes: List[str], inputs: Dict[str, Any]) -> Dict[str, Any]:
+def run_nodes_parallel(
+    profile: Dict[str, Any],
+    nodes: List[str],
+    inputs: Dict[str, Any],
+    event_sink: Optional[EventSink] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
     ordered = toposort(nodes, DEPS)
     deps = {node: set(DEPS.get(node, [])) for node in ordered}
     remaining = set(ordered)
@@ -149,7 +246,16 @@ def run_nodes_parallel(profile: Dict[str, Any], nodes: List[str], inputs: Dict[s
                     done.add(node)
                     continue
                 _debug(f"submit node {node} deps={deps.get(node, set())}")
-                futures[executor.submit(ensure_node, profile, node, inputs.get(node, {}))] = node
+                futures[
+                    executor.submit(
+                        ensure_node,
+                        profile,
+                        node,
+                        inputs.get(node, {}),
+                        event_sink,
+                        stream,
+                    )
+                ] = node
             if not futures:
                 break
             completed, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)

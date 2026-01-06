@@ -6,15 +6,23 @@ import datetime as dt
 from typing import Any, Dict
 
 from .deps import COMMON_PREREQS
+from .events import EventSink, emit_event
 from .execution import ensure_node, run_nodes_parallel
 from .planning import plan
 from .response import compose_response
 
 
-def run_turn(profile: Dict[str, Any], question: str, now: dt.datetime | None = None) -> Dict[str, Any]:
+def run_turn(
+    profile: Dict[str, Any],
+    question: str,
+    now: dt.datetime | None = None,
+    event_sink: EventSink | None = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
     now = now or dt.datetime.now()
     plan_result = plan(question, now=now)
     aspects = plan_result["aspects"]
+    emit_event(event_sink, {"type": "plan", "plan": plan_result, "question": question})
 
     nodes = set(COMMON_PREREQS)
     nodes.update(aspects)
@@ -43,6 +51,8 @@ def run_turn(profile: Dict[str, Any], question: str, now: dt.datetime | None = N
             "XINGGE": {"prompt_config": prompt_config},
             "OTHER": {"prompt_config": prompt_config},
         },
+        event_sink=event_sink,
+        stream=stream,
     )
 
     time_context = None
@@ -55,7 +65,10 @@ def run_turn(profile: Dict[str, Any], question: str, now: dt.datetime | None = N
                 "ref_text": plan_result["time"]["ref_text"],
                 "now": now.isoformat(),
             },
+            event_sink=event_sink,
+            stream=stream,
         )
+        emit_event(event_sink, {"type": "time_context", "value": time_context})
 
     response_text = compose_response(question, plan_result, outputs, time_context)
     return {

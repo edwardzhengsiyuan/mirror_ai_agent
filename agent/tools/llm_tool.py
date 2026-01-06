@@ -7,7 +7,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 _TRACE_NAMES = ("1", "true", "yes")
 
@@ -85,12 +85,49 @@ def _trace(repo_root: str, event: Dict[str, Any]) -> None:
         f.write("\n")
 
 
+def _emit_stub_stream(content: str, on_delta: Callable[[Dict[str, str]], None]) -> None:
+    chunk_size = 120
+    for idx in range(0, len(content), chunk_size):
+        on_delta({"content": content[idx : idx + chunk_size], "reasoning_content": ""})
+
+
+def _stream_sse_response(
+    resp: Any, on_delta: Optional[Callable[[Dict[str, str]], None]]
+) -> tuple[str, str]:
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    for raw_line in resp:
+        line = raw_line.decode("utf-8").strip()
+        if not line or not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choice = (payload.get("choices") or [{}])[0]
+        delta = choice.get("delta") or {}
+        content_delta = delta.get("content") or ""
+        reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content") or ""
+        if content_delta:
+            content_parts.append(content_delta)
+        if reasoning_delta:
+            reasoning_parts.append(reasoning_delta)
+        if on_delta and (content_delta or reasoning_delta):
+            on_delta({"content": content_delta, "reasoning_content": reasoning_delta})
+    return "".join(content_parts), "".join(reasoning_parts)
+
+
 def llm_report_tool(
     system_prompt: str,
     user_prompt: str,
     model: str | None = None,
     node: str | None = None,
     sleep_ms: int | None = None,
+    stream: bool = False,
+    on_delta: Callable[[Dict[str, str]], None] | None = None,
 ) -> Dict[str, Any]:
     """LLM call with stub fallback for local testing."""
     if sleep_ms:
@@ -136,6 +173,8 @@ def llm_report_tool(
             f"api_key={'set' if api_key else 'missing'}"
         )
         resp = _stub_response(node_label)
+        if stream and on_delta:
+            _emit_stub_stream(resp.get("content", ""), on_delta)
         _trace(
             repo_root,
             {
@@ -170,6 +209,8 @@ def llm_report_tool(
             {"role": "user", "content": user_prompt},
         ],
     }
+    if stream:
+        payload["stream"] = True
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -199,7 +240,22 @@ def llm_report_tool(
                 },
             )
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-                body = resp.read().decode("utf-8")
+                if stream:
+                    content, reasoning_content = _stream_sse_response(resp, on_delta)
+                    body = json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": content,
+                                        "reasoning": reasoning_content,
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                else:
+                    body = resp.read().decode("utf-8")
             last_err = None
             break
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
