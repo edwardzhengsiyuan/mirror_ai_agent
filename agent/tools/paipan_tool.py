@@ -8,6 +8,8 @@ from lunar_python import Solar
 
 from bazi.main import BaziChartAnalyseFrame
 
+from .time_context_tool import build_time_index
+
 
 def paipan_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Run paipan and return structured outputs."""
@@ -24,10 +26,12 @@ def paipan_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
     lunar = Solar.fromYmdHms(year, month, day, hour, minute, second).getLunar()
     frame = BaziChartAnalyseFrame(lunar, gender, without_time=time_unknown)
     paipan_results, liupan_results, guji_results = frame.get_analysis_summary()
+    time_index = build_time_index(frame.res, paipan_results, liupan_results)
 
     return {
         "paipan_results": paipan_results,
         "liupan_results": liupan_results,
         "guji_results": guji_results,
         "paipan_output": frame.res,
+        "time_index": time_index,
     }

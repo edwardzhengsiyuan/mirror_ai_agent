@@ -94,14 +94,18 @@ def main() -> None:
     now = dt.datetime(2025, 12, 20, 10, 0, 0)
 
     questions = [
-        ("今年事业怎么样", {"PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS", "CAREER", "TIME_CONTEXT"}, set()),
-        ("2026年3月感情如何", {"RELATIONSHIP"}, {"TIME_CONTEXT"}),
-        ("2024年健康需要注意什么", {"HEALTH"}, {"TIME_CONTEXT"}),
-        ("财运如何", {"OTHER"}, set()),
-        ("贵人方面有帮助吗", {"GUIREN"}, set()),
-        ("六亲关系如何", {"LIUQIN"}, set()),
-        ("我性格特点是什么", {"XINGGE"}, set()),
-        ("总体运势如何", set(), set()),
+        (
+            "今年事业怎么样",
+            {"PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS", "CAREER", "TIME_CONTEXT", "FINAL"},
+            set(),
+        ),
+        ("2026年3月感情如何", {"RELATIONSHIP"}, {"TIME_CONTEXT", "FINAL"}),
+        ("2024年健康需要注意什么", {"HEALTH"}, {"TIME_CONTEXT", "FINAL"}),
+        ("财运如何", {"OTHER"}, {"FINAL"}),
+        ("贵人方面有帮助吗", {"GUIREN"}, {"FINAL"}),
+        ("六亲关系如何", {"LIUQIN"}, {"FINAL"}),
+        ("我性格特点是什么", {"XINGGE"}, {"FINAL"}),
+        ("总体运势如何", set(), {"FINAL"}),
     ]
 
     for q, expected_new, expected_changed in questions:

@@ -25,6 +25,7 @@ DEPS: Dict[str, List[str]] = {
     "LIUQIN": COMMON_PREREQS,
     "XINGGE": COMMON_PREREQS,
     "OTHER": COMMON_PREREQS,
+    "FINAL": COMMON_PREREQS,
 }
 
 

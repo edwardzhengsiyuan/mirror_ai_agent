@@ -54,6 +54,7 @@ def test_resume_uses_cached_nodes_and_skips_rerun(monkeypatch) -> None:
     profile, path = _pick_fixture_with_nodes(["PAIPAN", "OVERALL", "RELATIONSHIP"])
     # Force stub mode to avoid network
     monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.setenv("LLM_PLANNER_MODE", "rule")
 
     # Seed a failing node in cache to verify auto-retry clears it
     profile["node_cache"]["RELATIONSHIP"]["output"]["content"] = "[LLM_ERROR:RELATIONSHIP] simulated"
@@ -77,6 +78,7 @@ def test_resume_uses_cached_nodes_and_skips_rerun(monkeypatch) -> None:
 def test_resume_without_prompting_reruns_only_missing(monkeypatch) -> None:
     profile, path = _pick_fixture_with_nodes(["PAIPAN", "OVERALL"])
     monkeypatch.setenv("LLM_MODE", "stub")
+    monkeypatch.setenv("LLM_PLANNER_MODE", "rule")
 
     # Drop one node to simulate missing cache
     cache = profile["node_cache"]

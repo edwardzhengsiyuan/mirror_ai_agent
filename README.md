@@ -6,7 +6,7 @@
 - 单轮入口 `app.py`：加载用户档案→规划→并发执行节点→拼装回答。
 - 节点缓存与失败重跑：基于输入哈希缓存；缓存含错误会自动清除后重跑。
 - Prompt 模板化：`agent/prompts/templates/` 按节点拆分，支持配置集切换（如 `lingyun_cat`）。
-- 时间上下文：识别“今年/明年/具体年月”等，结合排盘结构定位大运/流年/流月。
+- 时间上下文：识别“今年/明年/具体年月”等，结合排盘结构定位大运/流年/流月（可返回流月细节）。
 - 测试矩阵：覆盖 stub、本地多轮回放、在线真实 LLM、错误注入。
 
 ## 目录速览
@@ -66,6 +66,7 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 - 缓存重跑（失败清除）：`python -m pytest tests/test_cache_retry_on_error.py`
 - 本地多轮回放（默认 stub）：`python tests/run_local_tester.py`
 - 在线 LLM：`python tests/test_llm_live.py`，或测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`
+- 多时间点解析：`python -m pytest tests/test_multi_time_context.py`
 
 ## 命令行聊天前端
 - 交互式 TUI（节点可展开/折叠、流式刷新）：`python cli_chatbot.py`
@@ -75,11 +76,18 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 - 启动后端服务：`python web_server.py`
 - 浏览器访问：`http://localhost:8000/`
 - 功能：创建用户、选择会话、流式展示节点输出与工具调用日志。
+- 每个节点的 Prompt 可在节点卡片内展开查看（`llm_prompt` 事件）。
+
+## 规划节点（LLM）
+- 默认使用 LLM 产出规划（`LLM_PLANNER_MODE=llm`），并在事件流中作为 `PLANNER` 节点展示。
+- 离线/测试：`LLM_MODE=stub` 或 `LLM_PLANNER_MODE=rule` 会回退到规则规划。
+- 规划会根据排盘生成的时间索引补全多年份/大运信息，`plan["times"]` 支持多个时间点。
+- 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
 
 ## 常见问题
 - API key 缺失：设置 `.env` 中的 `LLM_API_BASE`/`LLM_API_KEY`，或使用 `LLM_MODE=stub`。
 - 档案缺字段：`birth`（含时分秒）、`gender`、`prompt_config`、`node_cache` 必填；`birth_time_unknown` 为布尔值。
-- 时间解析范围有限：仅支持“今年/明年/去年”及 `YYYY年`/`YYYY年MM月`，复杂表达需自行扩展。
+- 时间解析范围有限：支持“今年/明年/去年”、`YYYY年`/`YYYY年MM月`、`甲子大运`与多年份；复杂表达需自行扩展。
 
 ## 前端/服务对接（示例）
 - 本仓库未自带 HTTP 接口，可自行封装。典型调用路径：加载用户档案 → `run_turn(profile, question, now=None)` → 保存档案 → 返回 `result["response"]`。

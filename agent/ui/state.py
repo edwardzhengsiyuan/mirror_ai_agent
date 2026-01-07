@@ -65,12 +65,13 @@ def apply_event(state: ChatState, event: Dict[str, Any]) -> None:
         state.messages.append({"role": "assistant", "text": event.get("text", "")})
         state.running = False
         return
-    if etype == "plan":
+    if etype in ("plan", "plan_update"):
         plan = event.get("plan", {})
         aspects = ",".join(plan.get("aspects", []))
         time = plan.get("time", {})
         ref = time.get("ref_text") or ""
-        state.system_log.append(f"plan: aspects={aspects} time={time.get('granularity')} {ref}".strip())
+        label = "plan" if etype == "plan" else "plan_update"
+        state.system_log.append(f"{label}: aspects={aspects} time={time.get('granularity')} {ref}".strip())
         return
     if etype == "tool_call":
         tool = event.get("tool", "")
@@ -81,6 +82,10 @@ def apply_event(state: ChatState, event: Dict[str, Any]) -> None:
         tool = event.get("tool", "")
         node = event.get("node", "")
         state.system_log.append(f"tool_result: {tool} ({node})")
+        return
+    if etype == "llm_prompt":
+        node = event.get("node", "")
+        state.system_log.append(f"llm_prompt: {node}")
         return
     if etype == "time_context":
         matched = "matched" if event.get("value") else "none"

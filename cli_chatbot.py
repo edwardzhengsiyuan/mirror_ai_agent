@@ -141,12 +141,14 @@ def _load_history(convo_path: str) -> List[Dict[str, str]]:
 
 
 def _node_order() -> List[str]:
-    nodes = list(COMMON_PREREQS)
+    nodes = ["PLANNER"] + list(COMMON_PREREQS)
     for node in DEPS.keys():
         if node not in nodes:
             nodes.append(node)
     if "TIME_CONTEXT" not in nodes:
         nodes.append("TIME_CONTEXT")
+    if "FINAL" not in nodes:
+        nodes.append("FINAL")
     return nodes
 
 

@@ -282,8 +282,9 @@
 
     <script>
       const nodeOrder = [
+        "PLANNER",
         "PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS",
-        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER","TIME_CONTEXT"
+        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER","TIME_CONTEXT","FINAL"
       ];
       const nodes = new Map();
       const messagesEl = document.getElementById("messages");
@@ -321,12 +322,20 @@
           status.textContent = "idle";
           summary.appendChild(title);
           summary.appendChild(status);
+          const promptDetail = document.createElement("details");
+          const promptSummary = document.createElement("summary");
+          promptSummary.textContent = "Prompt";
+          const promptPre = document.createElement("pre");
+          promptPre.textContent = "";
+          promptDetail.appendChild(promptSummary);
+          promptDetail.appendChild(promptPre);
           const pre = document.createElement("pre");
           pre.textContent = "";
           detail.appendChild(summary);
+          detail.appendChild(promptDetail);
           detail.appendChild(pre);
           nodesEl.appendChild(detail);
-          nodes.set(node, { detail, status, pre });
+          nodes.set(node, { detail, status, pre, promptPre });
         });
       }
 
@@ -374,12 +383,23 @@
           case "plan":
             logEvent(`plan: ${JSON.stringify(evt.plan)}`);
             break;
+          case "plan_update":
+            logEvent(`plan_update: ${JSON.stringify(evt.plan)}`);
+            break;
           case "tool_call":
             logEvent(`tool_call: ${evt.tool} (${evt.node})`);
             break;
           case "tool_result":
             logEvent(`tool_result: ${evt.tool} (${evt.node})`);
             break;
+          case "llm_prompt": {
+            const entry = nodes.get(evt.node);
+            if (entry && entry.promptPre) {
+              entry.promptPre.textContent = `SYSTEM:\\n${evt.system_prompt || ""}\\n\\nUSER:\\n${evt.user_prompt || ""}`;
+            }
+            logEvent(`llm_prompt: ${evt.node}`);
+            break;
+          }
           case "node_start":
             setNodeStatus(evt.node, "running");
             setNodeOutput(evt.node, "");

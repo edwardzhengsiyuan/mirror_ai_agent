@@ -8,7 +8,13 @@ from typing import Any, Dict, List
 def compose_response(question: str, plan: Dict[str, Any], outputs: Dict[str, Any], time_context: Dict[str, Any] | None) -> str:
     sections: List[str] = []
     if time_context:
-        sections.append(f"时间定位: {time_context}")
+        if isinstance(time_context, list):
+            lines = []
+            for ctx in time_context:
+                lines.append(str(ctx) if ctx else "None")
+            sections.append("时间定位:\n" + "\n".join(lines))
+        else:
+            sections.append(f"时间定位: {time_context}")
     aspects = plan.get("aspects", [])
     for aspect in aspects:
         report = outputs.get(aspect)

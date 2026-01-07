@@ -23,10 +23,13 @@
 - `tests/`：stub、自测、本地回放、并发、缓存重跑、在线 LLM。
 
 ## 3. 运行流程（`run_turn`）
-1) `plan(question, now)`：输出 `{"aspects":[...],"time":{need_tool,granularity,ref_text,...}}`。未命中方面则归入 `OTHER`。
-2) 组装节点集：`COMMON_PREREQS + aspects + PAIPAN`，使用 `run_nodes_parallel` 按拓扑并发执行；TIME_CONTEXT 不在 DAG 内。
-3) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {paipan_output, ref_text, now})`。
-4) `compose_response`：按方面顺序拼接报告内容，附加时间定位信息（如有）。
+1) 先执行 `PAIPAN`：得到排盘文本与结构化 `paipan_output`，并构建 `time_index`（大运/流年/流月索引）。
+2) `plan(question, now, time_index)`：输出 `{"aspects":[...],"times":[...],"time":...}`，支持多时间点；未命中方面则归入 `OTHER`。
+3) 组装节点集：`COMMON_PREREQS + aspects`，使用 `run_nodes_parallel` 按拓扑并发执行；`PAIPAN` 已先执行会被跳过。
+4) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {requests, dayun_list, liunian_list, liuyue_by_year})`，支持批量解析。
+5) 若规划未填写 `dayun/year/month`，将使用 `time_context` 结果回填（并触发 `plan_update` 事件）。
+6) `FINAL` 节点：综合时间定位与各节点报告，生成最终答复。
+7) 返回 `response`（优先取 `FINAL` 输出，失败则回退到拼接式回答）。
 5) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
 
 ## 4. 节点与依赖（DAG）
@@ -37,17 +40,28 @@
   - `SHISHEN`: [PAIPAN]
   - `GEJU`: [PAIPAN, OVERALL]
   - `WUXING_PREFS`: [PAIPAN, OVERALL, SHISHEN, GEJU]
-  - 领域节点 `CAREER/RELATIONSHIP/HEALTH/GUIREN/LIUQIN/XINGGE/OTHER`: 依赖 `COMMON_PREREQS`
+- 领域节点 `CAREER/RELATIONSHIP/HEALTH/GUIREN/LIUQIN/XINGGE/OTHER`: 依赖 `COMMON_PREREQS`
+- `FINAL`: 依赖 `COMMON_PREREQS`，用于最终答复生成（通常在时间定位后单独调用）。
 - `TIME_CONTEXT`：不在 DAG，按需单独调用。
 - 拓扑排序：`deps.toposort(nodes)` 确保依赖在前。
 
 ## 5. 规划逻辑（`planning.py`）
-- 方面分类：`ASPECT_KEYWORDS` 基于关键词匹配；命中多个则多方面；都未命中则 `["OTHER"]`。
-- 时间识别：
+- 规划默认走 LLM：`LLM_PLANNER_MODE=llm`（默认），通过 LLM 输出 `planning_tool` 的 JSON 调用结果，且 prompt 中包含大运范围提示。
+- 规则回退：`LLM_MODE=stub` 或 `LLM_PLANNER_MODE=rule` 时使用关键词/正则规则。
+- 方面分类（规则）：`ASPECT_KEYWORDS` 关键词匹配；未命中则 `["OTHER"]`。
+- 时间识别（规则）：会扫描多个时间表达并生成 `times` 列表。
   - 相对年：`今年/明年/去年` → `need_tool=True, granularity="year", year=now.year+offset`
   - 绝对年月：`YYYY年MM月` → `granularity="month"`；绝对年：`YYYY年` → `granularity="year"`
-  - 其他：`need_tool=False`
-- 限制：不解析大运干支/范围描述；无 LLM fallback；需要扩展时可在此文件增加规则或引入模型。
+  - 大运：`甲子大运` → `granularity="dayun"`
+- 规划合并：即使 LLM 只返回单条时间，也会用正则补全问题中遗漏的多年份/月份。
+- 规范化：若 LLM 提供了年/月/大运但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
+- 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
+- LLM 输出 schema：
+  ```json
+  {"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"need_tool":true,"granularity":"year","ref_text":"今年","year":2025,"month":null,"dayun":null}]}}
+  ```
+  - `times` 支持多条时间；`time` 字段为兼容保留，等于 `times[0]`。
+  - `granularity` 表示时间分辨率：`dayun` 只关心大运段，`year` 关心流年，`month` 关心流月（当前仅返回月份数字）。
 
 ## 6. 执行、缓存与并发（`execution.py`）
 - 输入哈希：`_hash_inputs` 对 inputs JSON 序列化 + sha256，用于缓存命中判断。
@@ -66,12 +80,19 @@
 ### 7.1 `paipan_tool(inputs)`
 - 输入：`birth`（year/month/day/hour/minute/second）、`gender` ("male"/"female")、`birth_time_unknown`（bool）。
 - 实现：`Solar.fromYmdHms(...).getLunar()` → `BaziChartAnalyseFrame(lunar, gender, without_time=birth_time_unknown)` → `get_analysis_summary()`。
-- 输出：`{"paipan_results":文本,"liupan_results":文本,"guji_results":文本,"paipan_output":frame.res}`。
-- `paipan_output["yun"]`：大运列表，含流年 `liunian`、流月 `liuyue`，用于时间工具；`startyun` 为起运年月日时。
+- 输出：`{"paipan_results":文本,"liupan_results":文本,"guji_results":文本,"paipan_output":frame.res,"time_index":{...}}`。
+- `paipan_output["yun"]`：大运列表，含流年 `liunian`、流月 `liuyue`；`startyun` 为起运年月日时。
+- `time_index`：由 `paipan_output` + 文本排盘合成的索引：
+  - `dayun_list`：`[{name,start_year,end_year,step,age_start}]`
+  - `liunian_list`：`[{year,ganzhi,age,dayun}]`
+  - `liuyue_by_year`：`{year:[{month,day,gan,zhi,...}]}`（按年索引）
 
-### 7.2 `time_context_tool(paipan_output, ref_text, now_iso=None)`
-- 仅在有排盘输出且命中规则时返回结构化时间：`{granularity,matched,dayun:{name,start_year,end_year},year:{year,ganzhi},month,source,confidence,raw_match}`。
-- 支持相对年（今年/明年/去年）、绝对年、绝对年月；匹配失败返回 `None`。
+### 7.2 `time_context_tool(dayun_list, liunian_list, ref_text, now_iso=None, target_year=None, target_month=None, target_dayun=None, liuyue_by_year=None, requests=None)`
+- 大运列表来源：优先用 `time_index.dayun_list`；无结构化数据时回退到 `paipan_results` 的 `【大运简排】`。
+- 流年列表来源：优先用 `time_index.liunian_list`；无结构化数据时回退到 `liupan_results` 正则解析。
+- 批量模式：传入 `requests=[{index,ref_text,target_year,...}]` 时返回 list，顺序与 requests 对齐。
+- 返回结构：`{granularity,matched,dayun:{name,start_year,end_year},year:{year,ganzhi,age},month:{month,liuyue},source,raw_match}`，当提供 `target_year` 时优先按年份匹配大运。
+- 月级会尝试返回 `liuyue` 明细（来自 `liuyue_by_year`），否则只返回月份数字。
 
 ### 7.3 `llm_report_tool(system_prompt, user_prompt, model=None, node=None, sleep_ms=None)`
 - 环境加载：自动读取仓库根 `.env`（缺失则忽略）。
@@ -82,9 +103,9 @@
 - Trace：`LLM_TRACE=1` 记录 request/response/forced_error 到 `storage/logs/llm_trace.jsonl`（`LLM_TRACE_PATH` 可覆盖）。
 
 ## 8. Prompt 组织（`nodes/prompt_builder.py`）
-- 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`。
+- 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`、`FINAL→final_answer.md`。
 - 配置集：`PROMPT_CONFIGS["lingyun_cat"]` 映射各领域节点到对应 `*_lym.md`；`prompt_config` 可在 profile 中切换。
-- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/liupan/guji）、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`SYSTEM_PROMPT` 为固定英文句子。
+- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/liupan/guji）、`TIME_CONTEXT`、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告与用户问题。
 - 容错：上游缺失时会插入空字符串，不会抛错；需要更强提示可在此文件增加显式缺失提示。
 
 ## 9. 存储与路径
@@ -93,7 +114,7 @@
   ```json
   {\n    "user_id": "u_demo",\n    "birth": {"year":1990,"month":1,"day":1,"hour":8,"minute":0,"second":0},\n    "gender": "male",\n    "birth_time_unknown": false,\n    "prompt_config": "lingyun_cat",\n    "node_cache": {}\n  }\n  ```
 - 缓存项：见 §6。`save_profile`/`append_event` 自动建目录。
-- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final`。
+- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final` 等事件。
 
 ## 10. 配置与环境变量
 - `LLM_API_BASE`/`OPENAI_API_BASE`，`LLM_API_KEY`/`OPENAI_API_KEY`：真实调用所需。
@@ -108,8 +129,10 @@
 - Stub 自检：`python tests/test_llm_tool_stub.py`（无需 API）。
 - 并发与缓存：`python tests/test_parallel_execution.py`（依赖 stub）。
 - 缓存失败重跑：`python -m pytest tests/test_cache_retry_on_error.py`。
+- 多时间点解析：`python -m pytest tests/test_multi_time_context.py`。
 - 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/profile_demo.json` 与 `storage/conversations/demo.jsonl`。
 - 在线 LLM：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`（`LLM_LIVE_FULL=1` 才跑全流程）。
+- 全流程在线验收：`python tests/test_llm_live.py`（设置 `LLM_LIVE_FULL=1` 且有 API KEY，会校验事件流与会话日志）。
 - 断点恢复示例：`python -m pytest tests/test_resume_cache_live_profiles.py`（使用 `storage/users/*/profile.json` 作为夹具）。
 
 ## 12. 已知限制与改进建议
@@ -124,17 +147,20 @@
 - 排盘失败：确认 profile 中 `birth` 字段完整（含时分秒）且 `gender`、`birth_time_unknown` 合法；`lunar-python` 需能处理的日期范围内。
 - 缓存不命中/重复执行：检查是否修改了输入（导致 `inputs_hash` 变化）；`LLM_FORCE_ERROR` 会使缓存被视为失败并重算。
 - 并发阻塞：确认 `LLM_PARALLEL_WORKERS` 是否过小；in-flight 去重会导致同节点等待同一个执行完成。
-- 时间定位为空：`ref_text` 未命中规则或排盘无对应年份；可打印 `plan["time"]` 及 `time_context_tool` 返回值排查。
+- 时间定位为空：`ref_text` 未命中规则或排盘无对应年份；可打印 `plan["times"]`（或 `plan["time"]`）及 `time_context_tool` 返回值排查。
 
 ## 14. 流式事件与节点输出
 - 接口：`run_turn(profile, question, now=None, event_sink=..., stream=True)`。
 - 事件回调：`event_sink(event: dict)`，会在节点开始/结束、工具调用、流式输出时被调用。
 - 关键事件类型：
   - `plan`：规划结果（包含 `aspects` 与 `time`）。
+  - `plan_update`：时间工具补全后的规划（可能补上 `dayun/year/month`）。
+  - `node_start` / `node_end`：包含 `PLANNER` 节点（LLM 规划）。
   - `node_start` / `node_end`：节点开始/结束；`node_end.output` 为最终输出；缓存命中会带 `cached=true`。
   - `node_delta`：流式输出片段（`delta`/`reasoning_delta`）。
   - `tool_call` / `tool_result`：工具调用与完成（PAIPAN/TIME_CONTEXT/LLM）。
-  - `time_context`：时间定位结果（可能为 `None`）。
+  - `llm_prompt`：每次 LLM 调用的 system/user prompt（便于前端审计与调试）。
+  - `time_context`：时间定位结果（可能为 list/None）。
 - 工具节点流式：PAIPAN/TIME_CONTEXT 在计算完成后以分片形式回放输出，保证前端统一接收流式事件。
 - 线程安全：执行引擎可能并发调用事件回调，建议在回调中使用线程安全队列或锁。
 
@@ -167,6 +193,7 @@
   save_profile(profile_path, profile)
   ```
 - 如需 HTTP JSON 形态，可封装接口：`POST /ask`，请求 `{user_id, question, session_id?}`，响应 `{plan, time_context, response, cache_keys?}`；内部逻辑与上述相同。
+- 流式接口 `POST /api/ask_stream` 会额外推送 `llm_prompt` 事件，便于前端查看每次 LLM 的输入。
 
 ## 16. CLI 聊天前端
 - 启动：`python cli_chatbot.py`。

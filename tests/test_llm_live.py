@@ -129,8 +129,14 @@ def main() -> None:
     append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
     ts_full = time.perf_counter()
     print("llm full pipeline starting...")
-    result = run_turn(profile, question, now=now)
+    events = []
+
+    def sink(event):
+        events.append(event)
+
+    result = run_turn(profile, question, now=now, event_sink=sink, stream=True)
     append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
+    append_event(convo_path, {"ts": now.isoformat(), "type": "events", "count": len(events)})
     append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
     print(f"llm full pipeline completed in {time.perf_counter() - ts_full:.2f}s")
 
@@ -140,6 +146,14 @@ def main() -> None:
         assert node in cache, f"missing cache node {node}"
     for node in ["OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"]:
         assert "reasoning_content" in cache[node]["output"], f"missing reasoning_content for {node}"
+    assert any(e.get("type") == "llm_prompt" for e in events), "missing llm_prompt events"
+    assert any(e.get("type") == "tool_call" and e.get("tool") == "paipan_tool" for e in events), "missing paipan tool_call"
+    assert any(e.get("type") == "tool_call" and e.get("tool") == "llm_report_tool" for e in events), "missing llm tool_call"
+    assert os.path.exists(convo_path), "conversation log missing"
+    with open(convo_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    assert any("\"user_message\"" in line for line in lines), "user_message not logged"
+    assert any("\"assistant_final\"" in line for line in lines), "assistant_final not logged"
 
     save_profile(profile_path, profile)
     print("llm live test ok")
