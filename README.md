@@ -58,7 +58,7 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 
 ## 存储路径惯例
 - 推荐通过 `agent/storage/paths.py` 生成：`storage/users/<user_id>/profile.json` 与 `storage/users/<user_id>/conversations/<session>.jsonl`。
-- `save_profile`/`append_event` 自动建目录。
+- `save_profile`/`append_event` 自动建目录；会话日志可包含 `llm_prompt` 事件（记录每次 LLM 调用的 system/user prompt）。
 
 ## 测试脚本
 - LLM stub 自检：`python tests/test_llm_tool_stub.py`
@@ -68,21 +68,20 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 - 在线 LLM：`python tests/test_llm_live.py`，或测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`
 - 多时间点解析：`python -m pytest tests/test_multi_time_context.py`
 
-## 命令行聊天前端
-- 交互式 TUI（节点可展开/折叠、流式刷新）：`python cli_chatbot.py`
-- 支持创建用户 profile、选择已有用户、续聊/新会话；运行时展示节点/工具调用状态。
-
 ## Web 前端（推荐）
 - 启动后端服务：`python web_server.py`
 - 浏览器访问：`http://localhost:8000/`
 - 功能：创建用户、选择会话、流式展示节点输出与工具调用日志。
-- 每个节点的 Prompt 可在节点卡片内展开查看（`llm_prompt` 事件）。
+- 每个节点的 Input 可在节点卡片内展开查看（`llm_prompt` 事件）。
+- `历史轮数` 输入会作为 `history_n` 传入接口，控制 FINAL prompt 注入的最近对话轮数（默认 5）。
+- 刷新后会从会话日志恢复各节点最新 Input（通过 `GET /api/history?include_inputs=1`）。
 
 ## 规划节点（LLM）
 - 默认使用 LLM 产出规划（`LLM_PLANNER_MODE=llm`），并在事件流中作为 `PLANNER` 节点展示。
 - 离线/测试：`LLM_MODE=stub` 或 `LLM_PLANNER_MODE=rule` 会回退到规则规划。
 - 规划会根据排盘生成的时间索引补全多年份/大运信息，`plan["times"]` 支持多个时间点。
 - 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
+- `dayun` 字段只保留干支名（例如 `己巳`），不要附带年份区间。
 
 ## 常见问题
 - API key 缺失：设置 `.env` 中的 `LLM_API_BASE`/`LLM_API_KEY`，或使用 `LLM_MODE=stub`。
@@ -93,6 +92,7 @@ python app.py --profile user_profile.json --question "今年事业怎么样"
 - 本仓库未自带 HTTP 接口，可自行封装。典型调用路径：加载用户档案 → `run_turn(profile, question, now=None)` → 保存档案 → 返回 `result["response"]`。
 - 新会话：为用户生成/加载 `storage/users/<user_id>/profile.json`，可选额外创建 `conversations/<session>.jsonl` 记录事件（使用 `agent/storage/conversation_store.append_event`）。
 - 继续会话：重复加载同一 profile，传入新问题即可复用缓存；会话日志文件可以继续 append。
+- 通过 `history_rounds` 向 `run_turn` 注入最近对话轮数（通常从 `load_recent_rounds(convo_path, history_n)` 获取）。
 - Python 伪代码：
   ```python
   from agent.orchestrator import run_turn

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional
 
 ALLOWED_ASPECTS = {
@@ -14,6 +15,8 @@ ALLOWED_ASPECTS = {
     "OTHER",
 }
 
+DAYUN_PATTERN = re.compile(r"[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]")
+
 
 def _normalize_aspects(aspects: Optional[List[str]]) -> List[str]:
     items = []
@@ -24,6 +27,17 @@ def _normalize_aspects(aspects: Optional[List[str]]) -> List[str]:
         if key in ALLOWED_ASPECTS and key not in items:
             items.append(key)
     return items or ["OTHER"]
+
+
+def _normalize_dayun(dayun: str) -> Optional[str]:
+    text = (dayun or "").strip()
+    if not text:
+        return None
+    match = DAYUN_PATTERN.search(text)
+    if match:
+        return match.group(0)
+    cleaned = re.sub(r"[0-9\\-–—\\s]+", "", text)
+    return cleaned or None
 
 
 def _normalize_time_item(time: Optional[Dict]) -> Dict:
@@ -43,6 +57,8 @@ def _normalize_time_item(time: Optional[Dict]) -> Dict:
     dayun = time.get("dayun")
     if not isinstance(dayun, str):
         dayun = None
+    else:
+        dayun = _normalize_dayun(dayun)
     if granularity is None:
         if month:
             granularity = "month"

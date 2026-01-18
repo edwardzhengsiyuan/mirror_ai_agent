@@ -60,6 +60,7 @@ def build_prompt(
     cache: Dict[str, Any],
     prompt_config: str = "lingyun_cat",
     question: Optional[str] = None,
+    history_rounds: Optional[list[dict[str, str]]] = None,
 ) -> Dict[str, str]:
     paipan = cache.get("PAIPAN", {}).get("output", {})
     paipan_results = paipan.get("paipan_results", "")
@@ -80,6 +81,7 @@ def build_prompt(
     question_line = f"User question: {question}\n" if question else ""
     time_block = f"TIME_CONTEXT:\n{time_context}\n" if time_context else ""
     aspect_blocks = ""
+    history_block = ""
     if node == "FINAL":
         parts = []
         for aspect in ASPECT_NODES:
@@ -88,9 +90,17 @@ def build_prompt(
                 parts.append(f"{aspect}:\n{content}")
         if parts:
             aspect_blocks = "\n".join(parts) + "\n"
+        if history_rounds:
+            formatted = []
+            for idx, pair in enumerate(history_rounds, start=1):
+                user_text = pair.get("user", "")
+                assistant_text = pair.get("assistant", "")
+                formatted.append(f"Round {idx}:\nUser: {user_text}\nAssistant: {assistant_text}")
+            history_block = f"Recent conversation (last {len(history_rounds)} rounds):\n" + "\n".join(formatted) + "\n"
     user_prompt = (
         f"User question context for {node}.\n"
         f"{question_line}"
+        f"{history_block}"
         f"Paipan:\n{paipan_results}\n"
         f"Liupan:\n{liupan_results}\n"
         f"Guji:\n{guji_results}\n"

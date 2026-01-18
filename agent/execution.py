@@ -151,6 +151,7 @@ def ensure_node(
             cache,
             prompt_config=prompt_config,
             question=inputs.get("question"),
+            history_rounds=inputs.get("history_rounds"),
         )
         system_prompt = prompt.get("system_prompt", "")
         user_prompt = prompt.get("user_prompt", "")

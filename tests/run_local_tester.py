@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from agent.orchestrator import run_turn
-from agent.storage.conversation_store import append_event
+from agent.storage.conversation_store import append_event, load_recent_rounds
 from agent.storage.profile_store import load_profile, save_profile
 
 PROFILE_PATH = os.path.join(ROOT, "storage", "profile_demo.json")
@@ -48,8 +48,24 @@ def run_case(question: str, now: dt.datetime) -> None:
     before_cache = dict(profile.get("node_cache", {}))
     before_keys = set(before_cache.keys())
 
+    history_rounds = load_recent_rounds(CONVO_PATH, 5)
     log_event({"ts": now.isoformat(), "type": "user_message", "text": question})
-    result = run_turn(profile, question, now=now)
+    events = []
+
+    def sink(event: dict) -> None:
+        if event.get("type") == "llm_prompt":
+            log_event(
+                {
+                    "ts": now.isoformat(),
+                    "type": "llm_prompt",
+                    "node": event.get("node"),
+                    "system_prompt": event.get("system_prompt", ""),
+                    "user_prompt": event.get("user_prompt", ""),
+                }
+            )
+        events.append(event)
+
+    result = run_turn(profile, question, now=now, event_sink=sink, history_rounds=history_rounds)
     log_event({"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
     log_event({"ts": now.isoformat(), "type": "outputs", "keys": list(result["outputs"].keys())})
     if result["time_context"]:

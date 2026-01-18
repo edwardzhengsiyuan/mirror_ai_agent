@@ -28,9 +28,9 @@
 3) 组装节点集：`COMMON_PREREQS + aspects`，使用 `run_nodes_parallel` 按拓扑并发执行；`PAIPAN` 已先执行会被跳过。
 4) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {requests, dayun_list, liunian_list, liuyue_by_year})`，支持批量解析。
 5) 若规划未填写 `dayun/year/month`，将使用 `time_context` 结果回填（并触发 `plan_update` 事件）。
-6) `FINAL` 节点：综合时间定位与各节点报告，生成最终答复。
+6) `FINAL` 节点：综合时间定位与各节点报告，生成最终答复；可注入最近对话轮次 `history_rounds`。
 7) 返回 `response`（优先取 `FINAL` 输出，失败则回退到拼接式回答）。
-5) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
+8) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
 
 ## 4. 节点与依赖（DAG）
 - 常量 `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS"]`。
@@ -55,6 +55,7 @@
   - 大运：`甲子大运` → `granularity="dayun"`
 - 规划合并：即使 LLM 只返回单条时间，也会用正则补全问题中遗漏的多年份/月份。
 - 规范化：若 LLM 提供了年/月/大运但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
+- 大运字段：`dayun` 只保留干支名称（例如 `己巳`），不包含年份区间；工具会尝试自动规整。
 - 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
 - LLM 输出 schema：
   ```json
@@ -105,7 +106,7 @@
 ## 8. Prompt 组织（`nodes/prompt_builder.py`）
 - 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`、`FINAL→final_answer.md`。
 - 配置集：`PROMPT_CONFIGS["lingyun_cat"]` 映射各领域节点到对应 `*_lym.md`；`prompt_config` 可在 profile 中切换。
-- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/liupan/guji）、`TIME_CONTEXT`、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告与用户问题。
+- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/liupan/guji）、`TIME_CONTEXT`、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告、用户问题与最近对话轮次（`history_rounds`）。
 - 容错：上游缺失时会插入空字符串，不会抛错；需要更强提示可在此文件增加显式缺失提示。
 
 ## 9. 存储与路径
@@ -114,7 +115,8 @@
   ```json
   {\n    "user_id": "u_demo",\n    "birth": {"year":1990,"month":1,"day":1,"hour":8,"minute":0,"second":0},\n    "gender": "male",\n    "birth_time_unknown": false,\n    "prompt_config": "lingyun_cat",\n    "node_cache": {}\n  }\n  ```
 - 缓存项：见 §6。`save_profile`/`append_event` 自动建目录。
-- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final` 等事件。
+- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final/llm_prompt` 等事件。
+- 便捷读取：`conversation_store.load_recent_rounds(path, max_rounds=5)` 返回最近 N 轮 `{"user","assistant"}` 对话对。
 
 ## 10. 配置与环境变量
 - `LLM_API_BASE`/`OPENAI_API_BASE`，`LLM_API_KEY`/`OPENAI_API_KEY`：真实调用所需。
@@ -136,7 +138,7 @@
 - 断点恢复示例：`python -m pytest tests/test_resume_cache_live_profiles.py`（使用 `storage/users/*/profile.json` 作为夹具）。
 
 ## 12. 已知限制与改进建议
-- 规划简单：仅关键词+正则；不解析大运干支/时间范围；无多轮上下文记忆。可引入 LLM 分类或规则扩展。
+- 规划简单：仅关键词+正则；不解析大运干支/时间范围；上下文记忆仅注入最近 N 轮（默认 5，可配置）。可引入更复杂的对话状态管理。
 - 时间解析覆盖有限：相对年/绝对年月，未覆盖“未来两年”“第 X 步大运”等复杂表达。
 - LLM 重试：仅工具层按 `LLM_MAX_RETRIES`，若需统一 3 次重试或熔断需在执行层封装。
 - Prompt 容错：缺失上游内容只会插入空字符串，如需显式“不确定”提示需修改 `prompt_builder`。
@@ -151,6 +153,7 @@
 
 ## 14. 流式事件与节点输出
 - 接口：`run_turn(profile, question, now=None, event_sink=..., stream=True)`。
+- 可选参数：`history_rounds=[{"user":"...","assistant":"..."}]` 用于 FINAL prompt 注入最近对话。
 - 事件回调：`event_sink(event: dict)`，会在节点开始/结束、工具调用、流式输出时被调用。
 - 关键事件类型：
   - `plan`：规划结果（包含 `aspects` 与 `time`）。
@@ -176,7 +179,7 @@
   ```python
   from agent.orchestrator import run_turn
   from agent.storage.profile_store import load_profile, save_profile
-  from agent.storage.conversation_store import append_event
+  from agent.storage.conversation_store import append_event, load_recent_rounds
   from agent.storage.paths import session_paths
   import datetime as dt
 
@@ -186,8 +189,9 @@
 
   question = "今年事业怎么样"
   now = dt.datetime.now()
+  history_rounds = load_recent_rounds(convo_path, 5)
   append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
-  result = run_turn(profile, question, now=now)
+  result = run_turn(profile, question, now=now, history_rounds=history_rounds)
   append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
   append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
   save_profile(profile_path, profile)
@@ -195,27 +199,25 @@
 - 如需 HTTP JSON 形态，可封装接口：`POST /ask`，请求 `{user_id, question, session_id?}`，响应 `{plan, time_context, response, cache_keys?}`；内部逻辑与上述相同。
 - 流式接口 `POST /api/ask_stream` 会额外推送 `llm_prompt` 事件，便于前端查看每次 LLM 的输入。
 
-## 16. CLI 聊天前端
-- 启动：`python cli_chatbot.py`。
-- 功能：选择/创建用户、选择会话、流式显示节点输出与工具调用，节点可展开/折叠。
-- 操作：`Tab` 切换视图，`↑/↓` 选择节点，`Space` 展开/折叠，`Enter` 发送，`q` 退出。
-
-## 17. Web 前端
+## 16. Web 前端
 - 后端服务：`python web_server.py`，默认监听 `0.0.0.0:8000`。
 - 前端入口：`http://localhost:8000/`（静态页面 `web/index.html`）。
 - 交互能力：
   - 创建用户与会话、加载历史消息。
   - 通过 SSE 订阅 `ask_stream` 的事件流，流式更新节点输出与工具调用日志。
   - 节点输出以 `<details>` 展开/折叠，流式输出自动刷新。
+  - 可配置 `history_n` 注入 FINAL prompt 的最近对话轮数（默认 5）。
+  - 节点卡片内提供 Input 折叠区，显示每次 LLM 调用的 system/user prompt（来自 `llm_prompt` 事件）。
+  - 页面刷新后通过 `GET /api/history?include_inputs=1` 恢复各节点最新 Input。
 - API 约定（JSON）：
   - `GET /api/users` → `{users: []}`
   - `POST /api/users` → `{user_id, birth, gender, birth_time_unknown, prompt_config}` 创建用户
   - `GET /api/profile?user_id=...` → profile JSON
   - `GET /api/sessions?user_id=...` → `{sessions: []}`
   - `POST /api/sessions` → `{user_id, session_id?}` 创建会话
-  - `GET /api/history?user_id=...&session_id=...` → `{messages:[{role,text}]}` 
-  - `POST /api/ask` → 非流式 `{plan, time_context, response}`
-  - `POST /api/ask_stream` → `text/event-stream`，逐条返回事件 JSON（含 `session`、`plan`、`node_*`、`tool_*`、`assistant_final`）
+  - `GET /api/history?user_id=...&session_id=...&include_inputs=1` → `{messages:[{role,text}], llm_prompts:{NODE:{system_prompt,user_prompt}}}` 
+  - `POST /api/ask` → 非流式 `{plan, time_context, response}`（支持 `history_n`）
+  - `POST /api/ask_stream` → `text/event-stream`，逐条返回事件 JSON（含 `session`、`plan`、`node_*`、`tool_*`、`assistant_final`），支持 `history_n`
 
 ---
 

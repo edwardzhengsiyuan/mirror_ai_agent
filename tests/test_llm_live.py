@@ -13,7 +13,7 @@ sys.path.insert(0, ROOT)
 
 from agent.orchestrator import run_turn
 from agent.execution import ensure_node
-from agent.storage.conversation_store import append_event
+from agent.storage.conversation_store import append_event, load_recent_rounds
 from agent.storage.paths import session_paths
 from agent.storage.profile_store import save_profile
 
@@ -126,15 +126,27 @@ def main() -> None:
     )
 
     now = dt.datetime(2025, 12, 20, 10, 0, 0)
+    history_rounds = load_recent_rounds(convo_path, 5)
     append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
     ts_full = time.perf_counter()
     print("llm full pipeline starting...")
     events = []
 
     def sink(event):
+        if event.get("type") == "llm_prompt":
+            append_event(
+                convo_path,
+                {
+                    "ts": now.isoformat(),
+                    "type": "llm_prompt",
+                    "node": event.get("node"),
+                    "system_prompt": event.get("system_prompt", ""),
+                    "user_prompt": event.get("user_prompt", ""),
+                },
+            )
         events.append(event)
 
-    result = run_turn(profile, question, now=now, event_sink=sink, stream=True)
+    result = run_turn(profile, question, now=now, event_sink=sink, stream=True, history_rounds=history_rounds)
     append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
     append_event(convo_path, {"ts": now.isoformat(), "type": "events", "count": len(events)})
     append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
@@ -153,6 +165,7 @@ def main() -> None:
     with open(convo_path, "r", encoding="utf-8") as f:
         lines = [line.strip() for line in f if line.strip()]
     assert any("\"user_message\"" in line for line in lines), "user_message not logged"
+    assert any("\"llm_prompt\"" in line for line in lines), "llm_prompt not logged"
     assert any("\"assistant_final\"" in line for line in lines), "assistant_final not logged"
 
     save_profile(profile_path, profile)

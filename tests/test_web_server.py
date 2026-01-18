@@ -11,8 +11,9 @@ from web_server import create_app
 
 
 def test_web_api_flow(tmp_path) -> None:
-    def fake_run_turn(profile, question, now=None, event_sink=None, stream=False):
+    def fake_run_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
         if event_sink:
+            event_sink({"type": "llm_prompt", "node": "OVERALL", "system_prompt": "sys", "user_prompt": "user"})
             event_sink({"type": "plan", "plan": {"aspects": ["CAREER"], "time": {"need_tool": False}}})
             if stream:
                 event_sink({"type": "node_start", "node": "OVERALL"})
@@ -53,9 +54,19 @@ def test_web_api_flow(tmp_path) -> None:
 
     resp = client.post(
         "/api/ask_stream",
-        json={"user_id": "u_test", "question": "hi", "session_id": session_id},
+        json={"user_id": "u_test", "question": "hi", "session_id": session_id, "history_n": 2},
         buffered=True,
     )
     body = b"".join(resp.response).decode("utf-8")
     assert "data:" in body
     assert "assistant_final" in body
+
+    convo_path = os.path.join(tmp_path, "users", "u_test", "conversations", session_id)
+    with open(convo_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    assert any("\"llm_prompt\"" in line for line in lines), "llm_prompt not logged"
+
+    resp = client.get(f"/api/history?user_id=u_test&session_id={session_id}&include_inputs=1")
+    data = resp.get_json()
+    assert "llm_prompts" in data
+    assert "OVERALL" in data["llm_prompts"]

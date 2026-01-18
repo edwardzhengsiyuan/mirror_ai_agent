@@ -12,7 +12,7 @@ from typing import Callable, Dict, Optional
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from agent.orchestrator import run_turn
-from agent.storage.conversation_store import append_event
+from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts
 from agent.storage.profile_store import load_profile, save_profile
 
 
@@ -43,6 +43,27 @@ def create_app(
         ensure_user_dirs(user_id)
         session_id = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
         return os.path.join(conversation_dir(user_id), f"{session_id}.jsonl")
+
+    def normalize_history_n(value: Optional[object]) -> int:
+        try:
+            history_n = int(value) if value is not None else 5
+        except (TypeError, ValueError):
+            history_n = 5
+        return max(0, history_n)
+
+    def log_llm_prompt(convo_path: str, event: Dict) -> None:
+        if event.get("type") != "llm_prompt":
+            return
+        append_event(
+            convo_path,
+            {
+                "ts": dt.datetime.now().isoformat(),
+                "type": "llm_prompt",
+                "node": event.get("node"),
+                "system_prompt": event.get("system_prompt", ""),
+                "user_prompt": event.get("user_prompt", ""),
+            },
+        )
 
     @app.route("/")
     def index() -> Response:
@@ -117,6 +138,7 @@ def create_app(
     def get_history() -> Response:
         user_id = (request.args.get("user_id") or "").strip()
         session_id = (request.args.get("session_id") or "").strip()
+        include_inputs = (request.args.get("include_inputs") or "").strip().lower() in ("1", "true", "yes")
         if not user_id or not session_id:
             return jsonify({"error": "user_id and session_id required"}), 400
         convo_path = os.path.join(conversation_dir(user_id), normalize_session_id(session_id))
@@ -133,7 +155,10 @@ def create_app(
                     messages.append({"role": "user", "text": event.get("text", "")})
                 elif event.get("type") == "assistant_final":
                     messages.append({"role": "assistant", "text": event.get("text", "")})
-        return jsonify({"messages": messages})
+        payload: Dict[str, object] = {"messages": messages}
+        if include_inputs:
+            payload["llm_prompts"] = load_latest_llm_prompts(convo_path)
+        return jsonify(payload)
 
     @app.route("/api/ask", methods=["POST"])
     def ask_once() -> Response:
@@ -141,6 +166,7 @@ def create_app(
         user_id = (data.get("user_id") or "").strip()
         question = (data.get("question") or "").strip()
         session_id = data.get("session_id")
+        history_n = normalize_history_n(data.get("history_n"))
         if not user_id or not question:
             return jsonify({"error": "user_id and question required"}), 400
         ensure_user_dirs(user_id)
@@ -149,9 +175,14 @@ def create_app(
             conversation_dir(user_id),
             normalize_session_id(session_id) if session_id else os.path.basename(new_session_path(user_id)),
         )
+        history_rounds = load_recent_rounds(convo_path, history_n)
         now = dt.datetime.now()
         append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
-        result = run_turn_func(profile, question, now=now)
+
+        def sink(event: Dict) -> None:
+            log_llm_prompt(convo_path, event)
+
+        result = run_turn_func(profile, question, now=now, event_sink=sink, history_rounds=history_rounds)
         append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
         if result["time_context"]:
             append_event(convo_path, {"ts": now.isoformat(), "type": "time_context", "value": result["time_context"]})
@@ -172,6 +203,7 @@ def create_app(
         user_id = (data.get("user_id") or "").strip()
         question = (data.get("question") or "").strip()
         session_id = data.get("session_id")
+        history_n = normalize_history_n(data.get("history_n"))
         if not user_id or not question:
             return jsonify({"error": "user_id and question required"}), 400
         ensure_user_dirs(user_id)
@@ -183,16 +215,25 @@ def create_app(
             convo_path = new_session_path(user_id)
             session_id = os.path.basename(convo_path)
 
+        history_rounds = load_recent_rounds(convo_path, history_n)
         event_q: queue.Queue = queue.Queue()
 
         def sink(event: Dict) -> None:
+            log_llm_prompt(convo_path, event)
             event_q.put(event)
 
         def worker() -> None:
             now = dt.datetime.now()
             try:
                 append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
-                result = run_turn_func(profile, question, now=now, event_sink=sink, stream=True)
+                result = run_turn_func(
+                    profile,
+                    question,
+                    now=now,
+                    event_sink=sink,
+                    stream=True,
+                    history_rounds=history_rounds,
+                )
                 append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
                 if result["time_context"]:
                     append_event(

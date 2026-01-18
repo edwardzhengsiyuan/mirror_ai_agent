@@ -219,19 +219,23 @@
           选择用户与会话，输入问题后将流式展示节点输出
         </div>
       </div>
-      <div class="controls">
-        <div>
-          <label>用户</label>
-          <select id="userSelect"></select>
-        </div>
-        <div>
-          <label>会话</label>
-          <select id="sessionSelect"></select>
-        </div>
-        <div class="inline">
-          <button id="newSessionBtn" class="secondary">新会话</button>
-          <button id="refreshBtn">刷新</button>
-        </div>
+        <div class="controls">
+          <div>
+            <label>用户</label>
+            <select id="userSelect"></select>
+          </div>
+          <div>
+            <label>会话</label>
+            <select id="sessionSelect"></select>
+          </div>
+          <div>
+            <label>历史轮数 (FINAL prompt)</label>
+            <input id="historyN" type="number" min="0" value="5" />
+          </div>
+          <div class="inline">
+            <button id="newSessionBtn" class="secondary">新会话</button>
+            <button id="refreshBtn">刷新</button>
+          </div>
         <details>
           <summary style="cursor:pointer;font-size:12px;color:var(--muted);">创建新用户</summary>
           <div style="margin-top:10px;display:grid;gap:8px;">
@@ -324,7 +328,7 @@
           summary.appendChild(status);
           const promptDetail = document.createElement("details");
           const promptSummary = document.createElement("summary");
-          promptSummary.textContent = "Prompt";
+          promptSummary.textContent = "Input";
           const promptPre = document.createElement("pre");
           promptPre.textContent = "";
           promptDetail.appendChild(promptSummary);
@@ -350,6 +354,12 @@
         const entry = nodes.get(node);
         if (!entry) return;
         entry.pre.textContent += text;
+      }
+
+      function setNodeInput(node, systemPrompt, userPrompt) {
+        const entry = nodes.get(node);
+        if (!entry || !entry.promptPre) return;
+        entry.promptPre.textContent = `SYSTEM:\n${systemPrompt || ""}\n\nUSER:\n${userPrompt || ""}`;
       }
 
       function setNodeOutput(node, text) {
@@ -397,7 +407,7 @@
             if (entry && entry.promptPre) {
               entry.promptPre.textContent = `SYSTEM:\\n${evt.system_prompt || ""}\\n\\nUSER:\\n${evt.user_prompt || ""}`;
             }
-            logEvent(`llm_prompt: ${evt.node}`);
+            logEvent(`input: ${evt.node}`);
             break;
           }
           case "node_start":
@@ -515,9 +525,14 @@
         if (!userId || !sessionId) return;
         try {
           const data = await fetchJson(
-            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}&include_inputs=1`
           );
           data.messages.forEach((msg) => appendMessage(msg.role, msg.text));
+          if (data.llm_prompts) {
+            Object.entries(data.llm_prompts).forEach(([node, prompt]) => {
+              setNodeInput(node, prompt.system_prompt, prompt.user_prompt);
+            });
+          }
         } catch (err) {
           logEvent("history: " + err.message);
         }
@@ -562,6 +577,8 @@
         const userId = userSelect.value;
         const sessionId = sessionSelect.value;
         const question = document.getElementById("question").value.trim();
+        const historyValue = Number(document.getElementById("historyN").value || 5);
+        const historyN = Number.isFinite(historyValue) ? Math.max(0, Math.floor(historyValue)) : 5;
         if (!userId || !question) return;
         document.getElementById("question").value = "";
         appendMessage("user", question);
@@ -569,7 +586,7 @@
         const resp = await fetch("/api/ask_stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: userId, question, session_id: sessionId }),
+          body: JSON.stringify({ user_id: userId, question, session_id: sessionId, history_n: historyN }),
         });
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -595,7 +612,6 @@
             });
           });
         }
-        await loadProfileCache();
       }
 
       document.getElementById("sendBtn").addEventListener("click", askStream);

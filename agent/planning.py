@@ -135,6 +135,7 @@ def _build_planner_prompt(
         "times 为列表，每项包含 need_tool(boolean), granularity(year|month|dayun|null), "
         "ref_text(string|null), year(int|null), month(int|null), dayun(string|null)。"
         "如出现多个年份/月份/大运，请输出多条 times。若无法判断时间则 times 为空。"
+        "dayun 仅填写干支名称，例如“己巳”，不要包含年份区间。"
     )
     dayun_hint = ""
     if time_index and time_index.get("dayun_list"):

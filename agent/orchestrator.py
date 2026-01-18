@@ -61,6 +61,7 @@ def run_turn(
     now: dt.datetime | None = None,
     event_sink: EventSink | None = None,
     stream: bool = False,
+    history_rounds: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     now = now or dt.datetime.now()
     paipan_inputs = {
@@ -150,7 +151,12 @@ def run_turn(
     final_output = ensure_node(
         profile,
         "FINAL",
-        {"prompt_config": prompt_config, "model": "reasoning", "question": question},
+        {
+            "prompt_config": prompt_config,
+            "model": "reasoning",
+            "question": question,
+            "history_rounds": history_rounds or [],
+        },
         event_sink=event_sink,
         stream=stream,
     )
