@@ -19,7 +19,7 @@ from .tools.paipan_tool import paipan_tool
 from .tools.time_context_tool import time_context_tool
 
 _LOCK = threading.Lock()
-_IN_FLIGHT: Dict[str, threading.Event] = {}
+_IN_FLIGHT: Dict[tuple, threading.Event] = {}
 
 
 def _debug(msg: str) -> None:
@@ -34,6 +34,14 @@ def _hash_inputs(inputs: Dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _profile_scope(profile: Dict[str, Any]) -> str:
+    return f"obj:{id(profile)}"
+
+
+def _inflight_key(profile: Dict[str, Any], node: str, inputs_hash: str) -> tuple:
+    return (_profile_scope(profile), node, inputs_hash)
+
+
 def _is_failure_output(output: Any) -> bool:
     if not isinstance(output, dict):
         return False
@@ -41,6 +49,16 @@ def _is_failure_output(output: Any) -> bool:
         return True
     content = output.get("content", "")
     return isinstance(content, str) and content.startswith("[LLM_ERROR:")
+
+
+def _error_output(node: str, exc: Exception) -> Dict[str, Any]:
+    return {
+        "type": "error",
+        "content": f"[NODE_ERROR:{node}] {exc}",
+        "structured": {"node": node, "summary": "node error"},
+        "reasoning_content": "",
+        "error": True,
+    }
 
 
 def _format_tool_output(node: str, output: Dict[str, Any]) -> str:
@@ -65,6 +83,7 @@ def ensure_node(
 ) -> Dict[str, Any]:
     cache = profile.setdefault("node_cache", {})
     inputs_hash = _hash_inputs(inputs)
+    inflight_key = _inflight_key(profile, node, inputs_hash)
     with _LOCK:
         if node in cache and cache[node].get("inputs_hash") == inputs_hash:
             cached_output = cache[node]["output"]
@@ -92,19 +111,22 @@ def ensure_node(
                     },
                 )
                 return cached_output
-        if node in _IN_FLIGHT:
-            event = _IN_FLIGHT[node]
-            _debug(f"waiting on inflight node {node}")
+        if inflight_key in _IN_FLIGHT:
+            event = _IN_FLIGHT[inflight_key]
+            _debug(f"waiting on inflight node {node} hash={inputs_hash[:8]}")
         else:
             event = threading.Event()
-            _IN_FLIGHT[node] = event
+            _IN_FLIGHT[inflight_key] = event
             _debug(f"start node {node} hash={inputs_hash[:8]}")
             event = None
     if event is not None:
         event.wait()
         with _LOCK:
             _debug(f"join inflight node {node} hash={inputs_hash[:8]}")
-            return cache[node]["output"]
+            cached_entry = cache.get(node)
+            if cached_entry and cached_entry.get("inputs_hash") == inputs_hash:
+                return cached_entry.get("output")
+        return _error_output(node, RuntimeError("inflight completed without cached output"))
 
     started_at = dt.datetime.utcnow().isoformat() + "Z"
     started_ts = time.perf_counter()
@@ -116,78 +138,83 @@ def ensure_node(
             "inputs_hash": inputs_hash,
         },
     )
-    if node == "PAIPAN":
-        emit_event(event_sink, {"type": "tool_call", "tool": "paipan_tool", "node": node})
-        output = paipan_tool(inputs)
-        emit_event(event_sink, {"type": "tool_result", "tool": "paipan_tool", "node": node})
-        if stream:
-            emit_text_chunks(
-                _format_tool_output(node, output),
-                lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
-            )
-    elif node == "TIME_CONTEXT":
-        emit_event(event_sink, {"type": "tool_call", "tool": "time_context_tool", "node": node})
-        output = time_context_tool(
-            inputs.get("dayun_list", []),
-            inputs.get("liunian_list", []),
-            inputs.get("ref_text", ""),
-            inputs.get("now"),
-            target_year=inputs.get("target_year"),
-            target_month=inputs.get("target_month"),
-            target_dayun=inputs.get("target_dayun"),
-            liuyue_by_year=inputs.get("liuyue_by_year"),
-            requests=inputs.get("requests"),
-        )
-        emit_event(event_sink, {"type": "tool_result", "tool": "time_context_tool", "node": node})
-        if output and stream:
-            emit_text_chunks(
-                _format_tool_output(node, output),
-                lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
-            )
-    else:
-        prompt_config = inputs.get("prompt_config", "lingyun_cat")
-        prompt = build_prompt(
-            node,
-            cache,
-            prompt_config=prompt_config,
-            question=inputs.get("question"),
-            history_rounds=inputs.get("history_rounds"),
-        )
-        system_prompt = prompt.get("system_prompt", "")
-        user_prompt = prompt.get("user_prompt", "")
-        sleep_ms = inputs.get("sleep_ms")
-        emit_event(
-            event_sink,
-            {
-                "type": "llm_prompt",
-                "node": node,
-                "system_prompt": system_prompt,
-                "user_prompt": user_prompt,
-            },
-        )
-        emit_event(event_sink, {"type": "tool_call", "tool": "llm_report_tool", "node": node})
-        output = llm_report_tool(
-            system_prompt,
-            user_prompt,
-            model=inputs.get("model"),
-            node=node,
-            sleep_ms=sleep_ms,
-            stream=stream,
-            on_delta=(
-                lambda chunk: emit_event(
-                    event_sink,
-                    {
-                        "type": "node_delta",
-                        "node": node,
-                        "delta": chunk.get("content", ""),
-                        "reasoning_delta": chunk.get("reasoning_content", ""),
-                    },
+    output: Any
+    try:
+        if node == "PAIPAN":
+            emit_event(event_sink, {"type": "tool_call", "tool": "paipan_tool", "node": node})
+            output = paipan_tool(inputs)
+            emit_event(event_sink, {"type": "tool_result", "tool": "paipan_tool", "node": node})
+            if stream:
+                emit_text_chunks(
+                    _format_tool_output(node, output),
+                    lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
                 )
+        elif node == "TIME_CONTEXT":
+            emit_event(event_sink, {"type": "tool_call", "tool": "time_context_tool", "node": node})
+            output = time_context_tool(
+                inputs.get("dayun_list", []),
+                inputs.get("liunian_list", []),
+                inputs.get("ref_text", ""),
+                inputs.get("now"),
+                target_year=inputs.get("target_year"),
+                target_month=inputs.get("target_month"),
+                target_dayun=inputs.get("target_dayun"),
+                liuyue_by_year=inputs.get("liuyue_by_year"),
+                requests=inputs.get("requests"),
             )
-            if event_sink
-            else None,
-        )
-        emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": node})
+            emit_event(event_sink, {"type": "tool_result", "tool": "time_context_tool", "node": node})
+            if output and stream:
+                emit_text_chunks(
+                    _format_tool_output(node, output),
+                    lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
+                )
+        else:
+            prompt_config = inputs.get("prompt_config", "lingyun_cat")
+            prompt = build_prompt(
+                node,
+                cache,
+                prompt_config=prompt_config,
+                question=inputs.get("question"),
+                history_rounds=inputs.get("history_rounds"),
+            )
+            system_prompt = prompt.get("system_prompt", "")
+            user_prompt = prompt.get("user_prompt", "")
+            sleep_ms = inputs.get("sleep_ms")
+            emit_event(
+                event_sink,
+                {
+                    "type": "llm_prompt",
+                    "node": node,
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                },
+            )
+            emit_event(event_sink, {"type": "tool_call", "tool": "llm_report_tool", "node": node})
+            output = llm_report_tool(
+                system_prompt,
+                user_prompt,
+                model=inputs.get("model"),
+                node=node,
+                sleep_ms=sleep_ms,
+                stream=stream,
+                on_delta=(
+                    lambda chunk: emit_event(
+                        event_sink,
+                        {
+                            "type": "node_delta",
+                            "node": node,
+                            "delta": chunk.get("content", ""),
+                            "reasoning_delta": chunk.get("reasoning_content", ""),
+                        },
+                    )
+                )
+                if event_sink
+                else None,
+            )
+            emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": node})
+    except Exception as exc:
+        _debug(f"node {node} error: {exc}")
+        output = _error_output(node, exc)
 
     ended_at = dt.datetime.utcnow().isoformat() + "Z"
     duration_ms = int((time.perf_counter() - started_ts) * 1000)
@@ -203,7 +230,7 @@ def ensure_node(
     }
     with _LOCK:
         cache[node] = entry
-        inflight = _IN_FLIGHT.pop(node, None)
+        inflight = _IN_FLIGHT.pop(inflight_key, None)
         if inflight:
             inflight.set()
     summary = list(output.keys()) if isinstance(output, dict) else type(output).__name__

@@ -51,6 +51,40 @@ def create_app(
             history_n = 5
         return max(0, history_n)
 
+    def validate_birth(birth: Dict[str, object]) -> Optional[str]:
+        required_fields = {
+            "year": (None, None),
+            "month": (1, 12),
+            "day": (1, 31),
+        }
+        optional_fields = {
+            "hour": (0, 23),
+            "minute": (0, 59),
+            "second": (0, 59),
+        }
+
+        for field, (min_value, max_value) in required_fields.items():
+            if field not in birth or birth.get(field) is None:
+                return f"birth.{field} required"
+            try:
+                value = int(birth.get(field))
+            except (TypeError, ValueError):
+                return f"birth.{field} invalid"
+            if min_value is not None and (value < min_value or value > max_value):
+                return f"birth.{field} out of range"
+
+        for field, (min_value, max_value) in optional_fields.items():
+            if field not in birth or birth.get(field) is None:
+                continue
+            try:
+                value = int(birth.get(field))
+            except (TypeError, ValueError):
+                return f"birth.{field} invalid"
+            if value < min_value or value > max_value:
+                return f"birth.{field} out of range"
+
+        return None
+
     def log_llm_prompt(convo_path: str, event: Dict) -> None:
         if event.get("type") != "llm_prompt":
             return
@@ -85,10 +119,14 @@ def create_app(
         user_id = (data.get("user_id") or "").strip()
         if not user_id:
             return jsonify({"error": "user_id required"}), 400
+        birth = data.get("birth", {}) or {}
+        birth_error = validate_birth(birth)
+        if birth_error:
+            return jsonify({"error": birth_error}), 400
         ensure_user_dirs(user_id)
         profile = {
             "user_id": user_id,
-            "birth": data.get("birth", {}),
+            "birth": birth,
             "gender": data.get("gender", "male"),
             "birth_time_unknown": bool(data.get("birth_time_unknown", False)),
             "prompt_config": data.get("prompt_config", "lingyun_cat"),
@@ -171,6 +209,9 @@ def create_app(
             return jsonify({"error": "user_id and question required"}), 400
         ensure_user_dirs(user_id)
         profile = load_profile(profile_path(user_id))
+        birth_error = validate_birth(profile.get("birth", {}) or {})
+        if birth_error:
+            return jsonify({"error": birth_error}), 400
         convo_path = os.path.join(
             conversation_dir(user_id),
             normalize_session_id(session_id) if session_id else os.path.basename(new_session_path(user_id)),
@@ -208,6 +249,9 @@ def create_app(
             return jsonify({"error": "user_id and question required"}), 400
         ensure_user_dirs(user_id)
         profile = load_profile(profile_path(user_id))
+        birth_error = validate_birth(profile.get("birth", {}) or {})
+        if birth_error:
+            return jsonify({"error": birth_error}), 400
         if session_id:
             session_id = normalize_session_id(session_id)
             convo_path = os.path.join(conversation_dir(user_id), session_id)

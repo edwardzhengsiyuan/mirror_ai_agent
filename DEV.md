@@ -1,6 +1,14 @@
-# 八字 Agent 开发文档
+# 八字 Agent 开发文档 / Development Guide
 
-> 面向维护者/二次开发：包含架构、节点/工具接口、缓存与并发、配置、测试与排查。功能准确性不在此文档验证范围，重点是工程可运行性与可维护性。
+> 面向维护者/二次开发：包含架构、节点/工具接口、缓存与并发、配置、测试与排查。功能准确性不在此文档验证范围，重点是工程可运行性与可维护性。  
+> EN: For maintainers and integrators. Covers architecture, nodes/tools, caching/concurrency, config, tests, and debugging. Accuracy of bazi interpretation is out of scope; this doc focuses on operability and maintainability.
+
+## English Summary (TL;DR)
+- Single-turn flow: PAIPAN → plan → parallel DAG → optional TIME_CONTEXT → FINAL.
+- Caching is per profile object; in-flight de-dup uses (profile object, node, inputs hash).
+- LLM calls default to stub if no API config; live tests are gated by env.
+- Agent rulebook lives in `AGENT_RULES.md`.
+- Engine API reference lives in `bazi/README.md`.
 
 ---
 
@@ -11,6 +19,7 @@
 
 ## 2. 目录与模块
 - `app.py`：CLI 入口，加载/保存用户档案。
+- `web_server.py`：HTTP/SSE 服务与前端接口。
 - `agent/planning.py`：方面分类与时间粒度识别（关键词+正则）。
 - `agent/deps.py`：节点依赖常量与拓扑排序。
 - `agent/execution.py`：缓存、并发、in-flight 去重、节点调度。
@@ -21,6 +30,13 @@
 - `agent/prompts/templates/`：各节点的提示词模板（`lingyun_cat` 配置集）。
 - `bazi/`：八字计算引擎，`BaziChartAnalyseFrame` 产出结构化排盘与大运流年。
 - `tests/`：stub、自测、本地回放、并发、缓存重跑、在线 LLM。
+
+## 2.1 引擎说明（bazi）
+- `bazi/` 当前为新引擎实现（原 `bazi_new`），对外导入路径保持不变。
+- 结构化输出的枚举字段统一为命名空间码（`NAMESPACE:CODE`），展示层如需中文请用 `bazi.core.property.strip_ns` + 枚举映射。
+- `BaziChartAnalyseFrame.find_yun_liu_nian_liuyue(target_year)` 可返回可读流年查询文本。
+- `time_index` 会将 `liunian.ganzhi` 规整为可读形式，即便 `paipan_output` 内仍是命名空间码。
+- API 参考文档：`bazi/README.md`。
 
 ## 3. 运行流程（`run_turn`）
 1) 先执行 `PAIPAN`：得到排盘文本与结构化 `paipan_output`，并构建 `time_index`（大运/流年/流月索引）。
@@ -66,9 +82,9 @@
 
 ## 6. 执行、缓存与并发（`execution.py`）
 - 输入哈希：`_hash_inputs` 对 inputs JSON 序列化 + sha256，用于缓存命中判断。
-- 失败识别：`_is_failure_output` 检查 `output.error` 或 `content` 以 `[LLM_ERROR:` 开头 → 视为失败并清缓存重跑。
+- 失败识别：`_is_failure_output` 检查 `output.error` 或 `content` 以 `[LLM_ERROR:` 开头 → 视为失败并清缓存重跑；工具异常会包装为 `[NODE_ERROR:...]` 输出并标记 `error=true`。
 - 缓存结构：`profile["node_cache"][node] = {"created_at","inputs_hash","output","meta":{started_at,ended_at,duration_ms}}`。
-- In-flight 去重：并发时同一节点只执行一次，其他线程等待事件完成后复用结果。
+- In-flight 去重：并发时同一节点在同一 profile 实例 + 同一 inputs hash 下只执行一次，其他线程等待事件完成后复用结果。
 - 并发：`run_nodes_parallel` 使用线程池（默认 `min(8,len(nodes))`，可由 `LLM_PARALLEL_WORKERS` 控制）。就绪节点（依赖已完成）批量提交；TIME_CONTEXT 被跳过。
 - 单节点执行：
   - PAIPAN → `paipan_tool`
@@ -94,13 +110,14 @@
 - 批量模式：传入 `requests=[{index,ref_text,target_year,...}]` 时返回 list，顺序与 requests 对齐。
 - 返回结构：`{granularity,matched,dayun:{name,start_year,end_year},year:{year,ganzhi,age},month:{month,liuyue},source,raw_match}`，当提供 `target_year` 时优先按年份匹配大运。
 - 月级会尝试返回 `liuyue` 明细（来自 `liuyue_by_year`），否则只返回月份数字。
+- `now` 支持 ISO 时间戳（含 `Z` 后缀）。
 
 ### 7.3 `llm_report_tool(system_prompt, user_prompt, model=None, node=None, sleep_ms=None)`
 - 环境加载：自动读取仓库根 `.env`（缺失则忽略）。
 - 模式：`LLM_MODE=stub` 或未配置 API 时返回占位输出；否则调用 `/chat/completions` HTTP POST。
 - 模型选择：`model="reasoning"` → `LLM_MODEL_REASONING`，否则用 `LLM_MODEL_FAST`（默认 gpt-5-nano）。
 - 重试：`LLM_MAX_RETRIES` 次（默认 2）；超时 `LLM_TIMEOUT_SECONDS`（默认 120）。
-- 失败注入：`LLM_FORCE_ERROR=NODE1,NODE2|ALL` 返回 `{"error":True,"content":"[LLM_ERROR:...]"}。`
+- 失败注入：`LLM_FORCE_ERROR=NODE1,NODE2|ALL` 返回 `{"error":True,"content":"[LLM_ERROR:...]"}`。
 - Trace：`LLM_TRACE=1` 记录 request/response/forced_error 到 `storage/logs/llm_trace.jsonl`（`LLM_TRACE_PATH` 可覆盖）。
 
 ## 8. Prompt 组织（`nodes/prompt_builder.py`）
@@ -113,7 +130,15 @@
 - Profile 路径助手：`agent/storage/paths.py` → `storage/users/<user_id>/profile.json`；会话日志 `storage/users/<user_id>/conversations/<session>.jsonl`。
 - Profile 结构（示例）：
   ```json
-  {\n    "user_id": "u_demo",\n    "birth": {"year":1990,"month":1,"day":1,"hour":8,"minute":0,"second":0},\n    "gender": "male",\n    "birth_time_unknown": false,\n    "prompt_config": "lingyun_cat",\n    "node_cache": {}\n  }\n  ```
+  {
+    "user_id": "u_demo",
+    "birth": {"year":1990,"month":1,"day":1,"hour":8,"minute":0,"second":0},
+    "gender": "male",
+    "birth_time_unknown": false,
+    "prompt_config": "lingyun_cat",
+    "node_cache": {}
+  }
+  ```
 - 缓存项：见 §6。`save_profile`/`append_event` 自动建目录。
 - 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final/llm_prompt` 等事件。
 - 便捷读取：`conversation_store.load_recent_rounds(path, max_rounds=5)` 返回最近 N 轮 `{"user","assistant"}` 对话对。
@@ -127,14 +152,31 @@
 - `LLM_DEBUG`：打印调试日志；`LLM_TRACE`/`LLM_TRACE_PATH`：请求/响应追踪输出路径。
 - `LLM_FORCE_ERROR`：强制特定节点或 `ALL` 走错误形态，用于演练失败链路。
 
+## 10.1 Python 环境 / Python Environment
+- 推荐使用仓库内的虚拟环境目录：`.venv/`。
+- 创建与安装：
+  - `python3 -m venv .venv`
+  - `.venv/bin/pip install -r requirements.txt`
+- 运行 pytest：
+  - `.venv/bin/pytest`
+- 说明：不要依赖系统全局 Python（可能受 PEP 668 限制）。
 ## 11. 测试与调试脚本
+- 依赖：pytest 已包含在 `requirements.txt`。
 - Stub 自检：`python tests/test_llm_tool_stub.py`（无需 API）。
 - 并发与缓存：`python tests/test_parallel_execution.py`（依赖 stub）。
 - 缓存失败重跑：`python -m pytest tests/test_cache_retry_on_error.py`。
 - 多时间点解析：`python -m pytest tests/test_multi_time_context.py`。
 - 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/profile_demo.json` 与 `storage/conversations/demo.jsonl`。
-- 在线 LLM：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`（`LLM_LIVE_FULL=1` 才跑全流程）。
-- 全流程在线验收：`python tests/test_llm_live.py`（设置 `LLM_LIVE_FULL=1` 且有 API KEY，会校验事件流与会话日志）。
+- 在线 LLM（pytest）：`pytest -m llm_live`（需配置 API KEY）；全流程需 `LLM_LIVE_FULL=1`。
+- 在线 LLM 默认超时：测试会设置 `LLM_TIMEOUT_SECONDS=400`。
+- 在线 LLM（脚本）：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`。
+- 全流程在线验收：`LLM_LIVE_FULL=1` 会额外校验事件流与会话日志。
+
+### 引擎回归检查（快速）
+- 构建 `BaziChartAnalyseFrame` 并调用 `get_analysis_summary()`，确认无异常。
+- 调用 `find_yun_liu_nian_liuyue(YYYY)`，确认返回非空文本。
+- 运行 `python app.py --profile user_profile.json --question "今年事业怎么样"`，确认输出包含 `【流年大运排盘】`。
+- 检查 `time_index["liunian_list"][0]["ganzhi"]` 为中文（非 `GAN:*`）。
 - 断点恢复示例：`python -m pytest tests/test_resume_cache_live_profiles.py`（使用 `storage/users/*/profile.json` 作为夹具）。
 
 ## 12. 已知限制与改进建议
@@ -198,27 +240,3 @@
   ```
 - 如需 HTTP JSON 形态，可封装接口：`POST /ask`，请求 `{user_id, question, session_id?}`，响应 `{plan, time_context, response, cache_keys?}`；内部逻辑与上述相同。
 - 流式接口 `POST /api/ask_stream` 会额外推送 `llm_prompt` 事件，便于前端查看每次 LLM 的输入。
-
-## 16. Web 前端
-- 后端服务：`python web_server.py`，默认监听 `0.0.0.0:8000`。
-- 前端入口：`http://localhost:8000/`（静态页面 `web/index.html`）。
-- 交互能力：
-  - 创建用户与会话、加载历史消息。
-  - 通过 SSE 订阅 `ask_stream` 的事件流，流式更新节点输出与工具调用日志。
-  - 节点输出以 `<details>` 展开/折叠，流式输出自动刷新。
-  - 可配置 `history_n` 注入 FINAL prompt 的最近对话轮数（默认 5）。
-  - 节点卡片内提供 Input 折叠区，显示每次 LLM 调用的 system/user prompt（来自 `llm_prompt` 事件）。
-  - 页面刷新后通过 `GET /api/history?include_inputs=1` 恢复各节点最新 Input。
-- API 约定（JSON）：
-  - `GET /api/users` → `{users: []}`
-  - `POST /api/users` → `{user_id, birth, gender, birth_time_unknown, prompt_config}` 创建用户
-  - `GET /api/profile?user_id=...` → profile JSON
-  - `GET /api/sessions?user_id=...` → `{sessions: []}`
-  - `POST /api/sessions` → `{user_id, session_id?}` 创建会话
-  - `GET /api/history?user_id=...&session_id=...&include_inputs=1` → `{messages:[{role,text}], llm_prompts:{NODE:{system_prompt,user_prompt}}}` 
-  - `POST /api/ask` → 非流式 `{plan, time_context, response}`（支持 `history_n`）
-  - `POST /api/ask_stream` → `text/event-stream`，逐条返回事件 JSON（含 `session`、`plan`、`node_*`、`tool_*`、`assistant_final`），支持 `history_n`
-
----
-
-更新维护：本文件为开发者手册，README 只保留给使用者的快速指南。修改核心流程或依赖时请同步更新两份文档。

@@ -37,3 +37,10 @@ def test_dayun_prefers_year_match_over_name() -> None:
     liunian_list = [{"year": 2012, "ganzhi": "壬辰", "age": 13}]
     ctx = time_context_tool(dayun_list, liunian_list, ref_text="2012年", now=None, target_year=2012, target_dayun="甲子")
     assert ctx["dayun"]["name"] == "乙丑"
+
+
+def test_resolve_year_accepts_zulu_timestamp() -> None:
+    dayun_list = [{"name": "甲子", "start_year": 2020, "end_year": 2029}]
+    liunian_list = [{"year": 2025, "ganzhi": "乙巳", "age": 30}]
+    ctx = time_context_tool(dayun_list, liunian_list, ref_text="今年", now="2025-01-01T00:00:00Z")
+    assert ctx["year"]["year"] == 2025

@@ -6,12 +6,36 @@ import datetime as dt
 import re
 from typing import Any, Dict, List, Optional
 
+try:
+    from bazi.core.property import Gan, Zhi, strip_ns
+except Exception:  # pragma: no cover - best-effort optional import
+    Gan = None  # type: ignore[assignment]
+    Zhi = None  # type: ignore[assignment]
+
+    def strip_ns(value):  # type: ignore[override]
+        return value
+
 
 _GANZHI_PATTERN = r"[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]"
 _DAYUN_PATTERN = re.compile(rf"({_GANZHI_PATTERN})(\d{{4}})")
 _LIUNIAN_PATTERN = re.compile(rf"(?P<year>\d{{4}})(?P<ganzhi>{_GANZHI_PATTERN})")
 _AGE_PATTERN = re.compile(r"(\d+)岁")
 _DAYUN_REF_PATTERN = re.compile(rf"({_GANZHI_PATTERN})大运")
+
+
+def _format_ganzhi(gan: Optional[str], zhi: Optional[str]) -> Optional[str]:
+    if not isinstance(gan, str) or not isinstance(zhi, str):
+        return None
+    raw_gan = strip_ns(gan)
+    raw_zhi = strip_ns(zhi)
+    if Gan and Zhi:
+        try:
+            gan_obj = Gan[raw_gan] if raw_gan in Gan.__members__ else Gan.from_chinese(raw_gan)
+            zhi_obj = Zhi[raw_zhi] if raw_zhi in Zhi.__members__ else Zhi.from_chinese(raw_zhi)
+            return f"{gan_obj.chinese_name}{zhi_obj.chinese_name}"
+        except Exception:
+            pass
+    return f"{raw_gan}{raw_zhi}"
 
 
 def extract_dayun_list(paipan_results: str) -> List[Dict[str, Any]]:
@@ -94,7 +118,7 @@ def build_time_index(
                     continue
                 gan = liunian.get("gan")
                 zhi = liunian.get("zhi")
-                ganzhi = f"{gan}{zhi}" if isinstance(gan, str) and isinstance(zhi, str) else None
+                ganzhi = _format_ganzhi(gan, zhi)
                 liunian_list.append(
                     {
                         "year": year,
@@ -157,7 +181,16 @@ def _find_liuyue(liuyue_by_year: Dict[int, List[Dict[str, Any]]], year: Optional
 
 
 def _resolve_year(ref_text: str, now: Optional[str]) -> Optional[int]:
-    now_dt = dt.datetime.fromisoformat(now) if now else dt.datetime.now()
+    if now:
+        try:
+            now_dt = dt.datetime.fromisoformat(now)
+        except ValueError:
+            if now.endswith("Z"):
+                now_dt = dt.datetime.fromisoformat(now[:-1] + "+00:00")
+            else:
+                now_dt = dt.datetime.now()
+    else:
+        now_dt = dt.datetime.now()
 
     if ref_text in ("今年", "明年", "去年"):
         offset = {"今年": 0, "明年": 1, "去年": -1}[ref_text]

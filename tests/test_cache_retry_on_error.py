@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, ROOT)
 
 from agent import execution
 from agent.execution import ensure_node

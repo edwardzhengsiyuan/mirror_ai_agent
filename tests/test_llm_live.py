@@ -8,6 +8,8 @@ import sys
 import time
 import uuid
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
@@ -32,27 +34,32 @@ def load_env_file(path: str) -> None:
                 os.environ[key] = value
 
 
-def main() -> None:
+def _configure_live_env() -> tuple[bool, str, str]:
     load_env_file(os.path.join(ROOT, ".env"))
     os.environ.setdefault("LLM_PARALLEL_WORKERS", "1")
     os.environ.setdefault("LLM_DEBUG", "1")
     os.environ.setdefault("LLM_MAX_RETRIES", "3")
-    os.environ.setdefault("LLM_TIMEOUT_SECONDS", "120")
+    os.environ.setdefault("LLM_TIMEOUT_SECONDS", "400")
     os.environ.setdefault("LLM_TRACE", "1")
+    api_base = os.environ.get("LLM_API_BASE") or os.environ.get("OPENAI_API_BASE") or ""
+    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    enabled = os.environ.get("LLM_MODE") != "stub" and bool(api_base) and bool(api_key)
+    return enabled, api_base, api_key
+
+
+def _require_live_env() -> tuple[str, str]:
+    enabled, api_base, api_key = _configure_live_env()
+    if not enabled:
+        pytest.skip("llm live test skipped (missing LLM_API_BASE/LLM_API_KEY or LLM_MODE=stub)")
+    return api_base, api_key
+
+
+def _run_llm_ping() -> None:
     api_base = os.environ.get("LLM_API_BASE") or os.environ.get("OPENAI_API_BASE")
-    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if os.environ.get("LLM_MODE") == "stub" or not api_base or not api_key:
-        print("llm live test skipped (missing LLM_API_BASE/LLM_API_KEY or LLM_MODE=stub)")
-        return
 
     # Quick ping before any full pipeline work
     from agent.tools.llm_tool import llm_report_tool
 
-    print(
-        "llm live test starting "
-        f"(base={api_base}, model_reasoning={os.environ.get('LLM_MODEL_REASONING', 'gpt-5')}, "
-        f"model_fast={os.environ.get('LLM_MODEL_FAST', 'gpt-5-nano')})"
-    )
     ts_ping = time.perf_counter()
     ping = llm_report_tool(
         "You are a helpful assistant.",
@@ -62,8 +69,10 @@ def main() -> None:
     )
     assert ping.get("type") == "report"
     assert ping.get("content"), "empty LLM ping content"
-    print(f"llm ping ok in {time.perf_counter() - ts_ping:.2f}s")
+    print(f"llm ping ok in {time.perf_counter() - ts_ping:.2f}s (base={api_base})")
 
+
+def _run_llm_single_node() -> None:
     ts_single = time.perf_counter()
     profile_single = {
         "user_id": "u_live_single",
@@ -97,9 +106,10 @@ def main() -> None:
     assert "OVERALL" in profile_single.get("node_cache", {}), "OVERALL not cached"
     print(f"llm single node ok in {time.perf_counter() - ts_single:.2f}s")
 
+
+def _run_llm_full_pipeline() -> None:
     if os.environ.get("LLM_LIVE_FULL") != "1":
-        print("llm live test skipped (set LLM_LIVE_FULL=1 to run full pipeline)")
-        return
+        pytest.skip("llm live full pipeline skipped (set LLM_LIVE_FULL=1 to run)")
 
     user_id = f"u_live_{int(time.time())}_{uuid.uuid4().hex[:6]}"
     profile_path, convo_path = session_paths(user_id, session_id=None)
@@ -129,7 +139,6 @@ def main() -> None:
     history_rounds = load_recent_rounds(convo_path, 5)
     append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
     ts_full = time.perf_counter()
-    print("llm full pipeline starting...")
     events = []
 
     def sink(event):
@@ -150,8 +159,6 @@ def main() -> None:
     append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
     append_event(convo_path, {"ts": now.isoformat(), "type": "events", "count": len(events)})
     append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
-    print(f"llm full pipeline completed in {time.perf_counter() - ts_full:.2f}s")
-
     # Verify core nodes executed and reasoning content exists for reasoning nodes
     cache = profile.get("node_cache", {})
     for node in ["PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"]:
@@ -161,6 +168,7 @@ def main() -> None:
     assert any(e.get("type") == "llm_prompt" for e in events), "missing llm_prompt events"
     assert any(e.get("type") == "tool_call" and e.get("tool") == "paipan_tool" for e in events), "missing paipan tool_call"
     assert any(e.get("type") == "tool_call" and e.get("tool") == "llm_report_tool" for e in events), "missing llm tool_call"
+    assert any(e.get("type") == "node_delta" for e in events), "missing streamed node_delta events"
     assert os.path.exists(convo_path), "conversation log missing"
     with open(convo_path, "r", encoding="utf-8") as f:
         lines = [line.strip() for line in f if line.strip()]
@@ -169,7 +177,43 @@ def main() -> None:
     assert any("\"assistant_final\"" in line for line in lines), "assistant_final not logged"
 
     save_profile(profile_path, profile)
-    print("llm live test ok")
+    print(f"llm full pipeline completed in {time.perf_counter() - ts_full:.2f}s")
+
+
+@pytest.mark.llm_live
+def test_llm_ping_live() -> None:
+    _require_live_env()
+    _run_llm_ping()
+
+
+@pytest.mark.llm_live
+def test_llm_single_node_live() -> None:
+    _require_live_env()
+    _run_llm_single_node()
+
+
+@pytest.mark.llm_live
+def test_llm_full_pipeline_live() -> None:
+    _require_live_env()
+    _run_llm_full_pipeline()
+
+
+def main() -> None:
+    enabled, api_base, api_key = _configure_live_env()
+    if not enabled:
+        print("llm live test skipped (missing LLM_API_BASE/LLM_API_KEY or LLM_MODE=stub)")
+        return
+    print(
+        "llm live test starting "
+        f"(base={api_base}, model_reasoning={os.environ.get('LLM_MODEL_REASONING', 'gpt-5')}, "
+        f"model_fast={os.environ.get('LLM_MODEL_FAST', 'gpt-5-nano')})"
+    )
+    _run_llm_ping()
+    _run_llm_single_node()
+    if os.environ.get("LLM_LIVE_FULL") != "1":
+        print("llm live test skipped (set LLM_LIVE_FULL=1 to run full pipeline)")
+        return
+    _run_llm_full_pipeline()
 
 
 if __name__ == "__main__":

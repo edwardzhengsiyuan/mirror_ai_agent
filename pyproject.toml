@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+  "llm_live: live LLM tests (requires LLM_API_BASE/LLM_API_KEY and network)",
+]
