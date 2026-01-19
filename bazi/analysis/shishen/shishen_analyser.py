@@ -6,6 +6,7 @@ from typing import List, Tuple, Dict, Any
 from ..base_analyser import BaseAnalyser
 from ...core import (
     Clue, Shishen, Gan, Zhi, Yinyang, Area, Condition,
+    GejuEnum,
     get_tiangandizhi_state, get_shishen_gan
 )
 from ...core.bazi_chart import BaziChart
@@ -29,14 +30,14 @@ class ShishenAnalyser(BaseAnalyser):
         hehua_analysis_results: Dict[str, Any],
         xinghai_results: Dict[str, Any],
         shensha_results: List[Dict[str, Any]],
-        geju_analysis_results: List[str],
+        geju_analysis_results: List[GejuEnum],
         power_results
     ):
         super().__init__(bazi_chart, log_helper)
         self._hehua_analysis_results: Dict[str, Any] = hehua_analysis_results
         self._xinghai_results: Dict[str, Any] = xinghai_results
         self._shensha_results: List[Dict[str, Any]] = shensha_results
-        self._geju_analysis_results: List[str] = geju_analysis_results
+        self._geju_analysis_results: List[GejuEnum] = geju_analysis_results
         self._power_results = power_results
         self._clues: List[ShishenClue] = []
         self._updated_gan_shishen_list: List = []
@@ -317,7 +318,11 @@ class ShishenAnalyser(BaseAnalyser):
             self._add_clue(ShishenClue(Area.CAREER, "合作事业，俱为有始无终之结局", Shishen.JIECAI, Condition.EXCESS, "劫财过多"))
 
         # 条件2: 检查羊刃格，无七杀或食神格
-        if "羊刃格" in self._geju_analysis_results and "七杀格" not in self._geju_analysis_results and "食神格" not in self._geju_analysis_results:
+        if (
+            GejuEnum.YANGREN_GE in self._geju_analysis_results
+            and GejuEnum.QISHA_GE not in self._geju_analysis_results
+            and GejuEnum.SHISHEN_GE not in self._geju_analysis_results
+        ):
             self._add_clue(ShishenClue(Area.LOVE, "婚姻不圆满", Shishen.JIECAI, Condition.MONTH_ZHI, "羊刃格成立，同时无七杀或食神格"))
             if self._bazi_chart.gender == 'female':
                 self._add_clue(ShishenClue(Area.CHARACTER, "个性强，作事干练", Shishen.JIECAI, Condition.MONTH_ZHI, "女命羊刃格成立，同时无七杀或食神格"))
@@ -777,7 +782,7 @@ class ShishenAnalyser(BaseAnalyser):
         if self._shangguan_gan_count > 0 and self._shangguan_zhi_count > 0:
             for i in range(self.zhu_length):
                 if Shishen.ZHENGGUAN in self._updated_zhi_hidden_gans_shishen_list[i] and Shishen.SHANGGUAN in self._updated_zhi_hidden_gans_shishen_list[i]:
-                    if set(self._geju_analysis_results).issubset(set(["正官格","伤官格"])):
+                    if set(self._geju_analysis_results).issubset({GejuEnum.ZHENGGUAN_GE, GejuEnum.SHANGGUAN_GE}):
                         self._add_clue(ShishenClue(Area.CAREER, "多失策。", Shishen.ZHENGGUAN, Condition.OTHER, "正官与伤官并位同根透出天干，格局只有正官格和伤官格"))
                     if self._bazi_chart.gender == 'female':
                         self._add_clue(ShishenClue(Area.LOVE, "眷属远离，婚姻不美满。", Shishen.ZHENGGUAN, Condition.OTHER, "女命正官与伤官并位同根透出天干"))
@@ -839,7 +844,7 @@ class ShishenAnalyser(BaseAnalyser):
 
             # 19. 月支第一个藏干十神是正官，格局包含伤官格
             if self._updated_zhi_hidden_gans_shishen_list[1][0] == Shishen.ZHENGGUAN:
-                if "伤官格" in self._geju_analysis_results:
+                if GejuEnum.SHANGGUAN_GE in self._geju_analysis_results:
                     self._add_clue(ShishenClue(Area.LOVE, "难作正妻。", Shishen.ZHENGGUAN, Condition.MONTH_ZHI, "月支正官当令，而在其他干支之中，却成伤官格"))
 
             # 20. 年、月正官天透地藏，而在日、时地支见专位七杀，再有驿马、桃花
@@ -949,7 +954,7 @@ class ShishenAnalyser(BaseAnalyser):
                 self._add_clue(ShishenClue(Area.SOCIAL, "施予后后悔。", Shishen.SHISHEN, Condition.EXCESS, "食神多，七杀浮于天干"))
         
             # 女命食神成格
-            if self._bazi_chart.gender == 'female' and Shishen.SHISHEN in self._geju_analysis_results:
+            if self._bazi_chart.gender == 'female' and GejuEnum.SHISHEN_GE in self._geju_analysis_results:
                 if self._bazi_chart.day_gan.yinyang == Yinyang.YANG:
                     self._add_clue(ShishenClue(Area.CAREER, "适宜于社会性职业。", Shishen.SHISHEN, Condition.EXCESS, "女命阳日主食神成格"))
                 else:
@@ -972,7 +977,11 @@ class ShishenAnalyser(BaseAnalyser):
                     self._add_clue(ShishenClue(Area.CHARACTER, "不利子女。", Shishen.SHISHEN, Condition.OTHER, "女命食神与偏印并位同根透干"))
         
         # 食神不宜与七杀、偏印齐成格 食神不宜与劫财、偏印齐出干
-        if (Shishen.SHISHEN in self._geju_analysis_results and Shishen.QISHA in self._geju_analysis_results and Shishen.PIANYIN in self._geju_analysis_results) or (self._shishen_gan_count > 0 and self._jiecai_gan_count > 0 and self._pianyin_gan_count > 0):
+        if (
+            GejuEnum.SHISHEN_GE in self._geju_analysis_results
+            and GejuEnum.QISHA_GE in self._geju_analysis_results
+            and GejuEnum.PIANYIN_GE in self._geju_analysis_results
+        ) or (self._shishen_gan_count > 0 and self._jiecai_gan_count > 0 and self._pianyin_gan_count > 0):
             self._add_clue(ShishenClue(Area.HEALTH, "易体弱多病。", Shishen.SHISHEN, Condition.EXCESS, "食神与七杀、偏印齐成格或齐出干"))
 
     def _analyse_shangguan(self):

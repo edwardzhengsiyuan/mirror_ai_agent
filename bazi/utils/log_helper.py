@@ -3,8 +3,9 @@
 import logging
 
 class LogHelper:
-    def __init__(self, name='bazi_analysis', level=logging.INFO):
+    def __init__(self, name='bazi_analysis', level=logging.INFO, enable_terminal_output=True):
         self.ans = ''
+        self.enable_terminal_output = enable_terminal_output
         self.logger = logging.getLogger(name)
         self.logger.setLevel(level)
 
@@ -22,17 +23,22 @@ class LogHelper:
             self.logger.propagate = False  # 防止日志冒泡重复输出
 
     def debug(self, message):
-        self.logger.debug(message)
+        if self.enable_terminal_output:
+            self.logger.debug(message)
 
     def info(self, message):
         self.ans += message
-        self.logger.info(message)
+        if self.enable_terminal_output:
+            self.logger.info(message)
 
     def warning(self, message):
-        self.logger.warning(message)
+        if self.enable_terminal_output:
+            self.logger.warning(message)
 
     def error(self, message):
-        self.logger.error(message)
+        if self.enable_terminal_output:
+            self.logger.error(message)
 
     def critical(self, message):
-        self.logger.critical(message)
+        if self.enable_terminal_output:
+            self.logger.critical(message)

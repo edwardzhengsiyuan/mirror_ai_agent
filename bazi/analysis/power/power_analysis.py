@@ -27,7 +27,8 @@ from .power_transformer import PowerTransformer
 from ..base_analyser import BaseAnalyser
 from ...core import (
     BaziChart,
-    get_gan_wuxing_yinyang
+    ShenQiangRuo,
+    get_gan_wuxing_yinyang,
 )
 from ...utils import LogHelper
 
@@ -55,15 +56,15 @@ class PowerAnalysis(BaseAnalyser):
         self._log_helper.info("【日主身强身弱分析】：\n")
         if rizhu_strength > 0:
             if rizhu_strength > 1:
-                transformed_power_chart.shenqiangruo = "日主强\n"
+                transformed_power_chart.shenqiangruo = ShenQiangRuo.QIANG
             else:
-                transformed_power_chart.shenqiangruo = "日主中和\n"
+                transformed_power_chart.shenqiangruo = ShenQiangRuo.ZHONGHE
         else:
             if rizhu_strength < -1:
-                transformed_power_chart.shenqiangruo = "日主弱\n"
+                transformed_power_chart.shenqiangruo = ShenQiangRuo.RUO
             else:
-                transformed_power_chart.shenqiangruo = "日主中和\n"
-        self._log_helper.info(transformed_power_chart.shenqiangruo)
+                transformed_power_chart.shenqiangruo = ShenQiangRuo.ZHONGHE
+        self._log_helper.info(transformed_power_chart.shenqiangruo.chinese_name + "\n")
 
         # 记录五行力量比例
         self._log_helper.info("【五行力量比例】：\n")

@@ -21,8 +21,9 @@
 # main/bazi_chart_analyse_frame.py 
 
 import json
+import copy
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 from ..analysis.ditiansui_qiongtong_analysis import ditiansui_qiongtong_analysis
 from ..analysis.geju.geju_analyser import GejuAnalyser
@@ -31,18 +32,44 @@ from ..analysis.power.power_analysis import PowerAnalysis
 from ..analysis.shensha.shensha_analyser import ShenShaAnalyser
 from ..analysis.shishen.shishen_analyser import ShishenAnalyser
 from ..analysis.xinghai.xinghai_analyser import XinghaiAnalyser
+from ..analysis.compatibility.zodiac_compatibility_analyser import ZodiacCompatibilityAnalyser
+from ..analysis.compatibility.wuxing_vector_compatibility_analyser import WuxingVectorCompatibilityAnalyser
 from ..core.bazi_chart import BaziChart, BaziChartGan, BaziChartZhi
-from ..core.property import Gan, Zhi, get_shengxiao_by_zhi_name
+from ..core.property import (
+    Gan,
+    Zhi,
+    ShenshaEnum,
+    Shishen,
+    Wuxing,
+    ns,
+    strip_ns,
+    NS_YINYANG,
+    NS_WUXING,
+    NS_GAN,
+    NS_ZHI,
+    NS_SHISHEN,
+    NS_SHENGXIAO,
+    NS_SHENSHA,
+    NS_NAYIN,
+    NS_DISHI,
+    NS_SHENQIANGRUO,
+    NS_GEJU,
+    NS_GAN_RELATION_TYPE,
+    NS_ZHI_RELATION_TYPE,
+    NS_ZODIAC_COMPAT_RELATION,
+    NS_ZODIAC_COMPAT_FAVORABILITY,
+    NS_ZODIAC_COMPAT_DETAIL,
+)
 from ..utils.log_helper import LogHelper
 
 
 class BaziChartAnalyseFrame:
-    def __init__(self, lunar, gender, without_time=False):
+    def __init__(self, lunar, gender, without_time=False, enable_terminal_output=True):
         self.res = dict()
         self.bazi_chart = BaziChart(lunar, gender, without_time)
         self.without_time = without_time
         self.analysis_results = {}
-        self.log_helper = LogHelper()
+        self.log_helper = LogHelper(enable_terminal_output=enable_terminal_output)
         self.gender = gender
         self.liupan = ""
         self.guji = ""
@@ -85,31 +112,36 @@ class BaziChartAnalyseFrame:
             self.res["zhu_list"][zhu_name_list[i + len_zhu_list]]["zhi"] = dict()
             self.add_gan_info(gan, self.res["zhu_list"][zhu_name_list[i + len_zhu_list]]["gan"])
             self.add_zhi_info(zhi, self.res["zhu_list"][zhu_name_list[i + len_zhu_list]]["zhi"])
-        self.res["nayin"] = self.bazi_chart.nayin_list
-        self.res["daygan_dishi"] = self.bazi_chart.dishi_list
-        self.res["zizuo_dishi"] = self.bazi_chart.dishi_zizuo_list
-        self.res["xunkong"] = self.bazi_chart.xunkong_list
+        self.res["nayin"] = [x.name for x in self.bazi_chart.nayin_list]
+        self.res["daygan_dishi"] = [x.name for x in self.bazi_chart.dishi_list]
+        self.res["zizuo_dishi"] = [x.name for x in self.bazi_chart.dishi_zizuo_list]
+        self.res["xunkong"] = [[a.name, b.name] for (a, b) in self.bazi_chart.xunkong_list]
         self.res["startyun"] = self.bazi_chart.start_yun
         self.res["shensha"] = []
         for pos in self.analysis_results["shensha_sorted"]:
-            shensha_name_list = [x['chinese_name'] for x in self.analysis_results["shensha_sorted"][pos]]
+            shensha_name_list = [
+                ShenshaEnum[x["name"].upper()].value
+                for x in self.analysis_results["shensha_sorted"][pos]
+            ]
             self.res["shensha"].append({"values": shensha_name_list})
-        self.res["yun"] = self.bazi_chart.dayun_liunian_liuyue_frontend_res
+        # 深拷贝一份，避免后续添加神煞/命名空间化时污染 BaziChart 内部数据
+        self.res["yun"] = copy.deepcopy(self.bazi_chart.dayun_liunian_liuyue_frontend_res)
         yun_idx = 0
         self.log_helper.info(f"【大运简排】：")
         for yun in self.res["yun"]:
             if yun_idx > 0:
-                gan = Gan.from_chinese(yun["gan"])
-                zhi = Zhi.from_chinese(yun["zhi"])
-                yun["shensha"] = self.search_shensha_in_zhu(gan, zhi, self.bazi_chart)
+                gan = Gan[yun["gan"]]
+                zhi = Zhi[yun["zhi"]]
+                yun["shensha"] = self.search_shensha_enum_in_zhu(gan, zhi, self.bazi_chart)
                 word = f'第{yun_idx}步运{yun["gan"]}{yun["zhi"]}【{yun["gan_shishen"]}{yun["zhi_shishen"]}】'
                 self.log_helper.info(f'{yun["gan"]}{yun["zhi"]}{yun["year"]}')
-                if len(yun["shensha"]) > 0 or (len(yun["gan_relation"]) + len(yun["zhi_relation"]) > 0):
+                if len(yun["shensha"]) > 0 or (len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", [])) > 0):
                     word += '('
                     if len(yun["shensha"]) > 0:
                         word += f'神煞【{yun["shensha"]}】'
-                    if len(yun["gan_relation"]) + len(yun["zhi_relation"]) > 0:
-                        word += f'关系【{"，".join(yun["gan_relation"] + yun["zhi_relation"])}】'
+                    if len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", [])) > 0:
+                        # 关系已改为结构化枚举对象，这里日志仅展示数量，避免影响输出
+                        word += f'关系【{len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", []))}项】'
                     word += ')'
                 word += '：'
                 self.liunian_shensha.append(word)
@@ -117,16 +149,16 @@ class BaziChartAnalyseFrame:
                 self.liunian_shensha.append("起运前")
             yun_idx += 1
             for nian in yun["liunian"]:
-                gan = Gan.from_chinese(nian["gan"])
-                zhi = Zhi.from_chinese(nian["zhi"])
-                nian["shensha"] = self.search_shensha_in_zhu(gan, zhi, self.bazi_chart)
+                gan = Gan[nian["gan"]]
+                zhi = Zhi[nian["zhi"]]
+                nian["shensha"] = self.search_shensha_enum_in_zhu(gan, zhi, self.bazi_chart)
                 word = f'{nian["year"]}{nian["gan"]}{nian["zhi"]}【{nian["gan_shishen"]}{nian["zhi_shishen"]}】{nian["age"]}岁'
-                if len(nian["shensha"]) > 0 or (len(nian["gan_relation"]) + len(nian["zhi_relation"]) > 0):
+                if len(nian["shensha"]) > 0 or (len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", [])) > 0):
                     word += '('
                     if len(nian["shensha"]) > 0:
                         word += f'神煞【{nian["shensha"]}】'
-                    if len(nian["gan_relation"]) + len(nian["zhi_relation"]) > 0:
-                        word += f'关系【{"，".join(nian["gan_relation"] + nian["zhi_relation"])}】'
+                    if len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", [])) > 0:
+                        word += f'关系【{len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", []))}项】'
                     word += ')'
                 word += '；'
                 self.liunian_shensha.append(word)
@@ -137,15 +169,14 @@ class BaziChartAnalyseFrame:
         self.res["shishen_proportions"] = dict()
         for shishen, proportion in self.analysis_results["power_analysis"].shishen_proportions.items():
             self.res["shishen_proportions"][shishen.name] = proportion
-        self.res["shenqiangshenruo"] = self.analysis_results["power_analysis"].shenqiangruo
+        self.res["shenqiangshenruo"] = self.analysis_results["power_analysis"].shenqiangruo.name
         self.res["rizhu"] = self.res["zhu_list"][zhu_name_list[2]]["gan"]
-        self.res["shengxiao"] = get_shengxiao_by_zhi_name(self.res["zhu_list"][zhu_name_list[0]]["zhi"]["name"])
-        if len(self.analysis_results["geju_analysis"]) == 1:
-            self.res["geju"] = self.analysis_results["geju_analysis"][0]
-        elif len(self.analysis_results["geju_analysis"]) > 1:
-            self.res["geju"] = '，带'.join(self.analysis_results["geju_analysis"])
-        else:
-            self.res["geju"] = "需要进一步分析"
+        self.res["shengxiao"] = self.bazi_chart.year_zhi.get().shengxiao.name
+        self.res["geju"] = [g.name for g in self.analysis_results["geju_analysis"]]
+
+        # 对外 JSON：把所有可枚举语义字段统一输出为带命名空间的枚举码（如 "GAN:WU"）
+        self._namespace_basic_res(self.res)
+
         self.res_json = json.dumps(self.res)
         # with open("output.txt", "w", encoding="utf-8") as file:
         #     file.write(self.res_json)
@@ -168,27 +199,165 @@ class BaziChartAnalyseFrame:
         # 其他与流年大运相关的内容如self.liupan不返回
         return res_copy
 
+    def _namespace_basic_res(self, res: dict) -> None:
+        """把 basic_res 中所有可枚举语义字段统一转为 `NAMESPACE:CODE` 形式（原地修改）。"""
+
+        def _ns_in_place(target: dict, key: str, namespace: str) -> None:
+            if key in target:
+                target[key] = ns(namespace, target[key])
+
+        def _ns_list_in_place(values, namespace: str):
+            if not isinstance(values, list):
+                return values
+            return [ns(namespace, v) for v in values]
+
+        # zhu_list
+        zhu_list = res.get("zhu_list", {})
+        if isinstance(zhu_list, dict):
+            for _zhu_name, zhu in zhu_list.items():
+                if not isinstance(zhu, dict):
+                    continue
+                gan = zhu.get("gan")
+                if isinstance(gan, dict):
+                    _ns_in_place(gan, "name", NS_GAN)
+                    _ns_in_place(gan, "wuxing", NS_WUXING)
+                    _ns_in_place(gan, "yinyang", NS_YINYANG)
+                    _ns_in_place(gan, "shishen", NS_SHISHEN)
+                zhi = zhu.get("zhi")
+                if isinstance(zhi, dict):
+                    _ns_in_place(zhi, "name", NS_ZHI)
+                    _ns_in_place(zhi, "wuxing", NS_WUXING)
+                    _ns_in_place(zhi, "yinyang", NS_YINYANG)
+                    hidden = zhi.get("hidden_gans")
+                    if isinstance(hidden, list):
+                        for hg in hidden:
+                            if not isinstance(hg, dict):
+                                continue
+                            _ns_in_place(hg, "name", NS_GAN)
+                            _ns_in_place(hg, "wuxing", NS_WUXING)
+                            _ns_in_place(hg, "yinyang", NS_YINYANG)
+                            _ns_in_place(hg, "shishen", NS_SHISHEN)
+
+        # top-level simple lists
+        if isinstance(res.get("nayin"), list):
+            res["nayin"] = _ns_list_in_place(res["nayin"], NS_NAYIN)
+        if isinstance(res.get("daygan_dishi"), list):
+            res["daygan_dishi"] = _ns_list_in_place(res["daygan_dishi"], NS_DISHI)
+        if isinstance(res.get("zizuo_dishi"), list):
+            res["zizuo_dishi"] = _ns_list_in_place(res["zizuo_dishi"], NS_DISHI)
+        if isinstance(res.get("xunkong"), list):
+            xk = []
+            for pair in res["xunkong"]:
+                if isinstance(pair, list):
+                    xk.append([ns(NS_ZHI, v) for v in pair])
+                else:
+                    xk.append(pair)
+            res["xunkong"] = xk
+
+        # shensha (top-level)
+        if isinstance(res.get("shensha"), list):
+            for item in res["shensha"]:
+                if isinstance(item, dict) and isinstance(item.get("values"), list):
+                    item["values"] = _ns_list_in_place(item["values"], NS_SHENSHA)
+
+        def _namespace_relations(rel_list, rel_type_ns: str, member_ns: str):
+            if not isinstance(rel_list, list):
+                return rel_list
+            for r in rel_list:
+                if not isinstance(r, dict):
+                    continue
+                if "type" in r:
+                    r["type"] = ns(rel_type_ns, r["type"])
+                if isinstance(r.get("members"), list):
+                    r["members"] = [ns(member_ns, m) for m in r["members"]]
+            return rel_list
+
+        def _namespace_yun_list(yun_list):
+            if not isinstance(yun_list, list):
+                return
+            for yun in yun_list:
+                if not isinstance(yun, dict):
+                    continue
+                # gan/zhi and derived fields
+                _ns_in_place(yun, "gan", NS_GAN)
+                _ns_in_place(yun, "zhi", NS_ZHI)
+                _ns_in_place(yun, "gan_wuxing", NS_WUXING)
+                _ns_in_place(yun, "zhi_wuxing", NS_WUXING)
+                _ns_in_place(yun, "gan_shishen", NS_SHISHEN)
+                _ns_in_place(yun, "zhi_shishen", NS_SHISHEN)
+                if isinstance(yun.get("shensha"), list):
+                    yun["shensha"] = _ns_list_in_place(yun["shensha"], NS_SHENSHA)
+                _namespace_relations(yun.get("gan_relation"), NS_GAN_RELATION_TYPE, NS_GAN)
+                _namespace_relations(yun.get("zhi_relation"), NS_ZHI_RELATION_TYPE, NS_ZHI)
+
+                liunian = yun.get("liunian")
+                if isinstance(liunian, list):
+                    for nian in liunian:
+                        if not isinstance(nian, dict):
+                            continue
+                        _ns_in_place(nian, "gan", NS_GAN)
+                        _ns_in_place(nian, "zhi", NS_ZHI)
+                        _ns_in_place(nian, "gan_wuxing", NS_WUXING)
+                        _ns_in_place(nian, "zhi_wuxing", NS_WUXING)
+                        _ns_in_place(nian, "gan_shishen", NS_SHISHEN)
+                        _ns_in_place(nian, "zhi_shishen", NS_SHISHEN)
+                        if isinstance(nian.get("shensha"), list):
+                            nian["shensha"] = _ns_list_in_place(nian["shensha"], NS_SHENSHA)
+                        _namespace_relations(nian.get("gan_relation"), NS_GAN_RELATION_TYPE, NS_GAN)
+                        _namespace_relations(nian.get("zhi_relation"), NS_ZHI_RELATION_TYPE, NS_ZHI)
+
+                        liuyue = nian.get("liuyue")
+                        if isinstance(liuyue, list):
+                            for yue in liuyue:
+                                if not isinstance(yue, dict):
+                                    continue
+                                _ns_in_place(yue, "gan", NS_GAN)
+                                _ns_in_place(yue, "zhi", NS_ZHI)
+                                _ns_in_place(yue, "gan_wuxing", NS_WUXING)
+                                _ns_in_place(yue, "zhi_wuxing", NS_WUXING)
+                                _ns_in_place(yue, "gan_shishen", NS_SHISHEN)
+                                _ns_in_place(yue, "zhi_shishen", NS_SHISHEN)
+                                _namespace_relations(yue.get("gan_relation"), NS_GAN_RELATION_TYPE, NS_GAN)
+                                _namespace_relations(yue.get("zhi_relation"), NS_ZHI_RELATION_TYPE, NS_ZHI)
+
+        _namespace_yun_list(res.get("yun"))
+
+        # proportions: keys are enums too
+        if isinstance(res.get("wuxing_proportions"), dict):
+            res["wuxing_proportions"] = {ns(NS_WUXING, k): v for k, v in res["wuxing_proportions"].items()}
+        if isinstance(res.get("shishen_proportions"), dict):
+            res["shishen_proportions"] = {ns(NS_SHISHEN, k): v for k, v in res["shishen_proportions"].items()}
+
+        # other single enum fields
+        _ns_in_place(res, "shenqiangshenruo", NS_SHENQIANGRUO)
+        _ns_in_place(res, "shengxiao", NS_SHENGXIAO)
+
+        if isinstance(res.get("geju"), list):
+            res["geju"] = _ns_list_in_place(res["geju"], NS_GEJU)
+
+        # rizhu is a dict reference into zhu_list; it has already been processed above.
+
     def add_gan_info(self, gan: BaziChartGan, target: Dict):
-        target["name"] = gan._chinese_name
-        target["wuxing"] = gan._wuxing.chinese_name
-        target["yinyang"] = gan._yinyang
-        target["shishen"] = gan._shishen.chinese_name
+        target["name"] = gan._gan.name
+        target["wuxing"] = gan._wuxing.name
+        target["yinyang"] = gan._gan.yinyang.name
+        target["shishen"] = gan._shishen.name
 
     def add_zhi_info(self, zhi: BaziChartZhi, target: Dict):
-        target["name"] = zhi._chinese_name
-        target["wuxing"] = zhi._wuxing.chinese_name
-        target["yinyang"] = zhi._yinyang
+        target["name"] = zhi._zhi.name
+        target["wuxing"] = zhi._wuxing.name
+        target["yinyang"] = zhi._zhi.yinyang.name
         hidden_gans = zhi._hidden_gans
         hidden_gans_shishen = zhi._hidden_gans_shishen_list
         target["hidden_gans"] = []
         for i in range(len(hidden_gans)):
             hidden_gans_item = dict()
             gan = hidden_gans[i]
-            hidden_gans_item["name"] = gan.chinese_name
-            hidden_gans_item["wuxing"] = gan.wuxing.chinese_name
-            hidden_gans_item["yinyang"] = gan.yinyang.chinese_name
+            hidden_gans_item["name"] = gan.name
+            hidden_gans_item["wuxing"] = gan.wuxing.name
+            hidden_gans_item["yinyang"] = gan.yinyang.name
             shishen = hidden_gans_shishen[i]
-            hidden_gans_item["shishen"] = shishen.chinese_name
+            hidden_gans_item["shishen"] = shishen.name
             target["hidden_gans"].append(hidden_gans_item)
 
     def log_bazi_chart(self):
@@ -308,36 +477,97 @@ class BaziChartAnalyseFrame:
                 res.append(shensha.chinese_name)
         return res
 
+    def search_shensha_enum_in_zhu(self, gan, zhi, chart):
+        res = []
+        for shensha in self.shensha_instances:
+            if shensha.is_present_in_zhu(gan, zhi, chart):
+                res.append(ShenshaEnum[shensha.__class__.__name__.upper()].value)
+        return res
+
+    # 规范化相关工作已下沉到 BaziChart 层，避免在 Frame 层做字典映射/清洗
+
     def find_yun_liu_nian_liuyue(self, target_year):
+        """
+        定位某个 target_year 对应的大运/流年/流月（文本返回，用于直接展示）。
+
+        注意：本方法不是“枚举化 JSON API”，而是给人读的文本，因此这里会把结构化的
+        `gan_relation` / `zhi_relation` 简化为字符串描述。
+
+        Returns:
+            str | None:
+              - 命中：文本字符串
+              - 未命中：None
+        """
+        def _fmt_ganzhi(gan_name: str, zhi_name: str) -> str:
+            try:
+                return Gan[strip_ns(gan_name)].chinese_name + Zhi[strip_ns(zhi_name)].chinese_name
+            except Exception:
+                return f"{gan_name}{zhi_name}"
+
+        def _fmt_shishen(ss_name: str) -> str:
+            try:
+                return Shishen[strip_ns(ss_name)].chinese_name
+            except Exception:
+                return ss_name
+
+        def _fmt_relations(relations) -> str:
+            if not relations:
+                return ""
+            parts = []
+            for r in relations:
+                if isinstance(r, dict):
+                    t = strip_ns(r.get("type", ""))
+                    members = r.get("members", [])
+                    if isinstance(members, list):
+                        members_s = ",".join([strip_ns(m) for m in members])
+                    else:
+                        members_s = str(members)
+                    parts.append(f"{t}({members_s})" if t else members_s)
+                else:
+                    parts.append(str(r))
+            return "，".join([p for p in parts if p])
+
         idx = 0
         word = ""
-        for yun in self.res["yun"]:
-            for nian in yun["liunian"]:
-                if nian["year"] == target_year:
+        for yun in self.res.get("yun", []):
+            for nian in yun.get("liunian", []):
+                if nian.get("year") == target_year:
                     if idx > 0:
-                        word += f'所在大运：{yun["gan"]}{yun["zhi"]}【{yun["gan_shishen"]}{yun["zhi_shishen"]}】'
-                        if len(yun["shensha"]) > 0 or (len(yun["gan_relation"]) + len(yun["zhi_relation"]) > 0):
-                            word += '('
-                            if len(yun["shensha"]) > 0:
-                                word += f'神煞【{yun["shensha"]}】'
-                            if len(yun["gan_relation"]) + len(yun["zhi_relation"]) > 0:
-                                word += f'关系【{"，".join(yun["gan_relation"] + yun["zhi_relation"])}】'
-                            word += ')'
-                    word += f'目标流年：{nian["year"]}{nian["gan"]}{nian["zhi"]}【{nian["gan_shishen"]}{nian["zhi_shishen"]}】{nian["age"]}岁(神煞【{nian["shensha"]}】'
-                    if len(nian["shensha"]) > 0 or (len(nian["gan_relation"]) + len(nian["zhi_relation"]) > 0):
-                        word += '('
-                        if len(nian["shensha"]) > 0:
-                            word += f'神煞【{nian["shensha"]}】'
-                        if len(nian["gan_relation"]) + len(nian["zhi_relation"]) > 0:
-                            word += f'关系【{"，".join(nian["gan_relation"] + nian["zhi_relation"])}】'
-                        word += ')\n流月：'
-                    for yue in nian["liuyue"]:
-                        word += f'{yue["gan"]}{yue["zhi"]}【{yue["gan_shishen"]}{yue["zhi_shishen"]}】'
-                        if len(yue["gan_relation"]) + len(yue["zhi_relation"]) > 0:
-                            word += '('
-                            if len(yue["gan_relation"]) + len(yue["zhi_relation"]) > 0:
-                                word += f'关系【{"，".join(yue["gan_relation"] + yue["zhi_relation"])}】'
-                            word += ')'
+                        dayun_gz = _fmt_ganzhi(yun.get("gan", ""), yun.get("zhi", ""))
+                        dayun_ss = _fmt_shishen(yun.get("gan_shishen", "")) + _fmt_shishen(yun.get("zhi_shishen", ""))
+                        word += f"所在大运：{dayun_gz}【{dayun_ss}】"
+
+                        dayun_shensha = [strip_ns(x) for x in (yun.get("shensha", []) or [])]
+                        dayun_rel = _fmt_relations((yun.get("gan_relation", []) or []) + (yun.get("zhi_relation", []) or []))
+                        if dayun_shensha or dayun_rel:
+                            word += "("
+                            if dayun_shensha:
+                                word += f"神煞【{dayun_shensha}】"
+                            if dayun_rel:
+                                word += f"关系【{dayun_rel}】"
+                            word += ")"
+
+                    nian_gz = _fmt_ganzhi(nian.get("gan", ""), nian.get("zhi", ""))
+                    nian_ss = _fmt_shishen(nian.get("gan_shishen", "")) + _fmt_shishen(nian.get("zhi_shishen", ""))
+                    word += f"目标流年：{nian.get('year')}{nian_gz}【{nian_ss}】{nian.get('age')}岁"
+
+                    nian_shensha = [strip_ns(x) for x in (nian.get("shensha", []) or [])]
+                    nian_rel = _fmt_relations((nian.get("gan_relation", []) or []) + (nian.get("zhi_relation", []) or []))
+                    if nian_shensha or nian_rel:
+                        word += "("
+                        if nian_shensha:
+                            word += f"神煞【{nian_shensha}】"
+                        if nian_rel:
+                            word += f"关系【{nian_rel}】"
+                        word += ")\n流月："
+
+                    for yue in nian.get("liuyue", []):
+                        yue_gz = _fmt_ganzhi(yue.get("gan", ""), yue.get("zhi", ""))
+                        yue_ss = _fmt_shishen(yue.get("gan_shishen", "")) + _fmt_shishen(yue.get("zhi_shishen", ""))
+                        word += f"{yue_gz}【{yue_ss}】"
+                        yue_rel = _fmt_relations((yue.get("gan_relation", []) or []) + (yue.get("zhi_relation", []) or []))
+                        if yue_rel:
+                            word += f"(关系【{yue_rel}】)"
                     return word
             idx += 1
         return None
@@ -371,14 +601,19 @@ class BaziChartAnalyseFrame:
         day_gan, day_zhi = bazi[2][0], bazi[2][1]
         hour_gan, hour_zhi = (bazi[3][0], bazi[3][1]) if hour is not None and len(bazi) > 3 else (None, None)
         
-        # 初始化结果字典
+        # 初始化结果字典（bazi 用枚举值结构化表示，避免编码问题）
         result = {
-            "date": f"{year}年{month}月{day}日" + (f"{hour}时" if hour is not None else ""),
+            # 使用 ISO 风格日期字符串，避免终端/环境编码导致中文年月显示异常
+            "date": f"{year:04d}-{month:02d}-{day:02d}" + (f" {hour:02d}:00" if hour is not None else ""),
             "bazi": {
-                "year": bazi[0],
-                "month": bazi[1],
-                "day": bazi[2],
-                "hour": bazi[3] if hour is not None and len(bazi) > 3 else None
+                "year": {"gan": ns(NS_GAN, Gan.from_chinese(year_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(year_zhi).name)},
+                "month": {"gan": ns(NS_GAN, Gan.from_chinese(month_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(month_zhi).name)},
+                "day": {"gan": ns(NS_GAN, Gan.from_chinese(day_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(day_zhi).name)},
+                "hour": (
+                    {"gan": ns(NS_GAN, Gan.from_chinese(hour_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(hour_zhi).name)}
+                    if hour is not None and len(bazi) > 3
+                    else None
+                ),
             },
             "shensha": {
                 "year": [],
@@ -397,20 +632,22 @@ class BaziChartAnalyseFrame:
         day_zhi_obj = Zhi.from_chinese(day_zhi)
         
         # 查询各柱的神煞
-        result["shensha"]["year"] = self.search_shensha_in_zhu(year_gan_obj, year_zhi_obj, self.bazi_chart)
-        result["shensha"]["month"] = self.search_shensha_in_zhu(month_gan_obj, month_zhi_obj, self.bazi_chart)
-        result["shensha"]["day"] = self.search_shensha_in_zhu(day_gan_obj, day_zhi_obj, self.bazi_chart)
+        result["shensha"]["year"] = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(year_gan_obj, year_zhi_obj, self.bazi_chart)]
+        result["shensha"]["month"] = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(month_gan_obj, month_zhi_obj, self.bazi_chart)]
+        result["shensha"]["day"] = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(day_gan_obj, day_zhi_obj, self.bazi_chart)]
         
         if hour is not None and len(bazi) > 3:
             hour_gan_obj = Gan.from_chinese(hour_gan)
             hour_zhi_obj = Zhi.from_chinese(hour_zhi)
-            result["shensha"]["hour"] = self.search_shensha_in_zhu(hour_gan_obj, hour_zhi_obj, self.bazi_chart)
+            result["shensha"]["hour"] = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(hour_gan_obj, hour_zhi_obj, self.bazi_chart)]
         
         return result
     
     def format_shensha_query_result(self, result):
         """
-        格式化神煞查询结果为易读的字符串
+        （内部工具方法，非对外 API）
+
+        格式化 `query_shensha_for_datetime` 的返回结果为易读字符串，用于终端/调试展示。
         
         Args:
             result (dict): query_shensha_for_datetime方法的返回结果
@@ -419,45 +656,104 @@ class BaziChartAnalyseFrame:
             str: 格式化后的字符串
         """
         output = f"【{result['date']}神煞查询结果】\n"
-        output += f"八字：{result['bazi']['year']} {result['bazi']['month']} {result['bazi']['day']}"
-        if result['bazi']['hour']:
-            output += f" {result['bazi']['hour']}"
+        year_text = Gan[strip_ns(result["bazi"]["year"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["year"]["zhi"])].chinese_name
+        month_text = Gan[strip_ns(result["bazi"]["month"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["month"]["zhi"])].chinese_name
+        day_text = Gan[strip_ns(result["bazi"]["day"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["day"]["zhi"])].chinese_name
+        output += f"八字：{year_text} {month_text} {day_text}"
+        if result["bazi"]["hour"]:
+            hour_text = Gan[strip_ns(result["bazi"]["hour"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["hour"]["zhi"])].chinese_name
+            output += f" {hour_text}"
         output += "\n\n"
         
         # 年柱神煞
-        output += f"年柱{result['bazi']['year']}："
+        output += f"年柱{year_text}："
         if result['shensha']['year']:
-            output += f"神煞【{', '.join(result['shensha']['year'])}】"
+            output += f"神煞【{', '.join([strip_ns(x) for x in result['shensha']['year']])}】"
         else:
             output += "无神煞"
         output += "\n"
         
         # 月柱神煞
-        output += f"月柱{result['bazi']['month']}："
+        output += f"月柱{month_text}："
         if result['shensha']['month']:
-            output += f"神煞【{', '.join(result['shensha']['month'])}】"
+            output += f"神煞【{', '.join([strip_ns(x) for x in result['shensha']['month']])}】"
         else:
             output += "无神煞"
         output += "\n"
         
         # 日柱神煞
-        output += f"日柱{result['bazi']['day']}："
+        output += f"日柱{day_text}："
         if result['shensha']['day']:
-            output += f"神煞【{', '.join(result['shensha']['day'])}】"
+            output += f"神煞【{', '.join([strip_ns(x) for x in result['shensha']['day']])}】"
         else:
             output += "无神煞"
         output += "\n"
         
         # 时柱神煞（如果有）
-        if result['bazi']['hour']:
-            output += f"时柱{result['bazi']['hour']}："
+        if result["bazi"]["hour"]:
+            output += f"时柱{hour_text}："
             if result['shensha']['hour']:
-                output += f"神煞【{', '.join(result['shensha']['hour'])}】"
+                output += f"神煞【{', '.join([strip_ns(x) for x in result['shensha']['hour']])}】"
             else:
                 output += "无神煞"
-            output += "\n"
-        
         return output
+    
+    def get_compatibility_analysis(self, other_chart: BaziChart) -> Dict[str, Any]:
+        """
+        分析两个命盘的神煞互涉，并返回指定格式的JSON
+        
+        Args:
+            other_chart (BaziChart): 另一个命盘对象
+            
+        Returns:
+            Dict: {
+                "a_wang_b": [神煞名称列表, 去重],
+                "b_wang_a": [神煞名称列表, 去重]
+            }
+        """
+        shensha_analyser = ShenShaAnalyser(self.bazi_chart, self.log_helper)
+        raw_results = shensha_analyser.analyse_compatibility(other_chart)
+        
+        a_has_b = raw_results['a_has_b_shensha']
+        b_has_a = raw_results['b_has_a_shensha']
+        
+        # 提取神煞枚举并去重
+        a_wang_b_names = sorted(list({ns(NS_SHENSHA, ShenshaEnum[item['name'].upper()].value) for item in a_has_b}))
+        b_wang_a_names = sorted(list({ns(NS_SHENSHA, ShenshaEnum[item['name'].upper()].value) for item in b_has_a}))
+        
+        # 生肖合婚逻辑放在独立的 analyser 中，这里只调用
+        shengxiao_hehun = ZodiacCompatibilityAnalyser(self.bazi_chart, other_chart).analyse()
+        wuxing_vector = WuxingVectorCompatibilityAnalyser(self.bazi_chart, other_chart).analyse()
+
+        res = {
+            "a_wang_b": a_wang_b_names,
+            "b_wang_a": b_wang_a_names,
+            "shengxiao_hehun": shengxiao_hehun,
+            "wuxing_vector": wuxing_vector,
+        }
+
+        self._namespace_compatibility_res(res)
+        return res
+
+    def _namespace_compatibility_res(self, res: dict) -> None:
+        """对外合盘 JSON：把枚举字段统一转为 `NAMESPACE:CODE` 形式（原地修改）。"""
+        sh = res.get("shengxiao_hehun")
+        if not isinstance(sh, dict):
+            return
+        if "a_shengxiao" in sh:
+            sh["a_shengxiao"] = ns(NS_SHENGXIAO, sh["a_shengxiao"])
+        if "b_shengxiao" in sh:
+            sh["b_shengxiao"] = ns(NS_SHENGXIAO, sh["b_shengxiao"])
+        if "a_nianzhi" in sh:
+            sh["a_nianzhi"] = ns(NS_ZHI, sh["a_nianzhi"])
+        if "b_nianzhi" in sh:
+            sh["b_nianzhi"] = ns(NS_ZHI, sh["b_nianzhi"])
+        if "relation" in sh:
+            sh["relation"] = ns(NS_ZODIAC_COMPAT_RELATION, sh["relation"])
+        if "favorable" in sh:
+            sh["favorable"] = ns(NS_ZODIAC_COMPAT_FAVORABILITY, sh["favorable"])
+        if "detail" in sh:
+            sh["detail"] = ns(NS_ZODIAC_COMPAT_DETAIL, sh["detail"])
     
     def query_shensha_impact_for_datetime(self, year, month, day, hour=None):
         """
@@ -471,12 +767,17 @@ class BaziChartAnalyseFrame:
         day_gan, day_zhi = bazi[2][0], bazi[2][1]
         hour_gan, hour_zhi = (bazi[3][0], bazi[3][1]) if hour is not None and len(bazi) > 3 else (None, None)
         result = {
-            "date": f"{year}年{month}月{day}日" + (f"{hour}时" if hour is not None else ""),
+            # 使用 ISO 风格日期字符串，避免终端/环境编码导致中文年月显示异常
+            "date": f"{year:04d}-{month:02d}-{day:02d}" + (f" {hour:02d}:00" if hour is not None else ""),
             "bazi": {
-                "year": bazi[0],
-                "month": bazi[1],
-                "day": bazi[2],
-                "hour": bazi[3] if hour is not None and len(bazi) > 3 else None
+                "year": {"gan": ns(NS_GAN, Gan.from_chinese(year_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(year_zhi).name)},
+                "month": {"gan": ns(NS_GAN, Gan.from_chinese(month_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(month_zhi).name)},
+                "day": {"gan": ns(NS_GAN, Gan.from_chinese(day_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(day_zhi).name)},
+                "hour": (
+                    {"gan": ns(NS_GAN, Gan.from_chinese(hour_gan).name), "zhi": ns(NS_ZHI, Zhi.from_chinese(hour_zhi).name)}
+                    if hour is not None and len(bazi) > 3
+                    else None
+                ),
             },
             "shensha": {
                 "year": [],
@@ -499,40 +800,49 @@ class BaziChartAnalyseFrame:
         day_gan_obj = Gan.from_chinese(day_gan)
         day_zhi_obj = Zhi.from_chinese(day_zhi)
         # 查询各柱的神煞
-        year_shensha = self.search_shensha_in_zhu(year_gan_obj, year_zhi_obj, self.bazi_chart)
-        month_shensha = self.search_shensha_in_zhu(month_gan_obj, month_zhi_obj, self.bazi_chart)
-        day_shensha = self.search_shensha_in_zhu(day_gan_obj, day_zhi_obj, self.bazi_chart)
+        year_shensha = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(year_gan_obj, year_zhi_obj, self.bazi_chart)]
+        month_shensha = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(month_gan_obj, month_zhi_obj, self.bazi_chart)]
+        day_shensha = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(day_gan_obj, day_zhi_obj, self.bazi_chart)]
         result["shensha"]["year"] = year_shensha
         result["shensha"]["month"] = month_shensha
         result["shensha"]["day"] = day_shensha
         if hour is not None and len(bazi) > 3:
             hour_gan_obj = Gan.from_chinese(hour_gan)
             hour_zhi_obj = Zhi.from_chinese(hour_zhi)
-            hour_shensha = self.search_shensha_in_zhu(hour_gan_obj, hour_zhi_obj, self.bazi_chart)
+            hour_shensha = [ns(NS_SHENSHA, x) for x in self.search_shensha_enum_in_zhu(hour_gan_obj, hour_zhi_obj, self.bazi_chart)]
             result["shensha"]["hour"] = hour_shensha
         # 记录每个神煞的影响
+        enum_to_instance = {
+            ns(NS_SHENSHA, ShenshaEnum[s.__class__.__name__.upper()].value): s for s in self.shensha_instances
+        }
         for pillar in ["year", "month", "day", "hour"]:
             for shensha_name in result["shensha"][pillar]:
-                for shensha_instance in self.shensha_instances:
-                    if shensha_instance.chinese_name == shensha_name:
-                        # 只显示非零影响
-                        impact = {k: v for k, v in shensha_instance.impact.items() if v != 0}
-                        if impact:
-                            result["impact"][pillar].append({
-                                "name": shensha_name,
-                                "impact": impact
-                            })
-                        break
+                shensha_instance = enum_to_instance.get(shensha_name)
+                if not shensha_instance:
+                    continue
+                # 只显示非零影响
+                impact = {k: v for k, v in shensha_instance.impact.items() if v != 0}
+                if impact:
+                    result["impact"][pillar].append({
+                        "name": shensha_name,
+                        "impact": impact
+                    })
         return result
 
     def format_shensha_impact_result(self, result):
         """
-        格式化神煞影响查询结果为易读的字符串（每个神煞单独输出影响）
+        （内部工具方法，非对外 API）
+
+        格式化 `query_shensha_impact_for_datetime` 的返回结果为易读字符串（每个神煞单独输出影响）。
         """
         output = f"【{result['date']}神煞影响分析】\n"
-        output += f"八字：{result['bazi']['year']} {result['bazi']['month']} {result['bazi']['day']}"
-        if result['bazi']['hour']:
-            output += f" {result['bazi']['hour']}"
+        year_text = Gan[strip_ns(result["bazi"]["year"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["year"]["zhi"])].chinese_name
+        month_text = Gan[strip_ns(result["bazi"]["month"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["month"]["zhi"])].chinese_name
+        day_text = Gan[strip_ns(result["bazi"]["day"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["day"]["zhi"])].chinese_name
+        output += f"八字：{year_text} {month_text} {day_text}"
+        if result["bazi"]["hour"]:
+            hour_text = Gan[strip_ns(result["bazi"]["hour"]["gan"])].chinese_name + Zhi[strip_ns(result["bazi"]["hour"]["zhi"])].chinese_name
+            output += f" {hour_text}"
         output += "\n\n"
         # 显示神煞及其影响
         impact_names = {

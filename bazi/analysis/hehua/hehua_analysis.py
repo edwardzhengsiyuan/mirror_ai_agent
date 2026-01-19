@@ -72,7 +72,7 @@ class HehuaAnalysis(BaseAnalyser):
 
         # 记录最终合化冲分析结果
         self._log_helper.info("综合考虑之后认为最终成立的合化冲关系：\n")
-        print(self.hehua_analysis_results)
+        # NOTE: avoid printing raw dict (breaks JSON consumers / tests)
         for force_cate in self.hehua_analysis_results:
             for force in self.hehua_analysis_results[force_cate]:
                 self._log_helper.info(force.get_log())

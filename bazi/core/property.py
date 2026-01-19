@@ -22,6 +22,55 @@
 
 from enum import Enum
 
+# ----------------------------
+# API enum serialization helpers
+# ----------------------------
+# 为了支持下游服务做多语言映射，所有“可枚举语义字段”可统一输出为带命名空间的枚举码：
+#   "GAN:WU", "ZHI:WU", "SHENSHA:TIANYI", ...
+# 下游只需按 namespace + code 查语言包即可，且能避免 Gan/Zhi 等同名冲突。
+
+NS_YINYANG = "YINYANG"
+NS_WUXING = "WUXING"
+NS_GAN = "GAN"
+NS_ZHI = "ZHI"
+NS_SHISHEN = "SHISHEN"
+NS_SHENGXIAO = "SHENGXIAO"
+NS_SHENSHA = "SHENSHA"
+NS_NAYIN = "NAYIN"
+NS_DISHI = "DISHI"
+NS_SHENQIANGRUO = "SHENQIANGRUO"
+NS_GEJU = "GEJU"
+NS_GAN_RELATION_TYPE = "GAN_RELATION_TYPE"
+NS_ZHI_RELATION_TYPE = "ZHI_RELATION_TYPE"
+NS_ZODIAC_COMPAT_RELATION = "ZODIAC_COMPAT_RELATION"
+NS_ZODIAC_COMPAT_FAVORABILITY = "ZODIAC_COMPAT_FAVORABILITY"
+NS_ZODIAC_COMPAT_DETAIL = "ZODIAC_COMPAT_DETAIL"
+
+
+def ns(namespace: str, code: str | None) -> str | None:
+    """
+    将枚举码包装为带命名空间的字符串：f"{namespace}:{code}"。
+    为了幂等，如果 code 已经包含 ":"（认为已命名空间化），则原样返回。
+    """
+    if code is None:
+        return None
+    if not isinstance(code, str):
+        return code  # type: ignore[return-value]
+    if ":" in code:
+        return code
+    return f"{namespace}:{code}"
+
+
+def strip_ns(value: str | None) -> str | None:
+    """把 'GAN:WU' 还原为 'WU'；若不含 ':' 则原样返回。"""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value  # type: ignore[return-value]
+    if ":" not in value:
+        return value
+    return value.split(":", 1)[1]
+
 class Yinyang(Enum):
     YIN = 0
     YANG = 1
@@ -41,6 +90,17 @@ class Wuxing(Enum):
     def chinese_name(self):
         chinese_names = ["木", "火", "土", "金", "水"]
         return chinese_names[self.value]
+
+    @classmethod
+    def from_chinese_name(cls, name: str) -> "Wuxing":
+        mapping = {
+            "木": cls.MU,
+            "火": cls.HUO,
+            "土": cls.TU,
+            "金": cls.JIN,
+            "水": cls.SHUI,
+        }
+        return mapping[name.strip()]
 
 class Gan(Enum):
     JIA = 0
@@ -92,6 +152,34 @@ class Gan(Enum):
         # 去重处理
         return list(dict.fromkeys(relations))
 
+    def get_wuhe_relations_enum(self, other_gans: list["Gan"]) -> list[dict]:
+        """
+        返回天干五合关系（结构化枚举）。
+
+        形如：
+        [
+          {"type": "WUHE", "members": ["JIA","JI"]}
+        ]
+        """
+        wuhe_pairs = [
+            (Gan.JIA, Gan.JI),
+            (Gan.YI, Gan.GENG),
+            (Gan.BING, Gan.XIN),
+            (Gan.DING, Gan.REN),
+            (Gan.WU, Gan.GUI),
+        ]
+        seen = set()
+        res: list[dict] = []
+        for g1, g2 in wuhe_pairs:
+            if (self == g1 and g2 in other_gans) or (self == g2 and g1 in other_gans):
+                ordered = sorted([g1, g2], key=lambda x: x.value)
+                key = (GanRelationType.WUHE.name, ordered[0].name, ordered[1].name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                res.append({"type": GanRelationType.WUHE.name, "members": [ordered[0].name, ordered[1].name]})
+        return res
+
 class Zhi(Enum):
     ZI = 0
     CHOU = 1
@@ -118,6 +206,24 @@ class Zhi(Enum):
     def chinese_name(self):
         chinese_names = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
         return chinese_names[self.value]
+
+    @property
+    def shengxiao(self) -> "Shengxiao":
+        mapping = {
+            Zhi.ZI: Shengxiao.SHU,
+            Zhi.CHOU: Shengxiao.NIU,
+            Zhi.YIN: Shengxiao.HU,
+            Zhi.MAO: Shengxiao.TU,
+            Zhi.CHEN: Shengxiao.LONG,
+            Zhi.SI: Shengxiao.SHE,
+            Zhi.WU: Shengxiao.MA,
+            Zhi.WEI: Shengxiao.YANG,
+            Zhi.SHEN: Shengxiao.HOU,
+            Zhi.YOU: Shengxiao.JI,
+            Zhi.XU: Shengxiao.GOU,
+            Zhi.HAI: Shengxiao.ZHU,
+        }
+        return mapping[self]
 
     @property
     def hidden_gans(self):
@@ -272,6 +378,404 @@ class Zhi(Enum):
         seen = set()
         return [rel for rel in relations if not (rel in seen or seen.add(rel))]
 
+    def get_relations_enum(self, other_zhis: list["Zhi"]) -> list[dict]:
+        """
+        返回地支关系（结构化枚举），所有输出字段均为枚举值（字符串）。
+
+        形如：
+        [
+          {"type": "LIUHE", "members": ["ZI","CHOU"]},
+          {"type": "SANHE", "members": ["SHEN","ZI","CHEN"]}
+        ]
+        """
+        current = self
+        all_zhis = other_zhis + [current]
+        res: list[dict] = []
+        seen = set()
+
+        def _add(rel_type: "ZhiRelationType", members: list["Zhi"]):
+            ordered = sorted(members, key=lambda z: z.value)
+            key = (rel_type.name, tuple(z.name for z in ordered))
+            if key in seen:
+                return
+            seen.add(key)
+            res.append({"type": rel_type.name, "members": [z.name for z in ordered]})
+
+        # 三会
+        sanhui_groups = [
+            (Zhi.YIN, Zhi.MAO, Zhi.CHEN),
+            (Zhi.SI, Zhi.WU, Zhi.WEI),
+            (Zhi.SHEN, Zhi.YOU, Zhi.XU),
+            (Zhi.HAI, Zhi.ZI, Zhi.CHOU),
+        ]
+        for group in sanhui_groups:
+            if current in group and all(z in all_zhis for z in group):
+                _add(ZhiRelationType.SANHUI, list(group))
+
+        # 三合 / 半合 / 拱合
+        sanhe_groups = [
+            (Zhi.HAI, Zhi.MAO, Zhi.WEI),
+            (Zhi.YIN, Zhi.WU, Zhi.XU),
+            (Zhi.SI, Zhi.YOU, Zhi.CHOU),
+            (Zhi.SHEN, Zhi.ZI, Zhi.CHEN),
+        ]
+        for group in sanhe_groups:
+            if current not in group:
+                continue
+            if all(z in all_zhis for z in group):
+                _add(ZhiRelationType.SANHE, list(group))
+            else:
+                # 拱合：首尾存在
+                if current == group[0] and group[2] in all_zhis:
+                    _add(ZhiRelationType.GONGHE, [group[0], group[2]])
+                # 半合：与中神同现
+                if current == group[0] and group[1] in all_zhis:
+                    _add(ZhiRelationType.BANHE, [group[0], group[1]])
+                elif current == group[2] and group[1] in all_zhis:
+                    _add(ZhiRelationType.BANHE, [group[1], group[2]])
+
+        # 三刑 / 刑
+        sanxing_groups = [
+            (Zhi.YIN, Zhi.SI, Zhi.SHEN),
+            (Zhi.CHOU, Zhi.WEI, Zhi.XU),
+            (Zhi.ZI, Zhi.MAO),
+        ]
+        for group in sanxing_groups:
+            if current not in group:
+                continue
+            existing = [z for z in group if z in all_zhis and z != current]
+            if not existing:
+                continue
+            if len(group) == 3 and len(existing) >= 2:
+                _add(ZhiRelationType.SANXING, [current] + existing[:2])
+            else:
+                for z in existing:
+                    _add(ZhiRelationType.XING, [current, z])
+
+        # 自刑
+        if current in [Zhi.CHEN, Zhi.WU, Zhi.YOU, Zhi.HAI] and all_zhis.count(current) >= 2:
+            _add(ZhiRelationType.ZIXING, [current, current])
+
+        # 六合
+        liuhe_pairs = [
+            (Zhi.ZI, Zhi.CHOU),
+            (Zhi.YIN, Zhi.HAI),
+            (Zhi.MAO, Zhi.XU),
+            (Zhi.CHEN, Zhi.YOU),
+            (Zhi.SI, Zhi.SHEN),
+            (Zhi.WU, Zhi.WEI),
+        ]
+        for a, b in liuhe_pairs:
+            if current in (a, b) and any(z in all_zhis for z in (a, b) if z != current):
+                _add(ZhiRelationType.LIUHE, [a, b])
+
+        # 六冲
+        liuchong_pairs = [
+            (Zhi.ZI, Zhi.WU),
+            (Zhi.CHOU, Zhi.WEI),
+            (Zhi.YIN, Zhi.SHEN),
+            (Zhi.MAO, Zhi.YOU),
+            (Zhi.CHEN, Zhi.XU),
+            (Zhi.SI, Zhi.HAI),
+        ]
+        for a, b in liuchong_pairs:
+            if current in (a, b) and any(z in all_zhis for z in (a, b) if z != current):
+                _add(ZhiRelationType.LIUCHONG, [a, b])
+
+        # 六害
+        liuhai_pairs = [
+            (Zhi.ZI, Zhi.WEI),
+            (Zhi.CHOU, Zhi.WU),
+            (Zhi.YIN, Zhi.SI),
+            (Zhi.MAO, Zhi.CHEN),
+            (Zhi.SHEN, Zhi.HAI),
+            (Zhi.YOU, Zhi.XU),
+        ]
+        for a, b in liuhai_pairs:
+            if current in (a, b) and any(z in all_zhis for z in (a, b) if z != current):
+                _add(ZhiRelationType.LIUHAI, [a, b])
+
+        # 相破
+        xiangpo_pairs = [
+            (Zhi.ZI, Zhi.YOU),
+            (Zhi.YIN, Zhi.HAI),
+            (Zhi.CHEN, Zhi.CHOU),
+            (Zhi.WU, Zhi.MAO),
+            (Zhi.SHEN, Zhi.SI),
+            (Zhi.XU, Zhi.WEI),
+        ]
+        for a, b in xiangpo_pairs:
+            if current in (a, b) and any(z in all_zhis for z in (a, b) if z != current):
+                _add(ZhiRelationType.XIANGPO, [a, b])
+
+        return res
+
+
+class ShenQiangRuo(Enum):
+    QIANG = "QIANG"
+    ZHONGHE = "ZHONGHE"
+    RUO = "RUO"
+
+    @property
+    def chinese_name(self) -> str:
+        mapping = {
+            ShenQiangRuo.QIANG: "日主强",
+            ShenQiangRuo.ZHONGHE: "日主中和",
+            ShenQiangRuo.RUO: "日主弱",
+        }
+        return mapping[self]
+
+
+class GanRelationType(Enum):
+    WUHE = "WUHE"
+
+
+class ZhiRelationType(Enum):
+    SANHUI = "SANHUI"
+    SANHE = "SANHE"
+    BANHE = "BANHE"
+    GONGHE = "GONGHE"
+    SANXING = "SANXING"
+    XING = "XING"
+    ZIXING = "ZIXING"
+    LIUHE = "LIUHE"
+    LIUCHONG = "LIUCHONG"
+    LIUHAI = "LIUHAI"
+    XIANGPO = "XIANGPO"
+
+
+class GejuEnum(Enum):
+    NEED_MORE_ANALYSIS = "NEED_MORE_ANALYSIS"
+    ZHUANWANG_GE = "ZHUANWANG_GE"
+    YANGREN_GE = "YANGREN_GE"
+    LUSHEN_GE = "LUSHEN_GE"
+
+    BIJIAN_GE = "BIJIAN_GE"
+    JIECAI_GE = "JIECAI_GE"
+    SHISHEN_GE = "SHISHEN_GE"
+    SHANGGUAN_GE = "SHANGGUAN_GE"
+    PIANCAI_GE = "PIANCAI_GE"
+    ZHENGCAI_GE = "ZHENGCAI_GE"
+    QISHA_GE = "QISHA_GE"
+    ZHENGGUAN_GE = "ZHENGGUAN_GE"
+    PIANYIN_GE = "PIANYIN_GE"
+    ZHENGYIN_GE = "ZHENGYIN_GE"
+
+    @property
+    def chinese_name(self) -> str:
+        mapping = {
+            GejuEnum.NEED_MORE_ANALYSIS: "需要进一步分析",
+            GejuEnum.ZHUANWANG_GE: "专旺格",
+            GejuEnum.YANGREN_GE: "羊刃格",
+            GejuEnum.LUSHEN_GE: "禄神格",
+            GejuEnum.BIJIAN_GE: "比肩格",
+            GejuEnum.JIECAI_GE: "劫财格",
+            GejuEnum.SHISHEN_GE: "食神格",
+            GejuEnum.SHANGGUAN_GE: "伤官格",
+            GejuEnum.PIANCAI_GE: "偏财格",
+            GejuEnum.ZHENGCAI_GE: "正财格",
+            GejuEnum.QISHA_GE: "七杀格",
+            GejuEnum.ZHENGGUAN_GE: "正官格",
+            GejuEnum.PIANYIN_GE: "偏印格",
+            GejuEnum.ZHENGYIN_GE: "正印格",
+        }
+        return mapping[self]
+
+    @classmethod
+    def from_shishen(cls, shishen: "Shishen") -> "GejuEnum":
+        mapping = {
+            Shishen.BIJIAN: cls.BIJIAN_GE,
+            Shishen.JIECAI: cls.JIECAI_GE,
+            Shishen.SHISHEN: cls.SHISHEN_GE,
+            Shishen.SHANGGUAN: cls.SHANGGUAN_GE,
+            Shishen.PIANCAI: cls.PIANCAI_GE,
+            Shishen.ZHENGCAI: cls.ZHENGCAI_GE,
+            Shishen.QISHA: cls.QISHA_GE,
+            Shishen.ZHENGGUAN: cls.ZHENGGUAN_GE,
+            Shishen.PIANYIN: cls.PIANYIN_GE,
+            Shishen.ZHENGYIN: cls.ZHENGYIN_GE,
+        }
+        return mapping[shishen]
+
+
+class Shengxiao(Enum):
+    SHU = "SHU"
+    NIU = "NIU"
+    HU = "HU"
+    TU = "TU"
+    LONG = "LONG"
+    SHE = "SHE"
+    MA = "MA"
+    YANG = "YANG"
+    HOU = "HOU"
+    JI = "JI"
+    GOU = "GOU"
+    ZHU = "ZHU"
+
+
+class ZodiacCompatibilityRelation(Enum):
+    SAME = "SAME"
+    LIUHE = "LIUHE"
+    SANHE = "SANHE"
+    LIUCHONG = "LIUCHONG"
+    LIUHAI = "LIUHAI"
+    NEUTRAL = "NEUTRAL"
+
+
+class ZodiacCompatibilityFavorability(Enum):
+    FAVORABLE = "FAVORABLE"
+    UNFAVORABLE = "UNFAVORABLE"
+    NEUTRAL = "NEUTRAL"
+
+
+class ZodiacCompatibilityDetail(Enum):
+    SAME = "SAME"
+    LIUHE = "LIUHE"
+    SANHE = "SANHE"
+    LIUCHONG = "LIUCHONG"
+    LIUHAI = "LIUHAI"
+    NEUTRAL = "NEUTRAL"
+
+
+class ShenshaEnum(Enum):
+    GUCHEN = "GUCHEN"
+    GUASU = "GUASU"
+    HONGLUAN = "HONGLUAN"
+    TIANXI = "TIANXI"
+    TIANDEGUIREN = "TIANDEGUIREN"
+    YUEDE = "YUEDE"
+    TIANYI = "TIANYI"
+    WENCHANG = "WENCHANG"
+    YANGREN = "YANGREN"
+    LUSHEN = "LUSHEN"
+    HONGYAN = "HONGYAN"
+    JIANGXING = "JIANGXING"
+    HUAGAI = "HUAGAI"
+    YIMA = "YIMA"
+    JIESHA = "JIESHA"
+    WANGSHEN = "WANGSHEN"
+    TAOHUA = "TAOHUA"
+    TAIJIGUIREN = "TAIJIGUIREN"
+    KONGWANG = "KONGWANG"
+    SANQIGUIREN = "SANQIGUIREN"
+    FUXINGGUIREN = "FUXINGGUIREN"
+    KUIGANG = "KUIGANG"
+    GUOYINGUIREN = "GUOYINGUIREN"
+    DEXIUGUIREN = "DEXIUGUIREN"
+    XUETANG = "XUETANG"
+    CIGUAN = "CIGUAN"
+    TIANCHUGUIREN = "TIANCHUGUIREN"
+    JINYU = "JINYU"
+    ZAISHA = "ZAISHA"
+    BAZHUAN = "BAZHUAN"
+    TONGZI = "TONGZI"
+    YINCHAYANCUO = "YINCHAYANCUO"
+    SHIEDABAI = "SHIEDABAI"
+    TIANYII = "TIANYII"
+
+
+class Nayin(Enum):
+    HAI_ZHONG_JIN = "HAI_ZHONG_JIN"
+    LU_ZHONG_HUO = "LU_ZHONG_HUO"
+    DA_LIN_MU = "DA_LIN_MU"
+    LU_PANG_TU = "LU_PANG_TU"
+    JIAN_FENG_JIN = "JIAN_FENG_JIN"
+    SHAN_TOU_HUO = "SHAN_TOU_HUO"
+    JIAN_XIA_SHUI = "JIAN_XIA_SHUI"
+    CHENG_TOU_TU = "CHENG_TOU_TU"
+    BAI_LA_JIN = "BAI_LA_JIN"
+    YANG_LIU_MU = "YANG_LIU_MU"
+    QUAN_ZHONG_SHUI = "QUAN_ZHONG_SHUI"
+    WU_SHANG_TU = "WU_SHANG_TU"
+    PI_LI_HUO = "PI_LI_HUO"
+    SONG_BAI_MU = "SONG_BAI_MU"
+    CHANG_LIU_SHUI = "CHANG_LIU_SHUI"
+    SHA_ZHONG_JIN = "SHA_ZHONG_JIN"
+    SHAN_XIA_HUO = "SHAN_XIA_HUO"
+    PING_DI_MU = "PING_DI_MU"
+    BI_SHANG_TU = "BI_SHANG_TU"
+    JIN_BO_JIN = "JIN_BO_JIN"
+    FO_DENG_HUO = "FO_DENG_HUO"
+    TIAN_HE_SHUI = "TIAN_HE_SHUI"
+    DA_YI_TU = "DA_YI_TU"
+    CHAI_CHUAN_JIN = "CHAI_CHUAN_JIN"
+    SANG_ZHE_MU = "SANG_ZHE_MU"
+    DA_XI_SHUI = "DA_XI_SHUI"
+    SHA_ZHONG_TU = "SHA_ZHONG_TU"
+    TIAN_SHANG_HUO = "TIAN_SHANG_HUO"
+    SHI_LIU_MU = "SHI_LIU_MU"
+    DA_HAI_SHUI = "DA_HAI_SHUI"
+
+    @classmethod
+    def from_chinese_name(cls, name: str) -> "Nayin":
+        mapping = {
+            "海中金": cls.HAI_ZHONG_JIN,
+            "炉中火": cls.LU_ZHONG_HUO,
+            "大林木": cls.DA_LIN_MU,
+            "路旁土": cls.LU_PANG_TU,
+            "剑锋金": cls.JIAN_FENG_JIN,
+            "山头火": cls.SHAN_TOU_HUO,
+            "涧下水": cls.JIAN_XIA_SHUI,
+            "城头土": cls.CHENG_TOU_TU,
+            "白蜡金": cls.BAI_LA_JIN,
+            "杨柳木": cls.YANG_LIU_MU,
+            "泉中水": cls.QUAN_ZHONG_SHUI,
+            "屋上土": cls.WU_SHANG_TU,
+            "霹雳火": cls.PI_LI_HUO,
+            "松柏木": cls.SONG_BAI_MU,
+            "长流水": cls.CHANG_LIU_SHUI,
+            "砂中金": cls.SHA_ZHONG_JIN,
+            "山下火": cls.SHAN_XIA_HUO,
+            "平地木": cls.PING_DI_MU,
+            "壁上土": cls.BI_SHANG_TU,
+            "金箔金": cls.JIN_BO_JIN,
+            "佛灯火": cls.FO_DENG_HUO,
+            "天河水": cls.TIAN_HE_SHUI,
+            "大驿土": cls.DA_YI_TU,
+            "钗钏金": cls.CHAI_CHUAN_JIN,
+            "桑柘木": cls.SANG_ZHE_MU,
+            "大溪水": cls.DA_XI_SHUI,
+            "沙中土": cls.SHA_ZHONG_TU,
+            "天上火": cls.TIAN_SHANG_HUO,
+            "石榴木": cls.SHI_LIU_MU,
+            "大海水": cls.DA_HAI_SHUI,
+        }
+        return mapping[name.strip()]
+
+
+class DiShi(Enum):
+    CHANGSHENG = "CHANGSHENG"
+    MUYU = "MUYU"
+    GUANDAI = "GUANDAI"
+    LINGUAN = "LINGUAN"
+    DIWANG = "DIWANG"
+    SHUAI = "SHUAI"
+    BING = "BING"
+    SI = "SI"
+    MU = "MU"
+    JUE = "JUE"
+    TAI = "TAI"
+    YANG = "YANG"
+
+    @classmethod
+    def from_chinese_name(cls, name: str) -> "DiShi":
+        mapping = {
+            "长生": cls.CHANGSHENG,
+            "沐浴": cls.MUYU,
+            "冠带": cls.GUANDAI,
+            "临官": cls.LINGUAN,
+            "帝旺": cls.DIWANG,
+            "衰": cls.SHUAI,
+            "病": cls.BING,
+            "死": cls.SI,
+            "墓": cls.MU,
+            "绝": cls.JUE,
+            "胎": cls.TAI,
+            "养": cls.YANG,
+        }
+        return mapping[name.strip()]
+
+
 class Shishen(Enum):
     RIZHU = -1
     BIJIAN = 0
@@ -289,6 +793,23 @@ class Shishen(Enum):
     def chinese_name(self):
         chinese_names = ["日主", "比肩", "劫财", "食神", "伤官", "偏财", "正财", "七杀", "正官", "偏印", "正印"]
         return chinese_names[self.value + 1]  # Adjusting the index for RIZHU
+
+    @classmethod
+    def from_chinese_name(cls, name: str) -> "Shishen":
+        mapping = {
+            "日主": cls.RIZHU,
+            "比肩": cls.BIJIAN,
+            "劫财": cls.JIECAI,
+            "食神": cls.SHISHEN,
+            "伤官": cls.SHANGGUAN,
+            "偏财": cls.PIANCAI,
+            "正财": cls.ZHENGCAI,
+            "七杀": cls.QISHA,
+            "正官": cls.ZHENGGUAN,
+            "偏印": cls.PIANYIN,
+            "正印": cls.ZHENGYIN,
+        }
+        return mapping[name.strip()]
 
 class Zhu:
     def __init__(self, gan, zhi):
@@ -466,3 +987,19 @@ def get_shengxiao_by_zhi_name(zhi_name):
         "亥": "猪",
     }
     return shengxiao_table[zhi_name]
+
+
+def get_shishen_enum_by_chinese(shishen_name: str) -> Shishen:
+    # 兼容旧调用：推荐直接使用 Shishen.from_chinese_name(...)
+    return Shishen.from_chinese_name(shishen_name)
+
+
+def get_wuxing_enum_by_chinese(wuxing_name: str) -> Wuxing:
+    mapping = {
+        "木": Wuxing.MU,
+        "火": Wuxing.HUO,
+        "土": Wuxing.TU,
+        "金": Wuxing.JIN,
+        "水": Wuxing.SHUI,
+    }
+    return mapping[wuxing_name]

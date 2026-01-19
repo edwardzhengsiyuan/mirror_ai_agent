@@ -21,7 +21,7 @@
 # analysis/power/bazi_power_chart.py
 import copy
 
-from ...core import Shishen, Wuxing, Gan
+from ...core import Shishen, Wuxing, Gan, ShenQiangRuo
 
 # 定义全局变量
 MRateList = [
@@ -61,7 +61,7 @@ class BaziPowerChart:
         self.wuxing_proportions = {wuxing: 0 for wuxing in Wuxing}
         self.rizhu_strength = 0
         self.force = force
-        self.shenqiangruo = ""
+        self.shenqiangruo: ShenQiangRuo | None = None
 
         # 在初始化中不计算五行和十神的力量
         # 等待 PowerTransformer 执行完毕后，再调用计算方法
@@ -98,7 +98,7 @@ class BaziPowerChart:
         self.shishen_power = {shishen: 0 for shishen in Shishen}
         for element in self.fixed_row + [item for sublist in self.variable_row for item in sublist]:
             self.shishen_power[element.shishen] += element.wuxing_power[element.gan.wuxing] * element.M
-        self.translate_shishen()
+        # self.translate_shishen()
 
     def translate_shishen(self):
         # 只移除日主，不再做七杀/偏印的转换

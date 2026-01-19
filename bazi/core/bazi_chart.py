@@ -22,7 +22,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-from .property import Gan, Zhi, Shishen, Wuxing, Yinyang, Zhu
+from .property import Gan, Zhi, Shishen, Wuxing, Yinyang, Zhu, Nayin, DiShi
 from lunar_python import Lunar
 
 class BaziAnalysis(ABC):
@@ -166,16 +166,21 @@ class BaziChart:
         self._month_zhi_hidden_gans_shishen = self._month_zhi.get_hidden_gans_shishen_list()
         self._day_zhi_hidden_gans_shishen = self._day_zhi.get_hidden_gans_shishen_list()
 
-        self.year_nayin = self._lunar_eightchar.getYearNaYin()
-        self.month_nayin = self._lunar_eightchar.getMonthNaYin()
-        self.day_nayin = self._lunar_eightchar.getDayNaYin()
-        self.year_dishi = self._lunar_eightchar.getYearDiShi()
-        self.month_dishi = self._lunar_eightchar.getMonthDiShi()
-        self.day_dishi = self._lunar_eightchar.getDayDiShi()
+        # 纳音与地势：统一在本项目内计算，避免第三方库在 Windows 环境下的编码差异
+        self.year_nayin = self._calc_nayin(self._year_gan._gan, self._year_zhi._zhi)
+        self.month_nayin = self._calc_nayin(self._month_gan._gan, self._month_zhi._zhi)
+        self.day_nayin = self._calc_nayin(self._day_gan._gan, self._day_zhi._zhi)
 
-        self.year_zizuo_dishi = self.check_dishi(self.year_zhu)
-        self.month_zizuo_dishi = self.check_dishi(self.month_zhu)
-        self.day_zizuo_dishi = self.check_dishi(self.day_zhu)
+        # 地势有两套口径：
+        # 1) 日主在四支的地势（用于 daygan_dishi）：以“日干”为基准，分别看年/月/日/时支的十二长生
+        # 2) 单柱自坐地势（用于 zizuo_dishi）：以“该柱天干”为基准，看该柱地支的十二长生
+        self.year_dishi = self._calc_dishi(self._day_gan._gan, self._year_zhi._zhi)
+        self.month_dishi = self._calc_dishi(self._day_gan._gan, self._month_zhi._zhi)
+        self.day_dishi = self._calc_dishi(self._day_gan._gan, self._day_zhi._zhi)
+
+        self.year_zizuo_dishi = self._calc_dishi(self._year_gan._gan, self._year_zhi._zhi)
+        self.month_zizuo_dishi = self._calc_dishi(self._month_gan._gan, self._month_zhi._zhi)
+        self.day_zizuo_dishi = self._calc_dishi(self._day_gan._gan, self._day_zhi._zhi)
         # 列表，私有变量
         if not (without_time):
             self._hour_gan = BaziChartGan(Gan.from_chinese(self._lunar_eightchar.getTimeGan()), self._day_gan_init, 3)
@@ -195,13 +200,18 @@ class BaziChart:
             self._hour_zhi_hidden_gans_shishen = self._hour_zhi.get_hidden_gans_shishen_list()
             self._gan_shishen_list = [self._year_gan_shishen, self._month_gan_shishen,self._day_gan_shishen,self._hour_gan_shishen]
             self._zhi_hidden_gans_shishen_list = [self._year_zhi_hidden_gans_shishen, self._month_zhi_hidden_gans_shishen, self._day_zhi_hidden_gans_shishen, self._hour_zhi_hidden_gans_shishen]
-            self.hour_nayin = self._lunar_eightchar.getTimeNaYin()
-            self.hour_dishi = self._lunar_eightchar.getTimeDiShi()
+            self.hour_nayin = self._calc_nayin(self._hour_gan._gan, self._hour_zhi._zhi)
+            self.hour_dishi = self._calc_dishi(self._day_gan._gan, self._hour_zhi._zhi)
             self.nayin_list = [self.year_nayin, self.month_nayin, self.day_nayin, self.hour_nayin]
             self.dishi_list = [self.year_dishi, self.month_dishi, self.day_dishi, self.hour_dishi]
-            self.hour_zizuo_dishi = self.check_dishi(self.hour_zhu)
+            self.hour_zizuo_dishi = self._calc_dishi(self._hour_gan._gan, self._hour_zhi._zhi)
             self.dishi_zizuo_list = [self.year_zizuo_dishi, self.month_zizuo_dishi, self.day_zizuo_dishi, self.hour_zizuo_dishi]
-            self.xunkong_list = [self._lunar.getYearXunKongExact(), self._lunar.getMonthXunKongExact(), self._lunar.getDayXunKongExact(), self._lunar.getTimeXunKong()]
+            self.xunkong_list = [
+                self._parse_xunkong_to_zhis(self._lunar.getYearXunKongExact()),
+                self._parse_xunkong_to_zhis(self._lunar.getMonthXunKongExact()),
+                self._parse_xunkong_to_zhis(self._lunar.getDayXunKongExact()),
+                self._parse_xunkong_to_zhis(self._lunar.getTimeXunKong()),
+            ]
         else:
             self._gan_list = [self._year_gan, self._month_gan, self._day_gan]
             self._zhi_list = [self._year_zhi, self._month_zhi, self._day_zhi]
@@ -216,9 +226,17 @@ class BaziChart:
             self.nayin_list = [self.year_nayin, self.month_nayin, self.day_nayin]
             self.dishi_list = [self.year_dishi, self.month_dishi, self.day_dishi]
             self.dishi_zizuo_list = [self.year_zizuo_dishi, self.month_zizuo_dishi, self.day_zizuo_dishi]
-            self.xunkong_list = [self._lunar.getYearXunKongExact(), self._lunar.getMonthXunKongExact(), self._lunar.getDayXunKongExact()]
+            self.xunkong_list = [
+                self._parse_xunkong_to_zhis(self._lunar.getYearXunKongExact()),
+                self._parse_xunkong_to_zhis(self._lunar.getMonthXunKongExact()),
+                self._parse_xunkong_to_zhis(self._lunar.getDayXunKongExact()),
+            ]
         self.is_special = False
         self.refer = None
+        
+        # 创建基于当前日干的十神缓存，用于大运流年流月计算加速
+        self.create_shishen_cache_for_current_day_gan()
+        
         self.calculate_dayun_liunian()
         self.calculate_peiou_fangwei_by_swh()
 
@@ -253,9 +271,23 @@ class BaziChart:
         return shishen_map[diff]
     
     def check_dishi(self, zhu: Zhu):
-        gan = zhu.gan._gan
-        zhi = zhu.zhi._zhi
-        CHANG_SHENG = ("长生", "沐浴", "冠带", "临官", "帝旺", "衰", "病", "死", "墓", "绝", "胎", "养")
+        return self._calc_dishi(zhu.gan._gan, zhu.zhi._zhi)
+
+    def _calc_dishi(self, gan: Gan, zhi: Zhi) -> DiShi:
+        CHANG_SHENG = (
+            DiShi.CHANGSHENG,
+            DiShi.MUYU,
+            DiShi.GUANDAI,
+            DiShi.LINGUAN,
+            DiShi.DIWANG,
+            DiShi.SHUAI,
+            DiShi.BING,
+            DiShi.SI,
+            DiShi.MU,
+            DiShi.JUE,
+            DiShi.TAI,
+            DiShi.YANG,
+        )
 
         CHANG_SHENG_OFFSET = {
             "甲": 1,
@@ -273,22 +305,181 @@ class BaziChart:
 
         return CHANG_SHENG[index]
     
-    def switch_shensha(self, shishen):
-        switch_shensha = {"七杀": "杀", "正官": "官", "正印": "印", "偏印": "枭", "比肩": "比", "劫财": "劫", "正财": "财", "偏财": "才", "食神": "食", "伤官": "伤"}
-        return switch_shensha[shishen.chinese_name]
+    def create_shishen_cache_for_current_day_gan(self):
+        """
+        为当前日干创建十神缓存
+        """
+        if hasattr(self, '_shishen_cache'):
+            return  # 缓存已存在
+            
+        # print(f"为日干{self.day_gan._gan.chinese_name}创建十神缓存...")
+        
+        # 所有天干和地支
+        all_gans = [Gan.JIA, Gan.YI, Gan.BING, Gan.DING, Gan.WU, 
+                    Gan.JI, Gan.GENG, Gan.XIN, Gan.REN, Gan.GUI]
+        all_zhis = [Zhi.ZI, Zhi.CHOU, Zhi.YIN, Zhi.MAO, Zhi.CHEN, Zhi.SI,
+                    Zhi.WU, Zhi.WEI, Zhi.SHEN, Zhi.YOU, Zhi.XU, Zhi.HAI]
+        
+        self._shishen_cache = {"gan_shishen": {}, "zhi_shishen": {}}
+        
+        # 计算当前日干与所有天干的十神关系
+        for gan in all_gans:
+            gan_name = gan.chinese_name
+            shishen = self.calculate_shishen(self.day_gan._gan, gan)
+            self._shishen_cache["gan_shishen"][gan_name] = shishen
+        
+        # 计算当前日干与所有地支藏干的十神关系
+        for zhi in all_zhis:
+            zhi_name = zhi.chinese_name
+            # 使用地支的主藏干计算十神
+            main_hidden_gan = zhi.hidden_gans[0]
+            shishen = self.calculate_shishen(self.day_gan._gan, main_hidden_gan)
+            self._shishen_cache["zhi_shishen"][zhi_name] = shishen
+        
+        # print(f"十神缓存创建完成，包含{len(self._shishen_cache['gan_shishen'])}个天干和{len(self._shishen_cache['zhi_shishen'])}个天干和{len(self._shishen_cache['zhi_shishen'])}个地支关系")
+    
+    def get_cached_shishen(self, ganzhi_name, is_gan=True):
+        """
+        从缓存中获取十神
+        
+        Args:
+            ganzhi_name (str): 天干或地支名称
+            is_gan (bool): True表示天干，False表示地支
+        
+        Returns:
+            Shishen: 十神枚举
+        """
+        if not hasattr(self, '_shishen_cache'):
+            self.create_shishen_cache_for_current_day_gan()
+        
+        if is_gan:
+            return self._shishen_cache["gan_shishen"].get(ganzhi_name)
+        else:
+            return self._shishen_cache["zhi_shishen"].get(ganzhi_name)
 
     def generate_ganzhi_and_shishen_for_yun_nian(self, target, ganzhi, gan_list_rear = None, zhi_list_rear = None):
-        target["gan"] = ganzhi[0]
-        target["zhi"] = ganzhi[1]
-        target["gan_wuxing"] = Gan.from_chinese(ganzhi[0]).wuxing.chinese_name
-        target["zhi_wuxing"] = Zhi.from_chinese(ganzhi[1]).wuxing.chinese_name
-        target["gan_shishen"] = self.switch_shensha(self.calculate_shishen(self.day_gan._gan, Gan.from_chinese(ganzhi[0])))
-        target["zhi_shishen"] = self.switch_shensha(self.calculate_shishen(self.day_gan._gan, Zhi.from_chinese(ganzhi[1]).hidden_gans[0]))
+        gan = Gan.from_chinese(ganzhi[0])
+        zhi = Zhi.from_chinese(ganzhi[1])
+        target["gan"] = gan.name
+        target["zhi"] = zhi.name
+        target["gan_wuxing"] = gan.wuxing.name
+        target["zhi_wuxing"] = zhi.wuxing.name
+        
+        # 使用缓存获取十神，避免重复计算
+        target["gan_shishen"] = self.get_cached_shishen(ganzhi[0], is_gan=True).name
+        target["zhi_shishen"] = self.get_cached_shishen(ganzhi[1], is_gan=False).name
+        
         if gan_list_rear:
-            target["gan_relation"] = Gan.from_chinese(ganzhi[0]).get_wuhe_relations(gan_list_rear)
-            target["zhi_relation"] = Zhi.from_chinese(ganzhi[1]).get_relations(zhi_list_rear)
+            target["gan_relation"] = gan.get_wuhe_relations_enum(gan_list_rear)
+            target["zhi_relation"] = zhi.get_relations_enum(zhi_list_rear)
 
-    def calculate_dayun_liunian(self):
+    @staticmethod
+    def _calc_nayin(gan: Gan, zhi: Zhi) -> Nayin:
+        """
+        通过干支计算纳音（60甲子 -> 30纳音）。
+        采用枚举对枚举映射，避免中文字符串编码差异。
+        """
+        mapping: dict[tuple[Gan, Zhi], Nayin] = {
+            (Gan.JIA, Zhi.ZI): Nayin.HAI_ZHONG_JIN,
+            (Gan.YI, Zhi.CHOU): Nayin.HAI_ZHONG_JIN,
+            (Gan.BING, Zhi.YIN): Nayin.LU_ZHONG_HUO,
+            (Gan.DING, Zhi.MAO): Nayin.LU_ZHONG_HUO,
+            (Gan.WU, Zhi.CHEN): Nayin.DA_LIN_MU,
+            (Gan.JI, Zhi.SI): Nayin.DA_LIN_MU,
+            (Gan.GENG, Zhi.WU): Nayin.LU_PANG_TU,
+            (Gan.XIN, Zhi.WEI): Nayin.LU_PANG_TU,
+            (Gan.REN, Zhi.SHEN): Nayin.JIAN_FENG_JIN,
+            (Gan.GUI, Zhi.YOU): Nayin.JIAN_FENG_JIN,
+            (Gan.JIA, Zhi.XU): Nayin.SHAN_TOU_HUO,
+            (Gan.YI, Zhi.HAI): Nayin.SHAN_TOU_HUO,
+            (Gan.BING, Zhi.ZI): Nayin.JIAN_XIA_SHUI,
+            (Gan.DING, Zhi.CHOU): Nayin.JIAN_XIA_SHUI,
+            (Gan.WU, Zhi.YIN): Nayin.CHENG_TOU_TU,
+            (Gan.JI, Zhi.MAO): Nayin.CHENG_TOU_TU,
+            (Gan.GENG, Zhi.CHEN): Nayin.BAI_LA_JIN,
+            (Gan.XIN, Zhi.SI): Nayin.BAI_LA_JIN,
+            (Gan.REN, Zhi.WU): Nayin.YANG_LIU_MU,
+            (Gan.GUI, Zhi.WEI): Nayin.YANG_LIU_MU,
+            (Gan.JIA, Zhi.SHEN): Nayin.QUAN_ZHONG_SHUI,
+            (Gan.YI, Zhi.YOU): Nayin.QUAN_ZHONG_SHUI,
+            (Gan.BING, Zhi.XU): Nayin.WU_SHANG_TU,
+            (Gan.DING, Zhi.HAI): Nayin.WU_SHANG_TU,
+            (Gan.WU, Zhi.ZI): Nayin.PI_LI_HUO,
+            (Gan.JI, Zhi.CHOU): Nayin.PI_LI_HUO,
+            (Gan.GENG, Zhi.YIN): Nayin.SONG_BAI_MU,
+            (Gan.XIN, Zhi.MAO): Nayin.SONG_BAI_MU,
+            (Gan.REN, Zhi.CHEN): Nayin.CHANG_LIU_SHUI,
+            (Gan.GUI, Zhi.SI): Nayin.CHANG_LIU_SHUI,
+            (Gan.JIA, Zhi.WU): Nayin.SHA_ZHONG_JIN,
+            (Gan.YI, Zhi.WEI): Nayin.SHA_ZHONG_JIN,
+            (Gan.BING, Zhi.SHEN): Nayin.SHAN_XIA_HUO,
+            (Gan.DING, Zhi.YOU): Nayin.SHAN_XIA_HUO,
+            (Gan.WU, Zhi.XU): Nayin.PING_DI_MU,
+            (Gan.JI, Zhi.HAI): Nayin.PING_DI_MU,
+            (Gan.GENG, Zhi.ZI): Nayin.BI_SHANG_TU,
+            (Gan.XIN, Zhi.CHOU): Nayin.BI_SHANG_TU,
+            (Gan.REN, Zhi.YIN): Nayin.JIN_BO_JIN,
+            (Gan.GUI, Zhi.MAO): Nayin.JIN_BO_JIN,
+            (Gan.JIA, Zhi.CHEN): Nayin.FO_DENG_HUO,
+            (Gan.YI, Zhi.SI): Nayin.FO_DENG_HUO,
+            (Gan.BING, Zhi.WU): Nayin.TIAN_HE_SHUI,
+            (Gan.DING, Zhi.WEI): Nayin.TIAN_HE_SHUI,
+            (Gan.WU, Zhi.SHEN): Nayin.DA_YI_TU,
+            (Gan.JI, Zhi.YOU): Nayin.DA_YI_TU,
+            (Gan.GENG, Zhi.XU): Nayin.CHAI_CHUAN_JIN,
+            (Gan.XIN, Zhi.HAI): Nayin.CHAI_CHUAN_JIN,
+            (Gan.REN, Zhi.ZI): Nayin.SANG_ZHE_MU,
+            (Gan.GUI, Zhi.CHOU): Nayin.SANG_ZHE_MU,
+            (Gan.JIA, Zhi.YIN): Nayin.DA_XI_SHUI,
+            (Gan.YI, Zhi.MAO): Nayin.DA_XI_SHUI,
+            (Gan.BING, Zhi.CHEN): Nayin.SHA_ZHONG_TU,
+            (Gan.DING, Zhi.SI): Nayin.SHA_ZHONG_TU,
+            (Gan.WU, Zhi.WU): Nayin.TIAN_SHANG_HUO,
+            (Gan.JI, Zhi.WEI): Nayin.TIAN_SHANG_HUO,
+            (Gan.GENG, Zhi.SHEN): Nayin.SHI_LIU_MU,
+            (Gan.XIN, Zhi.YOU): Nayin.SHI_LIU_MU,
+            (Gan.REN, Zhi.XU): Nayin.DA_HAI_SHUI,
+            (Gan.GUI, Zhi.HAI): Nayin.DA_HAI_SHUI,
+        }
+        try:
+            return mapping[(gan, zhi)]
+        except KeyError as e:
+            raise ValueError(f"Unsupported ganzhi for Nayin: {gan.name}{zhi.name}") from e
+
+    @staticmethod
+    def _parse_xunkong_to_zhis(xunkong: str) -> tuple[Zhi, Zhi]:
+        # e.g. "子丑空" / "子丑" / " 子丑 空 "
+        cleaned = xunkong.replace("空", "").strip()
+        if len(cleaned) != 2:
+            raise ValueError(f"Invalid xunkong value: {xunkong!r}")
+        return (Zhi.from_chinese(cleaned[0]), Zhi.from_chinese(cleaned[1]))
+
+    def calculate_dayun_liunian(self, use_cache=True):
+        """
+        计算大运流年流月，支持使用缓存加速
+        
+        Args:
+            use_cache (bool): 是否使用缓存，默认True
+        """
+        # 加载流年流月缓存（只在第一次调用时加载）
+        if not hasattr(self, '_liunian_liuyue_cache') and use_cache:
+            try:
+                import os
+                if os.path.exists("efficient_liunian_liuyue_cache.json"):
+                    import json
+                    with open("efficient_liunian_liuyue_cache.json", 'r', encoding='utf-8') as f:
+                        self._liunian_liuyue_cache = json.load(f)
+                    # print("已加载流年流月缓存")
+                else:
+                    # print("流年流月缓存文件不存在")
+                    self._liunian_liuyue_cache = None
+            except Exception as e:
+                # print(f"流年流月缓存加载失败: {e}")
+                self._liunian_liuyue_cache = None
+        
+        # 使用已加载的流年流月缓存
+        liunian_liuyue_cache = getattr(self, '_liunian_liuyue_cache', None) if use_cache else None
+        
         self.yun = self._lunar_eightchar.getYun(1 if self._gender == "male" else 0, 2)
         self.start_yun = [self.yun.getStartYear(), self.yun.getStartMonth(), self.yun.getStartDay(), self.yun.getStartHour()]
         self.dayun = self.yun.getDaYun()
@@ -310,7 +501,14 @@ class BaziChart:
             res.append(dayun_word)
             for liunian in dayun.getLiuNian():
                 liunian_res = dict()
-                ganzhi = liunian.getGanZhi()
+                
+                # 使用流年流月缓存获取天干地支
+                if liunian_liuyue_cache and str(liunian.getYear()) in liunian_liuyue_cache["liunian"]:
+                    cached_liunian = liunian_liuyue_cache["liunian"][str(liunian.getYear())]
+                    ganzhi = cached_liunian["ganzhi"]
+                else:
+                    ganzhi = liunian.getGanZhi()
+                
                 self.generate_ganzhi_and_shishen_for_yun_nian(liunian_res, ganzhi, gan_list_rear, zhi_list_rear)
                 liunian_res["age"] = liunian.getAge()
                 liunian_res["year"] = liunian.getYear()
@@ -319,16 +517,28 @@ class BaziChart:
                 liunian_res["liuyue"] = []
                 liunina_lunar = Lunar.fromYmd(liunian_res["year"],6,1)
                 jieqi = liunina_lunar.getJieQiTable()
-                jie_name_list = ["立春", "惊蛰", "清明", "立夏", "芒种", "小暑", "立秋", "白露", "寒露", "立冬", "大雪", "XIAO_HAN"]
+                jie_name_list = ["立春", "惊蛰", "清明", "立夏", "芒种", "小暑", "立秋", "白露", "寒露", "立冬", "大雪", "小寒"]
                 liuyue_list = liunian.getLiuYue()
                 gan_list_rear.append(Gan.from_chinese(ganzhi[0]))
                 zhi_list_rear.append(Zhi.from_chinese(ganzhi[1]))
                 for i in range(12):
                     liuyue_res = dict()
+                    
+                    # 使用流年流月缓存获取流月天干地支
+                    if liunian_liuyue_cache and str(liunian_res["year"]) in liunian_liuyue_cache["liuyue"]:
+                        year_liuyue_cache = liunian_liuyue_cache["liuyue"][str(liunian_res["year"])]
+                        month_key = f"{i+1:02d}"
+                        if month_key in year_liuyue_cache:
+                            cached_liuyue = year_liuyue_cache[month_key]
+                            ganzhi = cached_liuyue["ganzhi"]
+                        else:
+                            ganzhi = liuyue_list[i].getGanZhi()
+                    else:
+                        ganzhi = liuyue_list[i].getGanZhi()
+                    
                     jie_time = jieqi[jie_name_list[i]]
                     liuyue_res["month"] = jie_time.getMonth()
                     liuyue_res["day"] = jie_time.getDay()
-                    ganzhi = liuyue_list[i].getGanZhi()
                     self.generate_ganzhi_and_shishen_for_yun_nian(liuyue_res, ganzhi, gan_list_rear, zhi_list_rear)
                     liunian_res["liuyue"].append(liuyue_res)
                 gan_list_rear.pop()

@@ -5,7 +5,7 @@ from ..hehua import (
     DiZhiSanHui,
     DiZhiSanHe
 )
-from ...core import Shishen, Wuxing
+from ...core import Shishen, Wuxing, GejuEnum
 from ...core.bazi_chart import BaziChart
 from ...utils import LogHelper
 
@@ -16,9 +16,9 @@ class GejuAnalyser(BaseAnalyser):
         self.without_time = self._bazi_chart.without_time
         self._hehua_analysis_results: Any = hehua_analysis_results  # 根据实际类型替换 Any
         self._shensha_results: Any = shensha_results  # 根据实际类型替换 Any
-        self._geju: List[str] = []
+        self._geju: List[GejuEnum] = []
 
-    def analyse(self) -> List[str]:
+    def analyse(self) -> List[GejuEnum]:
         # 获取月支的五行
         month_zhi_wuxing = self._bazi_chart.month_zhi._zhi.wuxing
         day_gan_wuxing = self._bazi_chart.day_gan._gan.wuxing
@@ -32,6 +32,8 @@ class GejuAnalyser(BaseAnalyser):
         # 处理格局冲突
         if self._geju:
             self._resolve_conflicting_geju()
+        else:
+            self._geju = [GejuEnum.NEED_MORE_ANALYSIS]
 
         # 记录日志
         self._log_results()
@@ -43,13 +45,15 @@ class GejuAnalyser(BaseAnalyser):
         first_hidden_gan = self._bazi_chart.month_zhi._hidden_gans[0]
         if self.is_touchu(first_hidden_gan):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, first_hidden_gan)
-            self._geju.append(shishen.chinese_name + "格")
+            if shishen != Shishen.RIZHU:
+                self._geju.append(GejuEnum.from_shishen(shishen))
 
         # b. 检查月支其他藏干是否透出
         for hidden_gan in self._bazi_chart.month_zhi._hidden_gans[1:]:
             if self.is_touchu(hidden_gan):
                 shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, hidden_gan)
-                self._geju.append(shishen.chinese_name + "格")
+                if shishen != Shishen.RIZHU:
+                    self._geju.append(GejuEnum.from_shishen(shishen))
 
 
         # c. 检查地支中是否有三合，三会存在
@@ -58,7 +62,8 @@ class GejuAnalyser(BaseAnalyser):
         # d. 检查月干是否同根于年支日支时支
         if self.is_tonggen(self._bazi_chart.month_gan):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, self._bazi_chart.month_gan)
-            self._geju.append(shishen.chinese_name + "格")
+            if shishen != Shishen.RIZHU:
+                self._geju.append(GejuEnum.from_shishen(shishen))
 
         # e. 检查年柱时柱是否有地支藏干透出同柱的天干
         if self.without_time:
@@ -69,7 +74,8 @@ class GejuAnalyser(BaseAnalyser):
             for hidden_gan in zhu.zhi._hidden_gans:
                 if hidden_gan == zhu.gan:
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, hidden_gan)
-                    self._geju.append(shishen.chinese_name + "格")
+                    if shishen != Shishen.RIZHU:
+                        self._geju.append(GejuEnum.from_shishen(shishen))
 
         # f. 检查年柱日柱时柱是否有地支透出到其它位置的天干
         if self.without_time:
@@ -80,7 +86,8 @@ class GejuAnalyser(BaseAnalyser):
             for hidden_gan in zhu.zhi._hidden_gans:
                 if self.is_touchu(hidden_gan, exclude_zhu=zhu):
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, hidden_gan)
-                    self._geju.append(shishen.chinese_name + "格")
+                    if shishen != Shishen.RIZHU:
+                        self._geju.append(GejuEnum.from_shishen(shishen))
 
     def _analyse_same_wuxing(self, month_zhi_wuxing: Wuxing, day_gan_wuxing: Wuxing) -> None:
         # a. 检查地支中是否有三合，三会存在
@@ -89,12 +96,16 @@ class GejuAnalyser(BaseAnalyser):
         # b. 检查月令是否为日主的羊刃或禄神
         for shensha in self._shensha_results:
             if shensha['name'] in ['Yangren', 'Lushen'] and shensha['position'] == self._bazi_chart.month_zhu:
-                self._geju.append(shensha['chinese_name'] + "格")
+                if shensha['name'] == 'Yangren':
+                    self._geju.append(GejuEnum.YANGREN_GE)
+                elif shensha['name'] == 'Lushen':
+                    self._geju.append(GejuEnum.LUSHEN_GE)
 
         # d. 检查月干是否同根于年支日支时支
         if self.is_tonggen(self._bazi_chart.month_gan):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, self._bazi_chart.month_gan)
-            self._geju.append(shishen.chinese_name + "格")
+            if shishen != Shishen.RIZHU:
+                self._geju.append(GejuEnum.from_shishen(shishen))
 
         # e. 检查年柱时柱是否有地支藏干透出同柱的天干
         if self.without_time:
@@ -105,7 +116,8 @@ class GejuAnalyser(BaseAnalyser):
             for hidden_gan in zhu.zhi._hidden_gans:
                 if hidden_gan == zhu.gan:
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, hidden_gan)
-                    self._geju.append(shishen.chinese_name + "格")
+                    if shishen != Shishen.RIZHU:
+                        self._geju.append(GejuEnum.from_shishen(shishen))
 
         # f. 检查年柱日柱时柱是否有地支透出到其它位置的天干
         if self.without_time:
@@ -116,7 +128,8 @@ class GejuAnalyser(BaseAnalyser):
             for hidden_gan in zhu.zhi._hidden_gans:
                 if self.is_touchu(hidden_gan, exclude_zhu=zhu):
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, hidden_gan)
-                    self._geju.append(shishen.chinese_name + "格")
+                    if shishen != Shishen.RIZHU:
+                        self._geju.append(GejuEnum.from_shishen(shishen))
 
     def is_touchu(self, hidden_gan, exclude_zhu=None):
         for zhu in self._bazi_chart.zhu_list:
@@ -140,9 +153,11 @@ class GejuAnalyser(BaseAnalyser):
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, center_zhi)
                     if shishen not in [Shishen.BIJIAN, Shishen.JIECAI]:
                         geju_name = self.resolve_hehui_geju(shishen.chinese_name)
-                        self._geju.append(geju_name + "格")
+                        # hehui 格局映射回对应十神格
+                        mapped = Shishen.from_chinese_name(geju_name)
+                        self._geju.append(GejuEnum.from_shishen(mapped))
                     else:
-                        self._geju.append("专旺格")
+                        self._geju.append(GejuEnum.ZHUANWANG_GE)
 
     def get_center_zhi(self, indices):
         if len(indices) == 3:
@@ -150,13 +165,12 @@ class GejuAnalyser(BaseAnalyser):
         return None
 
     def _resolve_conflicting_geju(self) -> None:
-        unique_geju = list(set(self._geju))
-        unique_geju.sort(key=self._geju.index)
+        unique_geju = list(dict.fromkeys(self._geju))
         conflicts = [
-            ('食神格', '伤官格'),
-            ('正官格', '七杀格'),
-            ('正财格', '偏财格'),
-            ('正印格', '偏印格')
+            (GejuEnum.SHISHEN_GE, GejuEnum.SHANGGUAN_GE),
+            (GejuEnum.ZHENGGUAN_GE, GejuEnum.QISHA_GE),
+            (GejuEnum.ZHENGCAI_GE, GejuEnum.PIANCAI_GE),
+            (GejuEnum.ZHENGYIN_GE, GejuEnum.PIANYIN_GE),
         ]
         for ge1, ge2 in conflicts:
             if ge1 in unique_geju and ge2 in unique_geju:
@@ -175,8 +189,8 @@ class GejuAnalyser(BaseAnalyser):
     def _log_results(self) -> None:
         self._log_helper.info("【格局分析】：\n")
         if len(self._geju) == 1:
-            self._log_helper.info(f"格局：{self._geju[0]}。\n")
+            self._log_helper.info(f"格局：{self._geju[0].chinese_name}。\n")
         elif len(self._geju) > 1:
-            self._log_helper.info(f"格局：{'，带'.join(self._geju)}。\n")
+            self._log_helper.info(f"格局：{'，带'.join([g.chinese_name for g in self._geju])}。\n")
         else:
             self._log_helper.info("没有符合的格局。\n")
