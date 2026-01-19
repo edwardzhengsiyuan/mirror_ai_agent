@@ -25,7 +25,7 @@ _IN_FLIGHT: Dict[tuple, threading.Event] = {}
 def _debug(msg: str) -> None:
     if os.environ.get("LLM_DEBUG", "").lower() not in ("1", "true", "yes"):
         return
-    ts = dt.datetime.utcnow().isoformat() + "Z"
+    ts = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     print(f"[DEBUG execution] {ts} {msg}", flush=True)
 
 
@@ -128,7 +128,7 @@ def ensure_node(
                 return cached_entry.get("output")
         return _error_output(node, RuntimeError("inflight completed without cached output"))
 
-    started_at = dt.datetime.utcnow().isoformat() + "Z"
+    started_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     started_ts = time.perf_counter()
     emit_event(
         event_sink,
@@ -216,10 +216,10 @@ def ensure_node(
         _debug(f"node {node} error: {exc}")
         output = _error_output(node, exc)
 
-    ended_at = dt.datetime.utcnow().isoformat() + "Z"
+    ended_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     duration_ms = int((time.perf_counter() - started_ts) * 1000)
     entry = {
-        "created_at": dt.datetime.utcnow().isoformat() + "Z",
+        "created_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
         "inputs_hash": inputs_hash,
         "output": output,
         "meta": {

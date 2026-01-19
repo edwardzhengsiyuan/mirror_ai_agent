@@ -27,7 +27,7 @@ def session_paths(
     profile_name: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Return (profile_path, conversation_path) for a user/session."""
-    session = session_id or dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    session = session_id or dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
     base = user_dir(user_id)
     convo_dir = os.path.join(base, "conversations")
     convo_path = os.path.join(convo_dir, f"{session}.jsonl")

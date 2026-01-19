@@ -17,7 +17,7 @@ def emit_event(sink: Optional[EventSink], event: Event) -> None:
     if sink is None:
         return
     if "ts" not in event:
-        event["ts"] = dt.datetime.utcnow().isoformat() + "Z"
+        event["ts"] = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     with _EMIT_LOCK:
         sink(event)
 

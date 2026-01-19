@@ -41,7 +41,7 @@ def create_app(
 
     def new_session_path(user_id: str) -> str:
         ensure_user_dirs(user_id)
-        session_id = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        session_id = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
         return os.path.join(conversation_dir(user_id), f"{session_id}.jsonl")
 
     def normalize_history_n(value: Optional[object]) -> int:
