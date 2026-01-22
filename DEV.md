@@ -4,11 +4,13 @@
 > EN: For maintainers and integrators. Covers architecture, nodes/tools, caching/concurrency, config, tests, and debugging. Accuracy of bazi interpretation is out of scope; this doc focuses on operability and maintainability.
 
 ## English Summary (TL;DR)
-- Single-turn flow: PAIPAN → plan (with dayun hints) → parallel DAG → TIME_CONTEXT (direct year data fetch) → FINAL.
+- **Concept separation**: Persistent **Nodes** (cached in profile) vs conversation-level **Tools** (PLANNER, TIME_CONTEXT) and **Response** (not cached).
+- Single-turn flow: PAIPAN → PLANNER tool → parallel DAG → TIME_CONTEXT tool → Response generation.
 - Planning only specifies years; dayun hints from PAIPAN help LLM understand time context.
 - TIME_CONTEXT directly calls `find_yun_liu_nian_liuyue(year)` to fetch year data - no regex parsing.
 - Prompts receive targeted year data (大运/流年/流月 details per year).
 - Caching is per profile object; in-flight de-dup uses (profile object, node, inputs hash).
+- **Conversation-level data**: PLANNER, TIME_CONTEXT, and Response are stored in conversation JSONL, not profile.node_cache.
 - LLM calls default to stub if no API config; live tests are gated by env.
 - Agent rulebook lives in `CLAUDE.md`.
 - Engine API reference lives in `bazi/README.md`.
@@ -42,26 +44,44 @@
 - API 参考文档：`bazi/README.md`。
 
 ## 3. 运行流程（`run_turn`）
-1) 先执行 `PAIPAN`：得到排盘文本、结构化 `paipan_output`、以及 `dayun_list`（大运列表，直接从 `frame.res["yun"]` 提取）。
-2) `plan(question, now, dayun_list)`：输出 `{"aspects":[...],"times":[...],"time":...}`，支持多时间点；未命中方面则归入 `OTHER`。LLM 规划时会在 prompt 中包含大运范围提示。
-3) 组装节点集：`COMMON_PREREQS + aspects`，使用 `run_nodes_parallel` 按拓扑并发执行；`PAIPAN` 已先执行会被跳过。
-4) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {requests, birth, gender, birth_time_unknown})`。TIME_CONTEXT 直接调用 `find_yun_liu_nian_liuyue(year)` 获取每个目标年份的大运/流年/流月详情，无需中间索引层。
-5) `FINAL` 节点：综合时间定位（`year_data`）与各节点报告，生成最终答复；可注入最近对话轮次 `history_rounds`。
-6) 返回 `response`（优先取 `FINAL` 输出，失败则回退到拼接式回答）。
-7) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
+
+### 概念区分
+- **持久 Node**：存储在 `profile.node_cache`，用户维度缓存（PAIPAN, OVERALL, SHISHEN, GEJU, WUXING_PREFS, CAREER 等）
+- **对话级 Tool**：存储在 `conversation/<session>.jsonl`，每次调用独立记录（PLANNER, TIME_CONTEXT）
+- **对话级 Response**：存储在 `conversation/<session>.jsonl`，不再作为 node 缓存（原 FINAL）
+
+### 执行流程
+1) **PAIPAN 节点**（持久，缓存）：得到排盘文本、结构化 `paipan_output`、以及 `dayun_list`。
+2) **PLANNER 工具**（对话级，不缓存）：`run_tool("PLANNER", {...})` 输出 `{"aspects":[...],"times":[...]}`；发送 `tool_invocation` 事件。
+3) **持久节点 DAG**：组装 `COMMON_PREREQS + aspects`，使用 `run_nodes_parallel` 按拓扑并发执行；缓存命中时复用。
+4) **TIME_CONTEXT 工具**（对话级，不缓存）：如需时间定位，`run_tool("TIME_CONTEXT", {...})` 获取年份数据；发送 `tool_invocation` 事件。
+5) **Response 生成**（对话级，不缓存）：`run_response(profile, {...})` 综合所有节点输出与时间定位生成最终答复；发送 `response` 事件。
+6) 返回结果：`{"plan", "outputs", "time_context", "response", "tool_invocations"}`。
+7) 上层保存 profile（只保存持久节点缓存）。
 
 ## 4. 节点与依赖（DAG）
-- 常量 `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS"]`。
+
+### 持久节点（缓存在 profile.node_cache）
+- 常量 `PERSISTENT_NODES = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS","CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER"]`
+- 常量 `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS"]`
 - `DEPS`：
-  - `PAIPAN`: []（工具节点）
+  - `PAIPAN`: []（排盘工具）
   - `OVERALL`: [PAIPAN]（总体分析）
   - `SHISHEN`: [PAIPAN]
   - `GEJU`: [PAIPAN, OVERALL]
   - `WUXING_PREFS`: [PAIPAN, OVERALL, SHISHEN, GEJU]
 - 领域节点 `CAREER/RELATIONSHIP/HEALTH/GUIREN/LIUQIN/XINGGE/OTHER`: 依赖 `COMMON_PREREQS`
-- `FINAL`: 依赖 `COMMON_PREREQS`，用于最终答复生成（通常在时间定位后单独调用）。
-- `TIME_CONTEXT`：不在 DAG，按需单独调用。
 - 拓扑排序：`deps.toposort(nodes)` 确保依赖在前。
+
+### 对话级工具（不缓存，存储在 conversation JSONL）
+- `CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"]`
+- `PLANNER`：问题规划，返回 aspects 和 times
+- `TIME_CONTEXT`：时间定位，返回 year_data
+
+### Response（不缓存，存储在 conversation JSONL）
+- 原 `FINAL` 节点已重命名为 Response
+- 不再出现在 DEPS 中
+- 使用 `run_response()` 函数执行
 
 ## 5. 规划逻辑（`planning.py`）
 - 规划默认走 LLM：`LLM_PLANNER_MODE=llm`（默认），通过 LLM 输出 `planning_tool` 的 JSON 调用结果，且 prompt 中包含大运范围提示。
@@ -123,10 +143,11 @@
 - Trace：`LLM_TRACE=1` 记录 request/response/forced_error 到 `storage/logs/llm_trace.jsonl`（`LLM_TRACE_PATH` 可覆盖）。
 
 ## 8. Prompt 组织（`nodes/prompt_builder.py`）
-- 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`、`FINAL→final_answer.md`。
+- 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`、`RESPONSE_PROMPT→final_answer.md`。
 - 配置集：`PROMPT_CONFIGS["lingyun_cat"]` 映射各领域节点到对应 `*_lym.md`；`prompt_config` 可在 profile 中切换。
-- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/guji）、`TIME_CONTEXT` 的 `year_data`（目标年份详情）、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告、用户问题与最近对话轮次（`history_rounds`）。
-- **year_data 注入**：`TIME_CONTEXT` 返回的 `year_data` 包含每个目标年份的大运/流年/流月详情（来自 `find_yun_liu_nian_liuyue`），会被注入到 prompt 中。
+- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/guji）、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt。
+- **Response prompt**：使用 `build_response_prompt()` 函数构建，`time_context` 作为参数传入（而非从缓存读取）；会额外拼接各领域节点报告、用户问题与最近对话轮次（`history_rounds`）。
+- **year_data 注入**：`TIME_CONTEXT` 返回的 `year_data` 包含每个目标年份的大运/流年/流月详情（来自 `find_yun_liu_nian_liuyue`），会被注入到 Response prompt 中。
 - 容错：上游缺失时会插入空字符串，不会抛错；需要更强提示可在此文件增加显式缺失提示。
 
 ## 9. 存储与路径
@@ -143,8 +164,15 @@
   }
   ```
 - 缓存项：见 §6。`save_profile`/`append_event` 自动建目录。
-- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL；测试脚本用它记录 `user_message/plan/outputs/time_context/assistant_final/llm_prompt` 等事件。
-- 便捷读取：`conversation_store.load_recent_rounds(path, max_rounds=5)` 返回最近 N 轮 `{"user","assistant"}` 对话对。
+- 会话日志：`conversation_store.append_event(path, event_dict)` 逐行 JSONL。
+- **新增事件类型**：
+  - `tool_invocation`：对话级工具调用记录（PLANNER, TIME_CONTEXT），包含 input/output/duration_ms/llm_prompt
+  - `response`：Response 生成记录，包含 text/input_summary/llm_prompt/duration_ms
+- **Legacy 事件**：`plan`、`time_context` 仍会记录；`assistant_final` 已废弃（新对话不再写入）
+- 便捷读取：
+  - `conversation_store.load_recent_rounds(path, max_rounds=5)` 返回最近 N 轮 `{"user","assistant"}` 对话对（使用 response 格式）
+  - `conversation_store.load_tool_invocations(path, tool=None)` 返回工具调用列表
+  - `conversation_store.load_responses(path)` 返回 Response 事件列表
 
 ## 10. 配置与环境变量
 - `LLM_API_BASE`/`OPENAI_API_BASE`，`LLM_API_KEY`/`OPENAI_API_KEY`：真实调用所需。
@@ -198,25 +226,33 @@
 
 ## 14. 流式事件与节点输出
 - 接口：`run_turn(profile, question, now=None, event_sink=..., stream=True)`。
-- 可选参数：`history_rounds=[{"user":"...","assistant":"..."}]` 用于 FINAL prompt 注入最近对话。
+- 可选参数：`history_rounds=[{"user":"...","assistant":"..."}]` 用于 Response prompt 注入最近对话。
 - 事件回调：`event_sink(event: dict)`，会在节点开始/结束、工具调用、流式输出时被调用。
 - 关键事件类型：
-  - `plan`：规划结果（包含 `aspects` 与 `times`）。
-  - `node_start` / `node_end`：包含 `PLANNER` 节点（LLM 规划）。
-  - `node_start` / `node_end`：节点开始/结束；`node_end.output` 为最终输出；缓存命中会带 `cached=true`。
+  - **`tool_invocation`**：（新）对话级工具调用完成，包含 `{tool, invocation_id, input, output, duration_ms, llm_prompt}`。
+  - **`response`**：（新）Response 生成完成，包含 `{text, input_summary, llm_prompt, duration_ms}`。
+  - `plan`：规划结果（向后兼容，同时有 `tool_invocation` 事件）。
+  - `node_start` / `node_end`：持久节点开始/结束；`node_end.output` 为最终输出；缓存命中会带 `cached=true`。
   - `node_delta`：流式输出片段（`delta`/`reasoning_delta`）。
-  - `tool_call` / `tool_result`：工具调用与完成（PAIPAN/TIME_CONTEXT/LLM）。
+  - `response_delta`：（新）Response 流式输出片段。
+  - `tool_call` / `tool_result`：低级工具调用与完成（paipan_tool/llm_report_tool/time_context_tool）。
   - `llm_prompt`：每次 LLM 调用的 system/user prompt（便于前端审计与调试）。
-  - `time_context`：时间定位结果（可能为 list/None）。
-- 工具节点流式：PAIPAN/TIME_CONTEXT 在计算完成后以分片形式回放输出，保证前端统一接收流式事件。
+  - `time_context`：时间定位结果（legacy 事件）。
+  - `assistant_final`：**已废弃**，新对话使用 `response` 事件。
+- 工具节点流式：PAIPAN 在计算完成后以分片形式回放输出，保证前端统一接收流式事件。
 - 线程安全：执行引擎可能并发调用事件回调，建议在回调中使用线程安全队列或锁。
+
+### UI 展示建议
+- **持久节点**：显示在独立的节点面板，展示状态（idle/running/done/cache/error）和输出内容。
+- **对话级工具**（PLANNER, TIME_CONTEXT）：在用户消息下方以内联方式展示，可点击展开查看输入输出详情。
+- **Response**：在对话面板显示最终回答，可点击展开查看输入摘要和完整 prompt。
 
 ## 15. 前端/服务对接指南
 - 当前不内置 HTTP 层，建议自行封装薄的 API 服务，调用链：加载 profile → `run_turn(profile, question, now=None)` → 保存 profile → 返回 `result`。
 - Profile 位置：推荐 `storage/users/<user_id>/profile.json`（可用 `agent/storage/paths.py` 生成）；会话日志可选写入 `storage/users/<user_id>/conversations/<session>.jsonl`（使用 `conversation_store.append_event`）。
 - 新会话：
   - 创建/初始化 profile（含 birth/gender/prompt_config/node_cache）。
-  - 生成新的 session id，用 JSONL 记录 `user_message/plan/assistant_final` 事件（可选）。
+  - 生成新的 session id，用 JSONL 记录 `user_message/plan/response` 事件（可选）。
   - 调用 run_turn，得到 `result={"plan","outputs","time_context","response"}`。
 - 继续会话：重复加载同一 profile，传入新问题即可复用缓存；日志文件可在同一 session 继续 append。
 - Python 示例（可作为 HTTP handler 内部逻辑）：
@@ -237,7 +273,7 @@
   append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
   result = run_turn(profile, question, now=now, history_rounds=history_rounds)
   append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
-  append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
+  # Note: response event is logged automatically via event_sink
   save_profile(profile_path, profile)
   ```
 - 如需 HTTP JSON 形态，可封装接口：`POST /ask`，请求 `{user_id, question, session_id?}`，响应 `{plan, time_context, response, cache_keys?}`；内部逻辑与上述相同。

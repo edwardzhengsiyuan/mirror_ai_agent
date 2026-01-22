@@ -85,19 +85,49 @@ def create_app(
 
         return None
 
-    def log_llm_prompt(convo_path: str, event: Dict) -> None:
-        if event.get("type") != "llm_prompt":
-            return
-        append_event(
-            convo_path,
-            {
-                "ts": dt.datetime.now().isoformat(),
-                "type": "llm_prompt",
-                "node": event.get("node"),
-                "system_prompt": event.get("system_prompt", ""),
-                "user_prompt": event.get("user_prompt", ""),
-            },
-        )
+    def log_event_to_conversation(convo_path: str, event: Dict) -> None:
+        """Log relevant events to the conversation JSONL file."""
+        event_type = event.get("type")
+
+        if event_type == "llm_prompt":
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "llm_prompt",
+                    "node": event.get("node"),
+                    "system_prompt": event.get("system_prompt", ""),
+                    "user_prompt": event.get("user_prompt", ""),
+                },
+            )
+        elif event_type == "tool_invocation":
+            # New: log tool invocations (PLANNER, TIME_CONTEXT)
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "tool_invocation",
+                    "tool": event.get("tool"),
+                    "invocation_id": event.get("invocation_id"),
+                    "input": event.get("input"),
+                    "output": event.get("output"),
+                    "duration_ms": event.get("duration_ms"),
+                    "llm_prompt": event.get("llm_prompt"),
+                },
+            )
+        elif event_type == "response":
+            # New: log response events
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "response",
+                    "text": event.get("text"),
+                    "input_summary": event.get("input_summary"),
+                    "llm_prompt": event.get("llm_prompt"),
+                    "duration_ms": event.get("duration_ms"),
+                },
+            )
 
     @app.route("/")
     def index() -> Response:
@@ -183,19 +213,34 @@ def create_app(
         if not os.path.exists(convo_path):
             return jsonify({"error": "session not found"}), 404
         messages = []
+        tool_invocations = []
         with open(convo_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") == "user_message":
+                event_type = event.get("type")
+                if event_type == "user_message":
                     messages.append({"role": "user", "text": event.get("text", "")})
-                elif event.get("type") == "assistant_final":
-                    messages.append({"role": "assistant", "text": event.get("text", "")})
+                elif event_type == "response":
+                    # New response format with input_summary
+                    messages.append({
+                        "role": "assistant",
+                        "text": event.get("text", ""),
+                        "input_summary": event.get("input_summary"),
+                    })
+                elif event_type == "assistant_final":
+                    # Legacy format - only add if no response was added for this turn
+                    if not messages or messages[-1].get("role") != "assistant":
+                        messages.append({"role": "assistant", "text": event.get("text", "")})
+                elif event_type == "tool_invocation":
+                    tool_invocations.append(event)
         payload: Dict[str, object] = {"messages": messages}
         if include_inputs:
             payload["llm_prompts"] = load_latest_llm_prompts(convo_path)
+        if tool_invocations:
+            payload["tool_invocations"] = tool_invocations
         return jsonify(payload)
 
     @app.route("/api/ask", methods=["POST"])
@@ -221,13 +266,13 @@ def create_app(
         append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
 
         def sink(event: Dict) -> None:
-            log_llm_prompt(convo_path, event)
+            log_event_to_conversation(convo_path, event)
 
         result = run_turn_func(profile, question, now=now, event_sink=sink, history_rounds=history_rounds)
+        # Note: tool_invocation events are logged via sink, plan/time_context kept for backward compatibility
         append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
         if result["time_context"]:
             append_event(convo_path, {"ts": now.isoformat(), "type": "time_context", "value": result["time_context"]})
-        append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
         save_profile(profile_path(user_id), profile)
         return jsonify(
             {
@@ -263,7 +308,7 @@ def create_app(
         event_q: queue.Queue = queue.Queue()
 
         def sink(event: Dict) -> None:
-            log_llm_prompt(convo_path, event)
+            log_event_to_conversation(convo_path, event)
             event_q.put(event)
 
         def worker() -> None:
@@ -278,14 +323,14 @@ def create_app(
                     stream=True,
                     history_rounds=history_rounds,
                 )
+                # Note: tool_invocation events are logged via sink
+                # Keep plan/time_context for backward compatibility
                 append_event(convo_path, {"ts": now.isoformat(), "type": "plan", "plan": result["plan"]})
                 if result["time_context"]:
                     append_event(
                         convo_path, {"ts": now.isoformat(), "type": "time_context", "value": result["time_context"]}
                     )
-                append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
                 save_profile(profile_path(user_id), profile)
-                event_q.put({"type": "assistant_final", "text": result["response"]})
             except Exception as exc:
                 event_q.put({"type": "server_error", "error": str(exc)})
             finally:
