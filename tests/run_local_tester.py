@@ -14,13 +14,19 @@ from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds
 from agent.storage.profile_store import load_profile, save_profile
 
-PROFILE_PATH = os.path.join(ROOT, "storage", "profile_demo.json")
-CONVO_PATH = os.path.join(ROOT, "storage", "conversations", "demo.jsonl")
+# Updated to use storage/users/ structure
+USER_DIR = os.path.join(ROOT, "storage", "users", "u_demo")
+PROFILE_PATH = os.path.join(USER_DIR, "profile.json")
+CONVO_DIR = os.path.join(USER_DIR, "conversations")
+CONVO_PATH = os.path.join(CONVO_DIR, "demo.jsonl")
 
 
 def ensure_profile() -> None:
     if os.path.exists(PROFILE_PATH):
         return
+    # Create user directory structure if it doesn't exist
+    os.makedirs(USER_DIR, exist_ok=True)
+    os.makedirs(CONVO_DIR, exist_ok=True)
     profile = {
         "user_id": "u_demo",
         "birth": {

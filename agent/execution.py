@@ -152,15 +152,10 @@ def ensure_node(
         elif node == "TIME_CONTEXT":
             emit_event(event_sink, {"type": "tool_call", "tool": "time_context_tool", "node": node})
             output = time_context_tool(
-                inputs.get("dayun_list", []),
-                inputs.get("liunian_list", []),
-                inputs.get("ref_text", ""),
-                inputs.get("now"),
-                target_year=inputs.get("target_year"),
-                target_month=inputs.get("target_month"),
-                target_dayun=inputs.get("target_dayun"),
-                liuyue_by_year=inputs.get("liuyue_by_year"),
-                requests=inputs.get("requests"),
+                requests=inputs.get("requests", []),
+                birth=inputs.get("birth", {}),
+                gender=inputs.get("gender", "male"),
+                birth_time_unknown=inputs.get("birth_time_unknown", False),
             )
             emit_event(event_sink, {"type": "tool_result", "tool": "time_context_tool", "node": node})
             if output and stream:

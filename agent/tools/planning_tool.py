@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Dict, List, Optional
 
 ALLOWED_ASPECTS = {
@@ -14,8 +13,6 @@ ALLOWED_ASPECTS = {
     "XINGGE",
     "OTHER",
 }
-
-DAYUN_PATTERN = re.compile(r"[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]")
 
 
 def _normalize_aspects(aspects: Optional[List[str]]) -> List[str]:
@@ -29,21 +26,10 @@ def _normalize_aspects(aspects: Optional[List[str]]) -> List[str]:
     return items or ["OTHER"]
 
 
-def _normalize_dayun(dayun: str) -> Optional[str]:
-    text = (dayun or "").strip()
-    if not text:
-        return None
-    match = DAYUN_PATTERN.search(text)
-    if match:
-        return match.group(0)
-    cleaned = re.sub(r"[0-9\\-–—\\s]+", "", text)
-    return cleaned or None
-
-
 def _normalize_time_item(time: Optional[Dict]) -> Dict:
     time = time or {}
     granularity = time.get("granularity")
-    if granularity not in ("year", "month", "dayun", None):
+    if granularity not in ("year", "month", None):
         granularity = None
     ref_text = time.get("ref_text")
     if not isinstance(ref_text, str):
@@ -54,20 +40,13 @@ def _normalize_time_item(time: Optional[Dict]) -> Dict:
     month = time.get("month")
     if not isinstance(month, int):
         month = None
-    dayun = time.get("dayun")
-    if not isinstance(dayun, str):
-        dayun = None
-    else:
-        dayun = _normalize_dayun(dayun)
     if granularity is None:
         if month:
             granularity = "month"
-        elif dayun and not year:
-            granularity = "dayun"
         elif year:
             granularity = "year"
     need_tool = time.get("need_tool")
-    has_time_hint = any([ref_text, year, month, dayun])
+    has_time_hint = any([ref_text, year, month])
     if not isinstance(need_tool, bool):
         need_tool = has_time_hint
     elif not need_tool and has_time_hint:
@@ -78,7 +57,6 @@ def _normalize_time_item(time: Optional[Dict]) -> Dict:
         "ref_text": ref_text,
         "year": year,
         "month": month,
-        "dayun": dayun,
     }
 
 
@@ -87,7 +65,7 @@ def _normalize_times(time: Optional[Dict], times: Optional[List[Dict]]) -> List[
     seen = set()
 
     def push(item: Dict) -> None:
-        key = (item.get("granularity"), item.get("year"), item.get("month"), item.get("dayun"))
+        key = (item.get("granularity"), item.get("year"), item.get("month"))
         if key in seen:
             return
         seen.add(key)

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
-from .time_context_tool import build_time_index
+from typing import Any, Dict, List
 
 
 def _require_int(payload: Dict[str, Any], field: str) -> int:
@@ -30,6 +28,52 @@ def _check_range(value: int, field: str, min_value: int, max_value: int) -> None
         raise ValueError(f"invalid birth.{field}={value} (expected {min_value}-{max_value})")
 
 
+def _extract_dayun_list(yun_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extract dayun list from frame.res['yun'] structure."""
+    # Map pinyin codes to Chinese characters
+    gan_map = {
+        "GAN:JIA": "甲", "GAN:YI": "乙", "GAN:BING": "丙", "GAN:DING": "丁",
+        "GAN:WU": "戊", "GAN:JI": "己", "GAN:GENG": "庚", "GAN:XIN": "辛",
+        "GAN:REN": "壬", "GAN:GUI": "癸",
+    }
+    zhi_map = {
+        "ZHI:ZI": "子", "ZHI:CHOU": "丑", "ZHI:YIN": "寅", "ZHI:MAO": "卯",
+        "ZHI:CHEN": "辰", "ZHI:SI": "巳", "ZHI:WU": "午", "ZHI:WEI": "未",
+        "ZHI:SHEN": "申", "ZHI:YOU": "酉", "ZHI:XU": "戌", "ZHI:HAI": "亥",
+    }
+
+    dayun_list = []
+    for idx, item in enumerate(yun_data):
+        start_year = item.get("year")
+        if not isinstance(start_year, int):
+            continue
+
+        # Get ganzhi name
+        gan = item.get("gan", "")
+        zhi = item.get("zhi", "")
+        gan_char = gan_map.get(gan, "")
+        zhi_char = zhi_map.get(zhi, "")
+        name = f"{gan_char}{zhi_char}" if gan_char and zhi_char else None
+
+        # Calculate end year from next dayun
+        next_start = None
+        for later in yun_data[idx + 1:]:
+            if isinstance(later.get("year"), int):
+                next_start = later["year"]
+                break
+        end_year = next_start - 1 if next_start else start_year + 9
+
+        dayun_list.append({
+            "name": name,
+            "start_year": start_year,
+            "end_year": end_year,
+            "step": idx + 1,
+            "age_start": item.get("age"),
+        })
+
+    return dayun_list
+
+
 def paipan_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Run paipan and return structured outputs."""
     from lunar_python import Solar
@@ -53,12 +97,14 @@ def paipan_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
     lunar = Solar.fromYmdHms(year, month, day, hour, minute, second).getLunar()
     frame = BaziChartAnalyseFrame(lunar, gender, without_time=time_unknown)
     paipan_results, liupan_results, guji_results = frame.get_analysis_summary()
-    time_index = build_time_index(frame.res, paipan_results, liupan_results)
+
+    # Extract dayun list directly from structured data
+    dayun_list = _extract_dayun_list(frame.res.get("yun", []))
 
     return {
         "paipan_results": paipan_results,
         "liupan_results": liupan_results,
         "guji_results": guji_results,
         "paipan_output": frame.res,
-        "time_index": time_index,
+        "dayun_list": dayun_list,
     }

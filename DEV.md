@@ -4,10 +4,13 @@
 > EN: For maintainers and integrators. Covers architecture, nodes/tools, caching/concurrency, config, tests, and debugging. Accuracy of bazi interpretation is out of scope; this doc focuses on operability and maintainability.
 
 ## English Summary (TL;DR)
-- Single-turn flow: PAIPAN → plan → parallel DAG → optional TIME_CONTEXT → FINAL.
+- Single-turn flow: PAIPAN → plan (with dayun hints) → parallel DAG → TIME_CONTEXT (direct year data fetch) → FINAL.
+- Planning only specifies years; dayun hints from PAIPAN help LLM understand time context.
+- TIME_CONTEXT directly calls `find_yun_liu_nian_liuyue(year)` to fetch year data - no regex parsing.
+- Prompts receive targeted year data (大运/流年/流月 details per year).
 - Caching is per profile object; in-flight de-dup uses (profile object, node, inputs hash).
 - LLM calls default to stub if no API config; live tests are gated by env.
-- Agent rulebook lives in `AGENT_RULES.md`.
+- Agent rulebook lives in `CLAUDE.md`.
 - Engine API reference lives in `bazi/README.md`.
 
 ---
@@ -34,19 +37,18 @@
 ## 2.1 引擎说明（bazi）
 - `bazi/` 当前为新引擎实现（原 `bazi_new`），对外导入路径保持不变。
 - 结构化输出的枚举字段统一为命名空间码（`NAMESPACE:CODE`），展示层如需中文请用 `bazi.core.property.strip_ns` + 枚举映射。
-- `BaziChartAnalyseFrame.find_yun_liu_nian_liuyue(target_year)` 可返回可读流年查询文本。
-- `time_index` 会将 `liunian.ganzhi` 规整为可读形式，即便 `paipan_output` 内仍是命名空间码。
+- `BaziChartAnalyseFrame.find_yun_liu_nian_liuyue(target_year)` 可返回可读流年查询文本，包含完整的大运、流年、流月信息。
+- `paipan_tool` 会从 `frame.res["yun"]` 直接提取 `dayun_list`（大运列表），用于规划提示词。
 - API 参考文档：`bazi/README.md`。
 
 ## 3. 运行流程（`run_turn`）
-1) 先执行 `PAIPAN`：得到排盘文本与结构化 `paipan_output`，并构建 `time_index`（大运/流年/流月索引）。
-2) `plan(question, now, time_index)`：输出 `{"aspects":[...],"times":[...],"time":...}`，支持多时间点；未命中方面则归入 `OTHER`。
+1) 先执行 `PAIPAN`：得到排盘文本、结构化 `paipan_output`、以及 `dayun_list`（大运列表，直接从 `frame.res["yun"]` 提取）。
+2) `plan(question, now, dayun_list)`：输出 `{"aspects":[...],"times":[...],"time":...}`，支持多时间点；未命中方面则归入 `OTHER`。LLM 规划时会在 prompt 中包含大运范围提示。
 3) 组装节点集：`COMMON_PREREQS + aspects`，使用 `run_nodes_parallel` 按拓扑并发执行；`PAIPAN` 已先执行会被跳过。
-4) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {requests, dayun_list, liunian_list, liuyue_by_year})`，支持批量解析。
-5) 若规划未填写 `dayun/year/month`，将使用 `time_context` 结果回填（并触发 `plan_update` 事件）。
-6) `FINAL` 节点：综合时间定位与各节点报告，生成最终答复；可注入最近对话轮次 `history_rounds`。
-7) 返回 `response`（优先取 `FINAL` 输出，失败则回退到拼接式回答）。
-8) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
+4) 如需时间定位：调用 `ensure_node(..., "TIME_CONTEXT", {requests, birth, gender, birth_time_unknown})`。TIME_CONTEXT 直接调用 `find_yun_liu_nian_liuyue(year)` 获取每个目标年份的大运/流年/流月详情，无需中间索引层。
+5) `FINAL` 节点：综合时间定位（`year_data`）与各节点报告，生成最终答复；可注入最近对话轮次 `history_rounds`。
+6) 返回 `response`（优先取 `FINAL` 输出，失败则回退到拼接式回答）。
+7) 返回结果并由上层保存 profile（CLI 中由 `save_profile` 完成）。
 
 ## 4. 节点与依赖（DAG）
 - 常量 `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS"]`。
@@ -68,17 +70,17 @@
 - 时间识别（规则）：会扫描多个时间表达并生成 `times` 列表。
   - 相对年：`今年/明年/去年` → `need_tool=True, granularity="year", year=now.year+offset`
   - 绝对年月：`YYYY年MM月` → `granularity="month"`；绝对年：`YYYY年` → `granularity="year"`
-  - 大运：`甲子大运` → `granularity="dayun"`
 - 规划合并：即使 LLM 只返回单条时间，也会用正则补全问题中遗漏的多年份/月份。
-- 规范化：若 LLM 提供了年/月/大运但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
-- 大运字段：`dayun` 只保留干支名称（例如 `己巳`），不包含年份区间；工具会尝试自动规整。
+- 规范化：若 LLM 提供了年/月但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
+- **大运字段（已简化）**：`dayun` 字段为可选/已弃用。LLM 规划只需指定年份（year），系统会通过 `find_yun_liu_nian_liuyue(year)` 自动获取该年对应的大运信息。
+- **时间范围展开**：LLM 规划器应将"未来两年"等范围表达展开为多个具体年份的 `times` 条目。
 - 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
 - LLM 输出 schema：
   ```json
-  {"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"need_tool":true,"granularity":"year","ref_text":"今年","year":2025,"month":null,"dayun":null}]}}
+  {"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"need_tool":true,"granularity":"year","ref_text":"今年","year":2025,"month":null}]}}
   ```
   - `times` 支持多条时间；`time` 字段为兼容保留，等于 `times[0]`。
-  - `granularity` 表示时间分辨率：`dayun` 只关心大运段，`year` 关心流年，`month` 关心流月（当前仅返回月份数字）。
+  - `granularity` 表示时间分辨率：`year` 关心流年，`month` 关心流月（当前仅返回月份数字）。大运信息由 `find_yun_liu_nian_liuyue` 自动返回。
 
 ## 6. 执行、缓存与并发（`execution.py`）
 - 输入哈希：`_hash_inputs` 对 inputs JSON 序列化 + sha256，用于缓存命中判断。
@@ -97,20 +99,20 @@
 ### 7.1 `paipan_tool(inputs)`
 - 输入：`birth`（year/month/day/hour/minute/second）、`gender` ("male"/"female")、`birth_time_unknown`（bool）。
 - 实现：`Solar.fromYmdHms(...).getLunar()` → `BaziChartAnalyseFrame(lunar, gender, without_time=birth_time_unknown)` → `get_analysis_summary()`。
-- 输出：`{"paipan_results":文本,"liupan_results":文本,"guji_results":文本,"paipan_output":frame.res,"time_index":{...}}`。
+- 输出：`{"paipan_results":文本,"liupan_results":文本,"guji_results":文本,"paipan_output":frame.res,"dayun_list":[...]}`。
 - `paipan_output["yun"]`：大运列表，含流年 `liunian`、流月 `liuyue`；`startyun` 为起运年月日时。
-- `time_index`：由 `paipan_output` + 文本排盘合成的索引：
-  - `dayun_list`：`[{name,start_year,end_year,step,age_start}]`
-  - `liunian_list`：`[{year,ganzhi,age,dayun}]`
-  - `liuyue_by_year`：`{year:[{month,day,gan,zhi,...}]}`（按年索引）
+- `dayun_list`：直接从 `frame.res["yun"]` 提取，格式为 `[{name,start_year,end_year,step,age_start}]`，用于规划提示词中的大运范围提示。
 
-### 7.2 `time_context_tool(dayun_list, liunian_list, ref_text, now_iso=None, target_year=None, target_month=None, target_dayun=None, liuyue_by_year=None, requests=None)`
-- 大运列表来源：优先用 `time_index.dayun_list`；无结构化数据时回退到 `paipan_results` 的 `【大运简排】`。
-- 流年列表来源：优先用 `time_index.liunian_list`；无结构化数据时回退到 `liupan_results` 正则解析。
-- 批量模式：传入 `requests=[{index,ref_text,target_year,...}]` 时返回 list，顺序与 requests 对齐。
-- 返回结构：`{granularity,matched,dayun:{name,start_year,end_year},year:{year,ganzhi,age},month:{month,liuyue},source,raw_match}`，当提供 `target_year` 时优先按年份匹配大运。
-- 月级会尝试返回 `liuyue` 明细（来自 `liuyue_by_year`），否则只返回月份数字。
-- `now` 支持 ISO 时间戳（含 `Z` 后缀）。
+### 7.2 `time_context_tool(requests, birth, gender, birth_time_unknown=False)`
+- **简化后的接口**：直接调用 `find_yun_liu_nian_liuyue(year)` 获取每个目标年份的数据，无需中间索引层。
+- 输入：
+  - `requests`：`[{year: int}]`，需要获取数据的年份列表。
+  - `birth`：出生信息 `{year, month, day, hour, minute, second}`。
+  - `gender`：`"male"` 或 `"female"`。
+  - `birth_time_unknown`：是否缺少出生时间（bool）。
+- 输出：`{"year_data": [{year: int, data: str}, ...]}`。
+  - `year_data` 每条包含该年的完整大运/流年/流月详情（来自 `find_yun_liu_nian_liuyue`）。
+  - 示例：`{"year_data": [{"year": 2026, "data": "所在大运：戊戌【正官正官】...目标流年：2026丙午...流月：..."}]}`。
 
 ### 7.3 `llm_report_tool(system_prompt, user_prompt, model=None, node=None, sleep_ms=None)`
 - 环境加载：自动读取仓库根 `.env`（缺失则忽略）。
@@ -123,7 +125,8 @@
 ## 8. Prompt 组织（`nodes/prompt_builder.py`）
 - 模板目录：`agent/prompts/templates/`；固定模板：`OVERALL→init_analysis.md`、`SHISHEN→shishen.md`、`GEJU→geju.md`、`WUXING_PREFS→inter.md`、`FINAL→final_answer.md`。
 - 配置集：`PROMPT_CONFIGS["lingyun_cat"]` 映射各领域节点到对应 `*_lym.md`；`prompt_config` 可在 profile 中切换。
-- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/liupan/guji）、`TIME_CONTEXT`、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告、用户问题与最近对话轮次（`history_rounds`）。
+- 上下文注入：从缓存读取 `PAIPAN` 文本（paipan/guji）、`TIME_CONTEXT` 的 `year_data`（目标年份详情）、`OVERALL`/`SHISHEN`/`GEJU`/`WUXING_PREFS` 的 `output.content` 拼入 user prompt；`FINAL` 会额外拼接各领域节点报告、用户问题与最近对话轮次（`history_rounds`）。
+- **year_data 注入**：`TIME_CONTEXT` 返回的 `year_data` 包含每个目标年份的大运/流年/流月详情（来自 `find_yun_liu_nian_liuyue`），会被注入到 prompt 中。
 - 容错：上游缺失时会插入空字符串，不会抛错；需要更强提示可在此文件增加显式缺失提示。
 
 ## 9. 存储与路径
@@ -166,7 +169,7 @@
 - 并发与缓存：`python tests/test_parallel_execution.py`（依赖 stub）。
 - 缓存失败重跑：`python -m pytest tests/test_cache_retry_on_error.py`。
 - 多时间点解析：`python -m pytest tests/test_multi_time_context.py`。
-- 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/profile_demo.json` 与 `storage/conversations/demo.jsonl`。
+- 本地多轮回放：`python tests/run_local_tester.py`，生成/更新 `storage/users/u_demo/profile.json` 与 `storage/users/u_demo/conversations/demo.jsonl`。
 - 在线 LLM（pytest）：`pytest -m llm_live`（需配置 API KEY）；全流程需 `LLM_LIVE_FULL=1`。
 - 在线 LLM 默认超时：测试会设置 `LLM_TIMEOUT_SECONDS=400`。
 - 在线 LLM（脚本）：`python tests/test_llm_live.py`；测试矩阵 `python tests/run_live_suite.py --scenario fast_nano|reasoning_gpt5|force_error_overall`。
@@ -180,10 +183,10 @@
 - 断点恢复示例：`python -m pytest tests/test_resume_cache_live_profiles.py`（使用 `storage/users/*/profile.json` 作为夹具）。
 
 ## 12. 已知限制与改进建议
-- 规划简单：仅关键词+正则；不解析大运干支/时间范围；上下文记忆仅注入最近 N 轮（默认 5，可配置）。可引入更复杂的对话状态管理。
-- 时间解析覆盖有限：相对年/绝对年月，未覆盖“未来两年”“第 X 步大运”等复杂表达。
+- 规划简单：仅关键词+正则；上下文记忆仅注入最近 N 轮（默认 5，可配置）。可引入更复杂的对话状态管理。
+- 时间解析：LLM 规划器可处理时间范围表达（如"未来两年"），会展开为多个年份条目；规则模式仅支持相对年/绝对年月。
 - LLM 重试：仅工具层按 `LLM_MAX_RETRIES`，若需统一 3 次重试或熔断需在执行层封装。
-- Prompt 容错：缺失上游内容只会插入空字符串，如需显式“不确定”提示需修改 `prompt_builder`。
+- Prompt 容错：缺失上游内容只会插入空字符串，如需显式"不确定"提示需修改 `prompt_builder`。
 - 安全：仓库含示例 `.env`，请在生产环境替换密钥；避免将真实密钥提交版本库。
 
 ## 13. 排查指南
@@ -198,8 +201,7 @@
 - 可选参数：`history_rounds=[{"user":"...","assistant":"..."}]` 用于 FINAL prompt 注入最近对话。
 - 事件回调：`event_sink(event: dict)`，会在节点开始/结束、工具调用、流式输出时被调用。
 - 关键事件类型：
-  - `plan`：规划结果（包含 `aspects` 与 `time`）。
-  - `plan_update`：时间工具补全后的规划（可能补上 `dayun/year/month`）。
+  - `plan`：规划结果（包含 `aspects` 与 `times`）。
   - `node_start` / `node_end`：包含 `PLANNER` 节点（LLM 规划）。
   - `node_start` / `node_end`：节点开始/结束；`node_end.output` 为最终输出；缓存命中会带 `cached=true`。
   - `node_delta`：流式输出片段（`delta`/`reasoning_delta`）。

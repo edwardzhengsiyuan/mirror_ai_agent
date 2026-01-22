@@ -20,26 +20,18 @@ def test_multi_time_requests(monkeypatch) -> None:
             "liupan_results": "",
             "guji_results": "",
             "paipan_output": {},
-            "time_index": {"dayun_list": [], "liunian_list": [], "liuyue_by_year": {}},
+            "dayun_list": [],
         }
 
-    def fake_time_context(
-        dayun_list,
-        liunian_list,
-        ref_text,
-        now,
-        target_year=None,
-        target_month=None,
-        target_dayun=None,
-        liuyue_by_year=None,
-        requests=None,
-    ):
-        if requests is None:
-            return None
-        return [
-            {"index": req.get("index", idx), "matched": True, "year": {"year": req.get("target_year")}}
-            for idx, req in enumerate(requests)
-        ]
+    def fake_time_context(requests, birth, gender, birth_time_unknown=False):
+        if not requests:
+            return {"year_data": []}
+        return {
+            "year_data": [
+                {"year": req.get("year"), "data": f"Year {req.get('year')} data"}
+                for req in requests
+            ]
+        }
 
     monkeypatch.setattr(execution, "paipan_tool", fake_paipan)
     monkeypatch.setattr(execution, "time_context_tool", fake_time_context)
@@ -56,5 +48,6 @@ def test_multi_time_requests(monkeypatch) -> None:
     result = run_turn(profile, "2035年、2045年健康贵人怎么样", now=now, stream=False)
 
     assert len(result["plan"].get("times", [])) == 2
-    assert isinstance(result["time_context"], list)
-    assert len(result["time_context"]) == 2
+    assert isinstance(result["time_context"], dict)
+    assert "year_data" in result["time_context"]
+    assert len(result["time_context"]["year_data"]) == 2

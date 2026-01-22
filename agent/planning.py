@@ -48,7 +48,7 @@ def detect_times(text: str, now: dt.datetime | None = None) -> List[Dict]:
     seen = set()
 
     def push(item: Dict) -> None:
-        key = (item.get("granularity"), item.get("year"), item.get("month"), item.get("dayun"))
+        key = (item.get("granularity"), item.get("year"), item.get("month"))
         if key in seen:
             return
         seen.add(key)
@@ -91,31 +91,9 @@ def detect_times(text: str, now: dt.datetime | None = None) -> List[Dict]:
     return entries
 
 
-def _fill_dayun(times: List[Dict], dayun_list: Optional[List[Dict]]) -> None:
-    if not dayun_list:
-        return
-    for entry in times:
-        if entry.get("dayun") or entry.get("year") is None:
-            continue
-        year = entry.get("year")
-        for dayun in dayun_list:
-            start = dayun.get("start_year")
-            end = dayun.get("end_year")
-            if not isinstance(start, int) or not isinstance(end, int):
-                continue
-            if start <= year <= end:
-                entry["dayun"] = dayun.get("name")
-                break
-
-
-def plan_with_rules(
-    question: str,
-    now: dt.datetime | None = None,
-    time_index: Optional[Dict[str, Any]] = None,
-) -> Dict:
+def plan_with_rules(question: str, now: dt.datetime | None = None) -> Dict:
     aspects = classify_aspects(question)
     times = detect_times(question, now=now)
-    _fill_dayun(times, (time_index or {}).get("dayun_list"))
     primary = times[0] if times else {"need_tool": False, "granularity": None, "ref_text": None}
     plan = planning_tool(aspects, primary, times)
     plan["source"] = "rules"
@@ -125,22 +103,23 @@ def plan_with_rules(
 def _build_planner_prompt(
     question: str,
     now: dt.datetime,
-    time_index: Optional[Dict[str, Any]] = None,
+    dayun_list: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[str, str]:
     system_prompt = (
         "你是一个规划助手，需要根据用户问题返回结构化的规划结果。"
         "只允许通过调用 planning_tool 返回 JSON，格式必须严格为："
         "{\"tool\":\"planning_tool\",\"args\":{\"aspects\":[...],\"times\":[...]}}"
         "。aspects 只能从 [CAREER, RELATIONSHIP, HEALTH, GUIREN, LIUQIN, XINGGE, OTHER] 中选择。"
-        "times 为列表，每项包含 need_tool(boolean), granularity(year|month|dayun|null), "
-        "ref_text(string|null), year(int|null), month(int|null), dayun(string|null)。"
-        "如出现多个年份/月份/大运，请输出多条 times。若无法判断时间则 times 为空。"
-        "dayun 仅填写干支名称，例如“己巳”，不要包含年份区间。"
+        "times 为列表，每项包含 need_tool(boolean), granularity(year|month|null), "
+        "ref_text(string|null), year(int|null), month(int|null)。"
+        "如出现多个年份/月份，请输出多条 times。若无法判断时间则 times 为空。"
+        "注意：只需指定年份(year)，系统会自动确定对应的大运信息。"
+        "对于时间范围表达，如未来两年或接下来3年，请生成多个 times 条目，每个对应一个具体年份。"
     )
     dayun_hint = ""
-    if time_index and time_index.get("dayun_list"):
+    if dayun_list:
         lines = []
-        for item in time_index["dayun_list"]:
+        for item in dayun_list:
             name = item.get("name") or "未知大运"
             start = item.get("start_year")
             end = item.get("end_year")
@@ -172,12 +151,12 @@ def _parse_tool_call(content: str) -> Optional[Dict]:
 def plan_with_llm(
     question: str,
     now: dt.datetime | None = None,
-    time_index: Optional[Dict[str, Any]] = None,
+    dayun_list: Optional[List[Dict[str, Any]]] = None,
     event_sink: EventSink | None = None,
     stream: bool = False,
 ) -> Dict:
     now = now or dt.datetime.now()
-    system_prompt, user_prompt = _build_planner_prompt(question, now, time_index=time_index)
+    system_prompt, user_prompt = _build_planner_prompt(question, now, dayun_list=dayun_list)
     emit_event(
         event_sink,
         {
@@ -210,7 +189,7 @@ def plan_with_llm(
     emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "PLANNER"})
     args = _parse_tool_call(response.get("content", ""))
     if not args:
-        return plan_with_rules(question, now=now, time_index=time_index)
+        return plan_with_rules(question, now=now)
     plan = planning_tool(args.get("aspects"), args.get("time"), args.get("times"))
     plan["source"] = "llm"
     return plan
@@ -219,34 +198,32 @@ def plan_with_llm(
 def plan(
     question: str,
     now: dt.datetime | None = None,
-    time_index: Optional[Dict[str, Any]] = None,
+    dayun_list: Optional[List[Dict[str, Any]]] = None,
     event_sink: EventSink | None = None,
     stream: bool = False,
 ) -> Dict:
     mode = os.environ.get("LLM_PLANNER_MODE", "llm").lower()
     if mode == "rule" or os.environ.get("LLM_MODE", "").lower() == "stub":
-        result = plan_with_rules(question, now=now, time_index=time_index)
+        result = plan_with_rules(question, now=now)
     else:
-        result = plan_with_llm(question, now=now, time_index=time_index, event_sink=event_sink, stream=stream)
-    return _merge_times_from_question(result, question, now=now, time_index=time_index)
+        result = plan_with_llm(question, now=now, dayun_list=dayun_list, event_sink=event_sink, stream=stream)
+    return _merge_times_from_question(result, question, now=now)
 
 
 def _merge_times_from_question(
     plan_result: Dict,
     question: str,
     now: dt.datetime | None = None,
-    time_index: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     detected = detect_times(question, now=now)
-    _fill_dayun(detected, (time_index or {}).get("dayun_list"))
     if not detected:
         return plan_result
     times = plan_result.get("times")
     if not isinstance(times, list):
         times = []
-    existing = {(t.get("granularity"), t.get("year"), t.get("month"), t.get("dayun")) for t in times}
+    existing = {(t.get("granularity"), t.get("year"), t.get("month")) for t in times}
     for item in detected:
-        key = (item.get("granularity"), item.get("year"), item.get("month"), item.get("dayun"))
+        key = (item.get("granularity"), item.get("year"), item.get("month"))
         if key in existing:
             continue
         times.append(item)

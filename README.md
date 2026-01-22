@@ -4,5 +4,5 @@ Backend agent for bazi Q&A (paipan, planning, caching, LLM, time context, web AP
 
 Docs:
 - `DEV.md` (development guide)
-- `AGENT_RULES.md` (agent rules)
+- `CLAUDE.md` (agent rules)
 - `bazi/README.md` (engine API reference)
