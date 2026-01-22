@@ -87,20 +87,21 @@
 - 规划默认走 LLM：`LLM_PLANNER_MODE=llm`（默认），通过 LLM 输出 `planning_tool` 的 JSON 调用结果，且 prompt 中包含大运范围提示。
 - 规则回退：`LLM_MODE=stub` 或 `LLM_PLANNER_MODE=rule` 时使用关键词/正则规则。
 - 方面分类（规则）：`ASPECT_KEYWORDS` 关键词匹配；未命中则 `["OTHER"]`。
-- 时间识别（规则）：会扫描多个时间表达并生成 `times` 列表。
-  - 相对年：`今年/明年/去年` → `need_tool=True, granularity="year", year=now.year+offset`
-  - 绝对年月：`YYYY年MM月` → `granularity="month"`；绝对年：`YYYY年` → `granularity="year"`
-- 规划合并：即使 LLM 只返回单条时间，也会用正则补全问题中遗漏的多年份/月份。
-- 规范化：若 LLM 提供了年/月但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
+- 时间识别（规则）：会扫描多个时间表达并生成 `times` 列表（仅支持年份）。
+  - 相对年：`今年/明年/去年` → `{need_tool: true, ref_text: "今年", year: now.year+offset}`
+  - 绝对年：`YYYY年` 或 `YYYY年MM月` → 仅提取 year
+- 规划合并：即使 LLM 只返回单条时间，也会用正则补全问题中遗漏的多年份。
+- 规范化：若 LLM 提供了年份但 `need_tool=false`，会自动强制为 `true`，确保时间工具执行。
 - **大运字段（已简化）**：`dayun` 字段为可选/已弃用。LLM 规划只需指定年份（year），系统会通过 `find_yun_liu_nian_liuyue(year)` 自动获取该年对应的大运信息。
 - **时间范围展开**：LLM 规划器应将"未来两年"等范围表达展开为多个具体年份的 `times` 条目。
 - 规划提示词位置：`agent/planning.py` 的 `_build_planner_prompt()`。
-- LLM 输出 schema：
+- LLM 输出 schema（简化版，仅需指定年份）：
   ```json
-  {"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"need_tool":true,"granularity":"year","ref_text":"今年","year":2025,"month":null}]}}
+  {"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"year":2025}]}}
   ```
   - `times` 支持多条时间；`time` 字段为兼容保留，等于 `times[0]`。
-  - `granularity` 表示时间分辨率：`year` 关心流年，`month` 关心流月（当前仅返回月份数字）。大运信息由 `find_yun_liu_nian_liuyue` 自动返回。
+  - 规范化后的 time 结构：`{need_tool: bool, ref_text: string|null, year: int|null}`。
+  - **注意**：`granularity` 和 `month` 字段已移除，系统仅支持年级别查询。
 
 ## 6. 执行、缓存与并发（`execution.py`）
 - 输入哈希：`_hash_inputs` 对 inputs JSON 序列化 + sha256，用于缓存命中判断。

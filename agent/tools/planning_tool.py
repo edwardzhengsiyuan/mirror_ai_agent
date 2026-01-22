@@ -28,35 +28,22 @@ def _normalize_aspects(aspects: Optional[List[str]]) -> List[str]:
 
 def _normalize_time_item(time: Optional[Dict]) -> Dict:
     time = time or {}
-    granularity = time.get("granularity")
-    if granularity not in ("year", "month", None):
-        granularity = None
     ref_text = time.get("ref_text")
     if not isinstance(ref_text, str):
         ref_text = None
     year = time.get("year")
     if not isinstance(year, int):
         year = None
-    month = time.get("month")
-    if not isinstance(month, int):
-        month = None
-    if granularity is None:
-        if month:
-            granularity = "month"
-        elif year:
-            granularity = "year"
     need_tool = time.get("need_tool")
-    has_time_hint = any([ref_text, year, month])
+    has_time_hint = ref_text or year
     if not isinstance(need_tool, bool):
-        need_tool = has_time_hint
+        need_tool = bool(has_time_hint)
     elif not need_tool and has_time_hint:
         need_tool = True
     return {
         "need_tool": need_tool,
-        "granularity": granularity,
         "ref_text": ref_text,
         "year": year,
-        "month": month,
     }
 
 
@@ -65,10 +52,10 @@ def _normalize_times(time: Optional[Dict], times: Optional[List[Dict]]) -> List[
     seen = set()
 
     def push(item: Dict) -> None:
-        key = (item.get("granularity"), item.get("year"), item.get("month"))
-        if key in seen:
+        year = item.get("year")
+        if year in seen:
             return
-        seen.add(key)
+        seen.add(year)
         if item.get("need_tool"):
             normalized.append(item)
 

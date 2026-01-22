@@ -90,7 +90,6 @@ class TestDetectTimes:
         time_item = result[0]
         assert time_item["year"] == 2025
         assert time_item["need_tool"] is True
-        assert time_item["granularity"] == "year"
 
     def test_明年_relative(self, now):
         """明年 should map to next year."""
@@ -109,16 +108,15 @@ class TestDetectTimes:
         result = detect_times("2035年事业如何", now)
         assert len(result) >= 1
         assert result[0]["year"] == 2035
-        assert result[0]["granularity"] == "year"
 
     def test_year_month(self, now):
-        """Year+month like 2026年3月 should be parsed."""
+        """Year+month like 2026年3月 extracts year only (month not supported)."""
         result = detect_times("2026年3月感情", now)
         assert len(result) >= 1
         time_item = result[0]
         assert time_item["year"] == 2026
-        assert time_item["month"] == 3
-        assert time_item["granularity"] == "month"
+        # Month is no longer extracted - simplified to year-only
+        assert "month" not in time_item
 
     def test_multiple_years(self, now):
         """Multiple years should all be detected."""

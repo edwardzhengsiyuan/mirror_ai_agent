@@ -28,9 +28,6 @@ RELATIVE_TIME = {
     "去年": -1,
 }
 
-_GANZHI_PATTERN = r"[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]"
-_DAYUN_REF_PATTERN = re.compile(rf"({_GANZHI_PATTERN})大运")
-
 
 def classify_aspects(text: str) -> List[str]:
     matched = []
@@ -45,36 +42,37 @@ def classify_aspects(text: str) -> List[str]:
 def detect_times(text: str, now: dt.datetime | None = None) -> List[Dict]:
     now = now or dt.datetime.now()
     entries: List[Dict] = []
-    seen = set()
+    seen_years: set[int] = set()
 
-    def push(item: Dict) -> None:
-        key = (item.get("granularity"), item.get("year"), item.get("month"))
-        if key in seen:
+    def push(year: int, ref_text: str) -> None:
+        if year in seen_years:
             return
-        seen.add(key)
-        entries.append(item)
+        seen_years.add(year)
+        entries.append({"need_tool": True, "ref_text": ref_text, "year": year})
 
     for key, offset in RELATIVE_TIME.items():
         if key in text:
             year = now.year + offset
-            push({"need_tool": True, "granularity": "year", "ref_text": key, "year": year})
+            push(year, key)
 
+    # Match "2024年3月" - extract year only
     month_spans = []
-    year_spans = []
     for match in re.finditer(r"(\d{4})年(\d{1,2})月", text):
         month_spans.append(match.span())
         year = int(match.group(1))
-        month = int(match.group(2))
-        push({"need_tool": True, "granularity": "month", "ref_text": match.group(0), "year": year, "month": month})
+        push(year, match.group(0))
 
+    # Match "2024年"
+    year_spans = []
     for match in re.finditer(r"(\d{4})年", text):
         span = match.span()
         if any(start <= span[0] < end for start, end in month_spans):
             continue
         year = int(match.group(1))
         year_spans.append(span)
-        push({"need_tool": True, "granularity": "year", "ref_text": match.group(0), "year": year})
+        push(year, match.group(0))
 
+    # Match standalone 4-digit years
     for match in re.finditer(r"(?<!\d)(\d{4})(?!\d)", text):
         span = match.span()
         if any(start <= span[0] < end for start, end in month_spans):
@@ -82,11 +80,11 @@ def detect_times(text: str, now: dt.datetime | None = None) -> List[Dict]:
         if any(start <= span[0] < end for start, end in year_spans):
             continue
         year = int(match.group(1))
-        push({"need_tool": True, "granularity": "year", "ref_text": match.group(0), "year": year})
+        push(year, match.group(0))
 
-    for match in _DAYUN_REF_PATTERN.finditer(text):
-        name = match.group(1)
-        push({"need_tool": True, "granularity": "dayun", "ref_text": match.group(0), "dayun": name})
+    # Match dayun references like "甲子大运" - these need special handling
+    # For now, we skip dayun patterns as they require mapping to years
+    # The LLM planner can handle these with dayun_list context
 
     return entries
 
@@ -94,7 +92,7 @@ def detect_times(text: str, now: dt.datetime | None = None) -> List[Dict]:
 def plan_with_rules(question: str, now: dt.datetime | None = None) -> Dict:
     aspects = classify_aspects(question)
     times = detect_times(question, now=now)
-    primary = times[0] if times else {"need_tool": False, "granularity": None, "ref_text": None}
+    primary = times[0] if times else {"need_tool": False, "ref_text": None, "year": None}
     plan = planning_tool(aspects, primary, times)
     plan["source"] = "rules"
     return plan
@@ -110,10 +108,8 @@ def _build_planner_prompt(
         "只允许通过调用 planning_tool 返回 JSON，格式必须严格为："
         "{\"tool\":\"planning_tool\",\"args\":{\"aspects\":[...],\"times\":[...]}}"
         "。aspects 只能从 [CAREER, RELATIONSHIP, HEALTH, GUIREN, LIUQIN, XINGGE, OTHER] 中选择。"
-        "times 为列表，每项包含 need_tool(boolean), granularity(year|month|null), "
-        "ref_text(string|null), year(int|null), month(int|null)。"
-        "如出现多个年份/月份，请输出多条 times。若无法判断时间则 times 为空。"
-        "注意：只需指定年份(year)，系统会自动确定对应的大运信息。"
+        "times 为列表，每项包含 year(int) 表示要查询的年份。"
+        "如出现多个年份，请输出多条 times。若无法判断时间则 times 为空。"
         "对于时间范围表达，如未来两年或接下来3年，请生成多个 times 条目，每个对应一个具体年份。"
     )
     dayun_hint = ""
@@ -221,13 +217,13 @@ def _merge_times_from_question(
     times = plan_result.get("times")
     if not isinstance(times, list):
         times = []
-    existing = {(t.get("granularity"), t.get("year"), t.get("month")) for t in times}
+    existing_years = {t.get("year") for t in times}
     for item in detected:
-        key = (item.get("granularity"), item.get("year"), item.get("month"))
-        if key in existing:
+        year = item.get("year")
+        if year in existing_years:
             continue
         times.append(item)
-        existing.add(key)
+        existing_years.add(year)
     if times:
         plan_result["times"] = times
         plan_result["time"] = times[0]

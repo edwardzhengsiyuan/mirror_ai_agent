@@ -71,7 +71,8 @@ def apply_event(state: ChatState, event: Dict[str, Any]) -> None:
         time = plan.get("time", {})
         ref = time.get("ref_text") or ""
         label = "plan" if etype == "plan" else "plan_update"
-        state.system_log.append(f"{label}: aspects={aspects} time={time.get('granularity')} {ref}".strip())
+        year = time.get("year") or ""
+        state.system_log.append(f"{label}: aspects={aspects} year={year} {ref}".strip())
         return
     if etype == "tool_call":
         tool = event.get("tool", "")

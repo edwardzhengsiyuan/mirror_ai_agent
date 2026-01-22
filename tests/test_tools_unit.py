@@ -62,36 +62,25 @@ class TestNormalizeTimeItem:
     """Tests for _normalize_time_item function."""
 
     def test_basic_time_item(self):
-        """Basic time item should have all required fields."""
-        item = {"year": 2025, "granularity": "year", "ref_text": "今年", "need_tool": True}
+        """Basic time item should have all required fields (year, ref_text, need_tool)."""
+        item = {"year": 2025, "ref_text": "今年", "need_tool": True}
         result = _normalize_time_item(item)
         assert result["year"] == 2025
-        assert result["granularity"] == "year"
+        assert result["ref_text"] == "今年"
         assert result["need_tool"] is True
-        assert "month" in result
+        # granularity and month are no longer in output (simplified)
+        assert "granularity" not in result
+        assert "month" not in result
 
     def test_need_tool_forced_true_when_year_present(self):
         """need_tool should be True when year is present."""
-        item = {"year": 2025, "granularity": "year", "ref_text": "今年", "need_tool": False}
+        item = {"year": 2025, "ref_text": "今年", "need_tool": False}
         result = _normalize_time_item(item)
         assert result["need_tool"] is True
 
-    def test_month_defaults_to_none(self):
-        """Month should default to None if not specified."""
-        item = {"year": 2025, "granularity": "year", "ref_text": "今年", "need_tool": True}
-        result = _normalize_time_item(item)
-        assert result["month"] is None
-
-    def test_invalid_granularity_nullified(self):
-        """Invalid granularity should be set to None or 'year'."""
-        item = {"year": 2025, "granularity": "invalid", "ref_text": "今年", "need_tool": True}
-        result = _normalize_time_item(item)
-        # Should be normalized to valid value
-        assert result["granularity"] in [None, "year", "month"]
-
     def test_dayun_field_removed(self):
         """dayun field should be removed from output."""
-        item = {"year": 2025, "granularity": "year", "ref_text": "今年", "need_tool": True, "dayun": "test"}
+        item = {"year": 2025, "ref_text": "今年", "need_tool": True, "dayun": "test"}
         result = _normalize_time_item(item)
         assert "dayun" not in result
 
