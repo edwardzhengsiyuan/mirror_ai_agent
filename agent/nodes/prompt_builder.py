@@ -8,18 +8,9 @@ from typing import Any, Dict, Optional
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 PROMPTS_DIR = os.path.join(REPO_ROOT, "agent", "prompts", "templates")
 
-SYSTEM_PROMPT = "You are a helpful bazi analysis assistant."
+SYSTEM_PROMPT = "你是一位精通八字的算命师，具有深厚的命理学知识和丰富的分析经验。"
 
 PROMPT_CONFIGS = {
-    "lingyun_cat": {
-        "RELATIONSHIP": "ganqing_lym.md",
-        "CAREER": "shiye_lym.md",
-        "HEALTH": "jiankang_lym.md",
-        "LIUQIN": "liuqin_lym.md",
-        "GUIREN": "guiren_lym.md",
-        "XINGGE": "xingge_lym.md",
-        "OTHER": "other_lym.md",
-    },
     "default": {
         "RELATIONSHIP": "ganqing_lym.md",
         "CAREER": "shiye_lym.md",
@@ -76,7 +67,7 @@ def build_prompt(
         config = PROMPT_CONFIGS.get(prompt_config, PROMPT_CONFIGS["lingyun_cat"])
         prompt_text = _load_prompt(config[node])
 
-    question_line = f"User question: {question}\n" if question else ""
+    question_line = f"用户问题: {question}\n" if question else ""
 
     aspect_blocks = ""
     history_block = ""
@@ -106,18 +97,43 @@ def build_prompt(
                 assistant_text = pair.get("assistant", "")
                 formatted.append(f"Round {idx}:\nUser: {user_text}\nAssistant: {assistant_text}")
             history_block = f"Recent conversation (last {len(history_rounds)} rounds):\n" + "\n".join(formatted) + "\n"
-    user_prompt = (
-        f"User question context for {node}.\n"
-        f"{question_line}"
-        f"{history_block}"
-        f"Paipan:\n{paipan_results}\n"
-        f"Guji:\n{guji_results}\n"
-        f"{year_data_text}"
-        f"OVERALL:\n{overall}\n"
-        f"SHISHEN:\n{shishen}\n"
-        f"GEJU:\n{geju}\n"
-        f"WUXING_PREFS:\n{wuxing}\n"
-        f"{aspect_blocks}"
-        f"\nPrompt:\n{prompt_text}\n"
-    )
+    # Build user prompt dynamically based on available content
+    prompt_parts = []
+
+    # Basic paipan info (always present after PAIPAN node)
+    if paipan_results:
+        prompt_parts.append(f"## 排盘:\n{paipan_results}")
+    if guji_results:
+        prompt_parts.append(f"## 古籍:\n{guji_results}")
+
+    # FINAL node only: year data and history
+    if node == "FINAL":
+        if year_data_text:
+            prompt_parts.append(f"## 目标年份详情:\n{year_data_text}")
+
+    # Dependent node outputs - only include if they have content
+    if overall:
+        prompt_parts.append(f"## 整体分析:\n{overall}")
+    if shishen:
+        prompt_parts.append(f"## 十神:\n{shishen}")
+    if geju:
+        prompt_parts.append(f"## 格局:\n{geju}")
+    if wuxing:
+        prompt_parts.append(f"## 五行偏好:\n{wuxing}")
+
+    # Aspect blocks (only for FINAL node, already filtered above)
+    if aspect_blocks:
+        prompt_parts.append(aspect_blocks.rstrip())
+
+    # Prompt template
+    prompt_parts.append(prompt_text)
+
+    # FINAL node only: history and question
+    if node == "FINAL":
+        if history_block:
+            prompt_parts.append(history_block.rstrip())
+        if question_line:
+            prompt_parts.append(question_line.rstrip())
+
+    user_prompt = "\n".join(prompt_parts)
     return {"system_prompt": SYSTEM_PROMPT, "user_prompt": user_prompt}
