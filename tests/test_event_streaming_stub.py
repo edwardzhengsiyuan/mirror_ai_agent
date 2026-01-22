@@ -67,10 +67,12 @@ def test_streaming_events_stub(monkeypatch) -> None:
     run_turn(profile, "今年事业怎么样", now=now, event_sink=sink, stream=True)
 
     assert any(e["type"] == "plan" for e in events)
-    assert any(e["type"] == "node_start" and e["node"] == "PLANNER" for e in events)
+    # PLANNER uses tool_invocation event (with "tool" key), not node_start
+    assert any(e["type"] == "tool_invocation" and e.get("tool") == "PLANNER" for e in events)
     assert any(e["type"] == "tool_call" and e["tool"] == "paipan_tool" for e in events)
     assert any(e["type"] == "llm_prompt" and e["node"] == "OVERALL" for e in events)
     assert any(e["type"] == "node_start" and e["node"] == "OVERALL" for e in events)
     assert any(e["type"] == "node_delta" and e["node"] == "OVERALL" for e in events)
     assert any(e["type"] == "node_end" and e["node"] == "CAREER" for e in events)
-    assert any(e["type"] == "node_end" and e["node"] == "FINAL" for e in events)
+    # FINAL was renamed to Response - check for "response" event type
+    assert any(e["type"] == "response" for e in events)

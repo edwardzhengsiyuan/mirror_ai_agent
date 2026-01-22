@@ -25,6 +25,8 @@ def test_web_api_flow(tmp_path) -> None:
                         "output": {"type": "report", "content": "final"},
                     }
                 )
+                # Emit response event (replaced assistant_final)
+                event_sink({"type": "response", "text": "ok"})
         return {"plan": {"aspects": ["CAREER"], "time": {"need_tool": False}}, "time_context": None, "response": "ok", "outputs": {}}
 
     app = create_app(run_turn_func=fake_run_turn, storage_root=str(tmp_path))
@@ -59,7 +61,8 @@ def test_web_api_flow(tmp_path) -> None:
     )
     body = b"".join(resp.response).decode("utf-8")
     assert "data:" in body
-    assert "assistant_final" in body
+    # assistant_final was renamed to response event type
+    assert "response" in body
 
     convo_path = os.path.join(tmp_path, "users", "u_test", "conversations", session_id)
     with open(convo_path, "r", encoding="utf-8") as f:

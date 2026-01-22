@@ -7,7 +7,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
-from agent.nodes.prompt_builder import build_prompt
+from agent.nodes.prompt_builder import build_prompt, build_response_prompt
 from agent.storage.conversation_store import load_recent_rounds, load_latest_llm_prompts
 
 
@@ -33,7 +33,14 @@ def test_final_prompt_includes_history() -> None:
         "OVERALL": {"output": {"content": "overall"}},
     }
     history = [{"user": "以前的问题", "assistant": "之前的回答"}]
-    prompt = build_prompt("FINAL", cache, question="现在的问题", history_rounds=history)
+    # FINAL was renamed to Response - use build_response_prompt
+    prompt = build_response_prompt(
+        cache=cache,
+        time_context=None,
+        prompt_config="lingyun_cat",
+        question="现在的问题",
+        history_rounds=history
+    )
     user_prompt = prompt["user_prompt"]
     assert "Recent conversation" in user_prompt
     assert "Round 1" in user_prompt

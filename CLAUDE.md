@@ -25,7 +25,7 @@
 - Update **CLAUDE.md** if rules or policies change
 
 ### 2. Run Tests / 运行测试
-- **Minimum required**: `.venv/bin/python -m pytest tests/test_planning_tool_normalization.py tests/test_time_context_regex.py -v`
+- **Minimum required**: `.venv/bin/python -m pytest tests/test_planning_tool_normalization.py -v`
 - **Recommended**: `.venv/bin/python tests/run_local_tester.py` (end-to-end stub test)
 - **Full test** (if API available): `LLM_LIVE_FULL=1 .venv/bin/pytest`
 - If tests fail, fix the issues before completing the task
