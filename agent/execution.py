@@ -8,12 +8,14 @@ import json
 import os
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from .deps import DEPS, toposort
+from .deps import DEPS, CONVERSATION_TOOLS, toposort
 from .events import EventSink, emit_event, emit_text_chunks
-from .nodes.prompt_builder import build_prompt
+from .nodes.prompt_builder import build_prompt, build_response_prompt
+from .planning import plan
 from .tools.llm_tool import llm_report_tool
 from .tools.paipan_tool import paipan_tool
 from .tools.time_context_tool import time_context_tool
@@ -240,6 +242,169 @@ def ensure_node(
         },
     )
     return output
+
+
+def run_tool(
+    tool_name: str,
+    inputs: Dict[str, Any],
+    event_sink: Optional[EventSink] = None,
+    stream: bool = False,
+) -> Tuple[Dict[str, Any], str, int, Optional[Dict[str, str]]]:
+    """Execute a conversation-level tool (no caching).
+
+    Tools like PLANNER and TIME_CONTEXT are conversation-level operations
+    that should not be cached in profile.node_cache. Each invocation is
+    recorded independently in the conversation JSONL.
+
+    Args:
+        tool_name: Either "PLANNER" or "TIME_CONTEXT"
+        inputs: Tool-specific inputs
+        event_sink: Optional event sink for streaming
+        stream: Whether to stream output
+
+    Returns:
+        Tuple of (output, invocation_id, duration_ms, llm_prompt)
+        - output: The tool's output dict
+        - invocation_id: Unique ID for this invocation
+        - duration_ms: Execution duration in milliseconds
+        - llm_prompt: The LLM prompt used (if applicable), or None
+    """
+    if tool_name not in CONVERSATION_TOOLS:
+        raise ValueError(f"Unknown conversation tool: {tool_name}. Must be one of {CONVERSATION_TOOLS}")
+
+    invocation_id = f"inv_{uuid.uuid4().hex[:12]}"
+    started_ts = time.perf_counter()
+    llm_prompt: Optional[Dict[str, str]] = None
+    output: Dict[str, Any]
+
+    _debug(f"run_tool {tool_name} invocation_id={invocation_id}")
+
+    try:
+        if tool_name == "PLANNER":
+            emit_event(event_sink, {"type": "tool_call", "tool": "planner", "invocation_id": invocation_id})
+            output = plan(
+                question=inputs.get("question", ""),
+                now=inputs.get("now"),
+                dayun_list=inputs.get("dayun_list", []),
+                event_sink=event_sink,
+                stream=stream,
+            )
+            emit_event(event_sink, {"type": "tool_result", "tool": "planner", "invocation_id": invocation_id})
+        elif tool_name == "TIME_CONTEXT":
+            emit_event(event_sink, {"type": "tool_call", "tool": "time_context_tool", "invocation_id": invocation_id})
+            output = time_context_tool(
+                requests=inputs.get("requests", []),
+                birth=inputs.get("birth", {}),
+                gender=inputs.get("gender", "male"),
+                birth_time_unknown=inputs.get("birth_time_unknown", False),
+            )
+            emit_event(event_sink, {"type": "tool_result", "tool": "time_context_tool", "invocation_id": invocation_id})
+        else:
+            output = {"error": f"Unknown tool: {tool_name}"}
+    except Exception as exc:
+        _debug(f"run_tool {tool_name} error: {exc}")
+        output = {"error": str(exc)}
+
+    duration_ms = int((time.perf_counter() - started_ts) * 1000)
+    _debug(f"run_tool {tool_name} completed duration={duration_ms}ms")
+
+    return output, invocation_id, duration_ms, llm_prompt
+
+
+def run_response(
+    profile: Dict[str, Any],
+    inputs: Dict[str, Any],
+    event_sink: Optional[EventSink] = None,
+    stream: bool = False,
+) -> Tuple[Dict[str, Any], int, Dict[str, str]]:
+    """Generate final response (no caching).
+
+    Response is a conversation-level entity that should not be cached
+    in profile.node_cache. Each response is recorded independently
+    in the conversation JSONL.
+
+    Args:
+        profile: User profile with node_cache
+        inputs: Should contain:
+            - prompt_config: str
+            - question: str
+            - history_rounds: list
+            - time_context: dict (passed directly, not from cache)
+            - model: optional model override
+
+    Returns:
+        Tuple of (output, duration_ms, llm_prompt)
+        - output: The LLM response output dict
+        - duration_ms: Execution duration in milliseconds
+        - llm_prompt: The LLM prompt used
+    """
+    cache = profile.get("node_cache", {})
+    prompt_config = inputs.get("prompt_config", "lingyun_cat")
+    question = inputs.get("question")
+    history_rounds = inputs.get("history_rounds")
+    time_context = inputs.get("time_context")
+    model = inputs.get("model")
+
+    started_ts = time.perf_counter()
+
+    prompt = build_response_prompt(
+        cache,
+        time_context=time_context,
+        prompt_config=prompt_config,
+        question=question,
+        history_rounds=history_rounds,
+    )
+    system_prompt = prompt.get("system_prompt", "")
+    user_prompt = prompt.get("user_prompt", "")
+    llm_prompt = {"system_prompt": system_prompt, "user_prompt": user_prompt}
+
+    emit_event(
+        event_sink,
+        {
+            "type": "llm_prompt",
+            "node": "RESPONSE",
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        },
+    )
+
+    _debug("run_response calling llm_report_tool")
+    emit_event(event_sink, {"type": "tool_call", "tool": "llm_report_tool", "node": "RESPONSE"})
+
+    try:
+        output = llm_report_tool(
+            system_prompt,
+            user_prompt,
+            model=model,
+            node="RESPONSE",
+            stream=stream,
+            on_delta=(
+                lambda chunk: emit_event(
+                    event_sink,
+                    {
+                        "type": "response_delta",
+                        "delta": chunk.get("content", ""),
+                        "reasoning_delta": chunk.get("reasoning_content", ""),
+                    },
+                )
+            )
+            if event_sink
+            else None,
+        )
+    except Exception as exc:
+        _debug(f"run_response error: {exc}")
+        output = {
+            "type": "error",
+            "content": f"[RESPONSE_ERROR] {exc}",
+            "error": True,
+        }
+
+    emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "RESPONSE"})
+
+    duration_ms = int((time.perf_counter() - started_ts) * 1000)
+    _debug(f"run_response completed duration={duration_ms}ms")
+
+    return output, duration_ms, llm_prompt
 
 
 def run_nodes(

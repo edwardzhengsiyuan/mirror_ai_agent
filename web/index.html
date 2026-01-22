@@ -116,6 +116,98 @@
         background: #f5efe5;
       }
 
+      .message.tool {
+        background: #f0f4f8;
+        border-left: 3px solid var(--accent);
+        margin-left: 12px;
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+
+      .tool-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+
+      .tool-icon {
+        font-size: 14px;
+      }
+
+      .tool-name {
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .tool-summary {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .tool-details {
+        margin-top: 8px;
+        padding: 8px;
+        background: #fff;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+
+      .tool-details.hidden {
+        display: none;
+      }
+
+      .expand-btn {
+        width: auto;
+        padding: 2px 8px;
+        font-size: 11px;
+        background: var(--border);
+        color: var(--ink);
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .expand-btn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      .response-input {
+        margin-top: 8px;
+        padding: 10px;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 12px;
+      }
+
+      .response-input.hidden {
+        display: none;
+      }
+
+      .view-input-btn {
+        width: auto;
+        padding: 4px 10px;
+        font-size: 11px;
+        margin-top: 8px;
+        background: var(--border);
+        color: var(--ink);
+      }
+
+      .view-input-btn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      .input-summary-item {
+        margin-bottom: 6px;
+      }
+
+      .input-summary-label {
+        font-weight: 600;
+        color: var(--muted);
+      }
+
       .chat-input {
         display: grid;
         grid-template-columns: 1fr 120px;
@@ -229,7 +321,7 @@
             <select id="sessionSelect"></select>
           </div>
           <div>
-            <label>历史轮数 (FINAL prompt)</label>
+            <label>历史轮数 (Response prompt)</label>
             <input id="historyN" type="number" min="0" value="5" />
           </div>
           <div class="inline">
@@ -285,11 +377,15 @@
     </main>
 
     <script>
+      // Persistent nodes only - PLANNER, TIME_CONTEXT, FINAL removed (now tools/response)
       const nodeOrder = [
-        "PLANNER",
         "PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS",
-        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER","TIME_CONTEXT","FINAL"
+        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER"
       ];
+      // Conversation-level tools (displayed inline in chat)
+      const CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"];
+      // Track tool invocations for current turn
+      let currentTurnTools = [];
       const nodes = new Map();
       const messagesEl = document.getElementById("messages");
       const eventLogEl = document.getElementById("eventLog");
@@ -308,6 +404,81 @@
         const div = document.createElement("div");
         div.className = `message ${role}`;
         div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function renderToolInvocation(evt) {
+        const div = document.createElement("div");
+        div.className = "message tool";
+        div.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${evt.tool}</span>
+            <button class="expand-btn" onclick="this.parentElement.parentElement.querySelector('.tool-details').classList.toggle('hidden'); this.textContent = this.textContent === '展开' ? '收起' : '展开';">展开</button>
+          </div>
+          <div class="tool-summary">${formatToolSummary(evt)}</div>
+          <div class="tool-details hidden">
+            <div><strong>Input:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <div><strong>Output:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
+            <div style="color:var(--muted);font-size:11px;">Duration: ${evt.duration_ms || 0}ms</div>
+          </div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function formatToolSummary(evt) {
+        if (evt.tool === "PLANNER") {
+          const aspects = evt.output?.aspects || [];
+          const times = evt.output?.times || [];
+          const years = times.filter(t => t.year).map(t => t.year).join(", ");
+          return `aspects: [${aspects.join(", ")}]${years ? `, years: ${years}` : ""}`;
+        }
+        if (evt.tool === "TIME_CONTEXT") {
+          const yearData = evt.output?.year_data || [];
+          const years = yearData.map(yd => yd.year).join(", ");
+          return years ? `${years}年` : "无年份数据";
+        }
+        return JSON.stringify(evt.output).slice(0, 60) + "...";
+      }
+
+      function renderResponse(evt) {
+        const div = document.createElement("div");
+        div.className = "message assistant";
+
+        let inputSummaryHtml = "";
+        if (evt.input_summary) {
+          const summary = evt.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">Question:</span> ${summary.question || ""}</div>
+              <div class="input-summary-item"><span class="input-summary-label">Aspects:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">Time:</span> ${summary.time_context_summary}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">Node Summaries:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k,v]) => `<li><strong>${k}:</strong> ${v}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${evt.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">View Full Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${evt.llm_prompt.system_prompt || ""}\n\n${evt.llm_prompt.user_prompt || ""}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        div.innerHTML = `
+          <div class="response-text">${evt.text || ""}</div>
+          <button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>
+          ${inputSummaryHtml}
+        `;
+
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
@@ -389,6 +560,8 @@
             if (evt.session_id) {
               ensureSessionOption(evt.session_id);
             }
+            // Reset current turn tools on new session
+            currentTurnTools = [];
             break;
           case "plan":
             logEvent(`plan: ${JSON.stringify(evt.plan)}`);
@@ -397,10 +570,16 @@
             logEvent(`plan_update: ${JSON.stringify(evt.plan)}`);
             break;
           case "tool_call":
-            logEvent(`tool_call: ${evt.tool} (${evt.node})`);
+            logEvent(`tool_call: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
             break;
           case "tool_result":
-            logEvent(`tool_result: ${evt.tool} (${evt.node})`);
+            logEvent(`tool_result: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
+            break;
+          case "tool_invocation":
+            // New: render tool invocation inline in chat
+            renderToolInvocation(evt);
+            currentTurnTools.push(evt);
+            logEvent(`tool_invocation: ${evt.tool} (${evt.invocation_id})`);
             break;
           case "llm_prompt": {
             const entry = nodes.get(evt.node);
@@ -423,6 +602,10 @@
           case "node_delta":
             if (evt.delta) appendNodeOutput(evt.node, evt.delta);
             break;
+          case "response_delta":
+            // New: streaming response delta (not shown in node panel)
+            logEvent(`response_delta: ${(evt.delta || "").slice(0, 20)}...`);
+            break;
           case "node_end":
             if (evt.output && evt.output.error) {
               setNodeStatus(evt.node, "error");
@@ -433,16 +616,28 @@
             }
             if (evt.output) {
               const formatted = formatOutput(evt.node, evt.output);
-              if (formatted && !nodes.get(evt.node).pre.textContent) {
+              const nodeEntry = nodes.get(evt.node);
+              if (formatted && nodeEntry && !nodeEntry.pre.textContent) {
                 setNodeOutput(evt.node, formatted);
               }
             }
             break;
+          case "response":
+            // New: render response with expandable input
+            renderResponse(evt);
+            currentTurnTools = []; // Reset for next turn
+            logEvent(`response: completed (${evt.duration_ms || 0}ms)`);
+            break;
           case "assistant_final":
-            appendMessage("assistant", evt.text || "");
+            // Legacy: only handle if no response event was received
+            // (backward compatibility for old conversation logs)
+            if (!evt._handled_by_response) {
+              appendMessage("assistant", evt.text || "");
+            }
             break;
           case "user_message":
             appendMessage("user", evt.text || "");
+            currentTurnTools = []; // Reset tools on new user message
             break;
           case "time_context":
             logEvent("time_context: " + (evt.value ? "matched" : "none"));
@@ -510,6 +705,10 @@
         createNodeCards();
         if (profile.node_cache) {
           Object.entries(profile.node_cache).forEach(([node, entry]) => {
+            // Skip conversation-level tools and legacy FINAL - they're not nodes anymore
+            if (CONVERSATION_TOOLS.includes(node) || node === "FINAL") {
+              return;
+            }
             if (entry.output) {
               setNodeStatus(node, "cache");
               setNodeOutput(node, formatOutput(node, entry.output));

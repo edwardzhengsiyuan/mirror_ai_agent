@@ -12,6 +12,36 @@ COMMON_PREREQS = [
     "WUXING_PREFS",
 ]
 
+# Persistent nodes: cached in profile.node_cache, user-level lifetime
+PERSISTENT_NODES = [
+    "PAIPAN",
+    "OVERALL",
+    "SHISHEN",
+    "GEJU",
+    "WUXING_PREFS",
+    "CAREER",
+    "RELATIONSHIP",
+    "HEALTH",
+    "GUIREN",
+    "LIUQIN",
+    "XINGGE",
+    "OTHER",
+]
+
+# Conversation-level tools: stored in conversation JSONL, per-invocation
+CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"]
+
+# Aspect nodes that depend on COMMON_PREREQS
+ASPECT_NODES = [
+    "CAREER",
+    "RELATIONSHIP",
+    "HEALTH",
+    "GUIREN",
+    "LIUQIN",
+    "XINGGE",
+    "OTHER",
+]
+
 DEPS: Dict[str, List[str]] = {
     "PAIPAN": [],
     "OVERALL": ["PAIPAN"],
@@ -25,7 +55,7 @@ DEPS: Dict[str, List[str]] = {
     "LIUQIN": COMMON_PREREQS,
     "XINGGE": COMMON_PREREQS,
     "OTHER": COMMON_PREREQS,
-    "FINAL": COMMON_PREREQS,
+    # Note: FINAL removed from DEPS - it's now a "response", not a node
 }
 
 
