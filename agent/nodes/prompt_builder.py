@@ -64,13 +64,11 @@ def build_prompt(
 ) -> Dict[str, str]:
     paipan = cache.get("PAIPAN", {}).get("output", {})
     paipan_results = paipan.get("paipan_results", "")
-    liupan_results = paipan.get("liupan_results", "")
     guji_results = paipan.get("guji_results", "")
     overall = cache.get("OVERALL", {}).get("output", {}).get("content", "")
     shishen = cache.get("SHISHEN", {}).get("output", {}).get("content", "")
     geju = cache.get("GEJU", {}).get("output", {}).get("content", "")
     wuxing = cache.get("WUXING_PREFS", {}).get("output", {}).get("content", "")
-    time_context = cache.get("TIME_CONTEXT", {}).get("output")
 
     if node in FIXED_PROMPTS:
         prompt_text = _load_prompt(FIXED_PROMPTS[node])
@@ -79,10 +77,21 @@ def build_prompt(
         prompt_text = _load_prompt(config[node])
 
     question_line = f"User question: {question}\n" if question else ""
-    time_block = f"TIME_CONTEXT:\n{time_context}\n" if time_context else ""
+
     aspect_blocks = ""
     history_block = ""
+    year_data_text = ""
+
     if node == "FINAL":
+        # Extract year_data from TIME_CONTEXT only for FINAL node
+        time_context = cache.get("TIME_CONTEXT", {}).get("output")
+        if isinstance(time_context, dict):
+            year_data_list = time_context.get("year_data", [])
+            if year_data_list:
+                year_data_text = "\n目标年份详情:\n"
+                for yd in year_data_list:
+                    year_data_text += f"\n{yd['year']}年:\n{yd['data']}\n"
+
         parts = []
         for aspect in ASPECT_NODES:
             content = cache.get(aspect, {}).get("output", {}).get("content", "")
@@ -102,9 +111,8 @@ def build_prompt(
         f"{question_line}"
         f"{history_block}"
         f"Paipan:\n{paipan_results}\n"
-        f"Liupan:\n{liupan_results}\n"
         f"Guji:\n{guji_results}\n"
-        f"{time_block}"
+        f"{year_data_text}"
         f"OVERALL:\n{overall}\n"
         f"SHISHEN:\n{shishen}\n"
         f"GEJU:\n{geju}\n"
