@@ -12,6 +12,7 @@
 - Caching is per profile object; in-flight de-dup uses (profile object, node, inputs hash).
 - **Conversation-level data**: PLANNER, TIME_CONTEXT, and Response are stored in conversation JSONL, not profile.node_cache.
 - LLM calls default to stub if no API config; live tests are gated by env.
+- **Web UI**: 3-column layout (sidebar/chat/info), streaming output, Markdown rendering, Chinese node names, conversation history.
 - Agent rulebook lives in `CLAUDE.md`.
 - Engine API reference lives in `bazi/README.md`.
 
@@ -248,7 +249,47 @@
 - **对话级工具**（PLANNER, TIME_CONTEXT）：在用户消息下方以内联方式展示，可点击展开查看输入输出详情。
 - **Response**：在对话面板显示最终回答，可点击展开查看输入摘要和完整 prompt。
 
-## 15. 前端/服务对接指南
+## 15. Web UI / 前端界面
+
+### 15.1 布局架构
+Web UI 采用三列布局（类似 ChatGPT/Claude 风格）：
+```
+┌─────────────┬─────────────────────┬──────────────┐
+│  左侧边栏    │      中间对话区      │   右侧面板    │
+│  (260px)    │       (flex)        │   (340px)    │
+├─────────────┼─────────────────────┼──────────────┤
+│ 对话历史列表 │     聊天消息        │  用户档案     │
+│             │     Tool Cards      │  节点输出     │
+│             │     输入框          │  事件日志     │
+├─────────────┤                     │              │
+│ 用户信息     │                     │              │
+│ 设置按钮     │                     │              │
+└─────────────┴─────────────────────┴──────────────┘
+```
+
+### 15.2 核心功能
+- **流式响应显示**：监听 `response_delta` 事件实时渲染 LLM 输出
+- **Tool Call 即时显示**：`tool_call` 事件触发时立即创建占位卡片，`tool_invocation` 完成后更新
+- **Markdown 渲染**：使用 marked.js 渲染 assistant 消息（标题、列表、代码块、引用）
+- **中文节点名称**：`NODE_NAMES_ZH` 映射（如 PAIPAN→排盘, CAREER→事业）
+- **对话历史侧边栏**：通过 `/api/session_metadata` 获取会话列表及首条消息预览
+- **响应式设计**：移动端（<1024px）自动隐藏侧边栏
+
+### 15.3 后端 API
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/session_metadata` | GET | 返回会话列表及首条消息预览 |
+| `/api/sessions` | GET/POST | 会话列表/创建新会话 |
+| `/api/users` | GET/POST | 用户列表/创建用户 |
+| `/api/profile` | GET | 获取用户档案 |
+| `/api/history` | GET | 获取会话历史消息 |
+| `/api/ask_stream` | POST | 流式问答（SSE） |
+
+### 15.4 文件
+- `web/index.html`：前端 HTML/CSS/JS（单文件）
+- `web_server.py`：Flask 后端
+
+## 16. 前端/服务对接指南
 - 当前不内置 HTTP 层，建议自行封装薄的 API 服务，调用链：加载 profile → `run_turn(profile, question, now=None)` → 保存 profile → 返回 `result`。
 - Profile 位置：推荐 `storage/users/<user_id>/profile.json`（可用 `agent/storage/paths.py` 生成）；会话日志可选写入 `storage/users/<user_id>/conversations/<session>.jsonl`（使用 `conversation_store.append_event`）。
 - 新会话：

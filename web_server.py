@@ -186,6 +186,43 @@ def create_app(
             sessions = sorted([p for p in os.listdir(convo_dir) if p.endswith(".jsonl")])
         return jsonify({"sessions": sessions})
 
+    def get_first_message_preview(convo_path: str, max_len: int = 50) -> str:
+        """Extract the first user message as a preview for the conversation list."""
+        try:
+            with open(convo_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        event = json.loads(line)
+                        if event.get("type") == "user_message":
+                            text = event.get("text", "").strip()
+                            if text:
+                                return text[:max_len] + ("..." if len(text) > max_len else "")
+                    except json.JSONDecodeError:
+                        continue
+        except (OSError, IOError):
+            pass
+        return ""
+
+    @app.route("/api/session_metadata", methods=["GET"])
+    def get_session_metadata() -> Response:
+        """Return session list with first message preview for conversation sidebar."""
+        user_id = (request.args.get("user_id") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id required"}), 400
+        convo_dir = conversation_dir(user_id)
+        sessions = []
+        if os.path.exists(convo_dir):
+            for fname in sorted(os.listdir(convo_dir), reverse=True):
+                if not fname.endswith(".jsonl"):
+                    continue
+                preview = get_first_message_preview(os.path.join(convo_dir, fname))
+                sessions.append({
+                    "session_id": fname,
+                    "preview": preview,
+                    "timestamp": fname.replace(".jsonl", "")
+                })
+        return jsonify({"sessions": sessions})
+
     @app.route("/api/sessions", methods=["POST"])
     def create_session() -> Response:
         data = request.get_json(force=True) or {}
@@ -214,6 +251,8 @@ def create_app(
             return jsonify({"error": "session not found"}), 404
         messages = []
         tool_invocations = []
+        # events: ordered list of all displayable events
+        events = []
         with open(convo_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
@@ -222,21 +261,29 @@ def create_app(
                     continue
                 event_type = event.get("type")
                 if event_type == "user_message":
-                    messages.append({"role": "user", "text": event.get("text", "")})
+                    msg = {"role": "user", "text": event.get("text", "")}
+                    messages.append(msg)
+                    events.append({"type": "message", "data": msg})
                 elif event_type == "response":
                     # New response format with input_summary
-                    messages.append({
+                    msg = {
                         "role": "assistant",
                         "text": event.get("text", ""),
                         "input_summary": event.get("input_summary"),
-                    })
+                        "llm_prompt": event.get("llm_prompt"),
+                    }
+                    messages.append(msg)
+                    events.append({"type": "message", "data": msg})
                 elif event_type == "assistant_final":
                     # Legacy format - only add if no response was added for this turn
                     if not messages or messages[-1].get("role") != "assistant":
-                        messages.append({"role": "assistant", "text": event.get("text", "")})
+                        msg = {"role": "assistant", "text": event.get("text", "")}
+                        messages.append(msg)
+                        events.append({"type": "message", "data": msg})
                 elif event_type == "tool_invocation":
                     tool_invocations.append(event)
-        payload: Dict[str, object] = {"messages": messages}
+                    events.append({"type": "tool_invocation", "data": event})
+        payload: Dict[str, object] = {"messages": messages, "events": events}
         if include_inputs:
             payload["llm_prompts"] = load_latest_llm_prompts(convo_path)
         if tool_invocations:

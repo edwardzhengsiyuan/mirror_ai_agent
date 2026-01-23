@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Bazi Agent Web</title>
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
       :root {
         --bg: #f6f4ef;
@@ -15,6 +17,7 @@
         --danger: #b04c4c;
         --ok: #2d7a55;
         --warn: #b2782d;
+        --sidebar-bg: #f0ede7;
       }
 
       * {
@@ -25,110 +28,251 @@
         margin: 0;
         font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
         color: var(--ink);
-        background: radial-gradient(circle at top, #fbfaf7, var(--bg));
+        background: var(--bg);
       }
 
-      header {
-        padding: 16px 24px;
-        border-bottom: 1px solid var(--border);
-        background: var(--panel);
+      /* 3-column layout */
+      .app-container {
+        display: grid;
+        grid-template-columns: 260px 1fr 340px;
+        height: 100vh;
+      }
+
+      /* Left sidebar */
+      .sidebar {
         display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
-        align-items: flex-end;
-        justify-content: space-between;
+        flex-direction: column;
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--border);
       }
 
-      header h1 {
-        margin: 0;
-        font-size: 20px;
+      .sidebar-header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar-header h1 {
+        margin: 0 0 12px;
+        font-size: 18px;
         letter-spacing: 1px;
       }
 
-      .controls {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 12px;
-        width: min(820px, 100%);
-      }
-
-      label {
-        font-size: 12px;
-        color: var(--muted);
-        display: block;
-        margin-bottom: 6px;
-      }
-
-      select,
-      input,
-      textarea,
-      button {
+      #newChatBtn {
         width: 100%;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border);
-        font-size: 14px;
-      }
-
-      button {
+        padding: 10px;
         background: var(--accent);
         color: #fff;
         border: none;
+        border-radius: 8px;
         cursor: pointer;
+        font-size: 14px;
       }
 
-      button.secondary {
-        background: #3a3a3a;
+      #newChatBtn:hover {
+        opacity: 0.9;
       }
 
-      main {
-        display: grid;
-        grid-template-columns: minmax(280px, 1.1fr) minmax(300px, 1fr);
-        gap: 16px;
-        padding: 16px 24px 24px;
+      .conversation-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px;
       }
 
-      .panel {
+      .conversation-item {
+        padding: 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-bottom: 4px;
+        transition: background 0.15s;
+      }
+
+      .conversation-item:hover {
         background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 16px;
-        min-height: 200px;
       }
 
-      .panel h2 {
-        margin: 0 0 12px;
-        font-size: 16px;
+      .conversation-item.active {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .conversation-item.active .conv-time {
+        color: rgba(255, 255, 255, 0.7);
+      }
+
+      .conv-preview {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-bottom: 4px;
+      }
+
+      .conv-time {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .sidebar-footer {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .user-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .user-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .user-details {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .user-name {
+        font-weight: 600;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .user-birth {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      #settingsBtn {
+        width: 100%;
+        padding: 8px;
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      #settingsBtn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      /* Main chat area */
+      .chat-area {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        background: var(--panel);
+      }
+
+      .chat-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .chat-title {
+        font-weight: 600;
+        font-size: 15px;
+      }
+
+      .icon-btn {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+      }
+
+      .icon-btn:hover {
+        background: var(--border);
+        color: var(--ink);
+      }
+
+      .icon-btn:active {
+        transform: scale(0.95);
+      }
+
+      .icon-btn.spinning svg {
+        animation: spin 0.8s ease-in-out;
+      }
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
       }
 
       .message {
-        padding: 10px 12px;
-        border-radius: 8px;
-        margin-bottom: 8px;
-        background: #f3f2ef;
+        padding: 12px 16px;
+        border-radius: 12px;
+        margin-bottom: 12px;
+        max-width: 85%;
       }
 
       .message.user {
         background: #e7efe9;
+        margin-left: auto;
       }
 
       .message.assistant {
         background: #f5efe5;
       }
 
+      .message.assistant.streaming {
+        border: 1px solid var(--accent);
+      }
+
       .message.tool {
         background: #f0f4f8;
         border-left: 3px solid var(--accent);
-        margin-left: 12px;
-        padding: 8px 10px;
+        padding: 10px 14px;
         font-size: 13px;
+      }
+
+      .message.tool.streaming {
+        border-left-color: var(--warn);
+        animation: pulse 1.5s infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
       }
 
       .tool-header {
         display: flex;
         align-items: center;
         gap: 8px;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
       }
 
       .tool-icon {
@@ -140,9 +284,33 @@
         font-size: 13px;
       }
 
+      .tool-status {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--warn);
+        color: #fff;
+      }
+
+      .tool-status.done {
+        background: var(--ok);
+      }
+
       .tool-summary {
         color: var(--muted);
         font-size: 12px;
+      }
+
+      .tool-stream-content {
+        margin-top: 8px;
+        padding: 8px;
+        background: #fff;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 200px;
+        overflow-y: auto;
       }
 
       .tool-details {
@@ -158,11 +326,11 @@
       }
 
       .expand-btn {
-        width: auto;
         padding: 2px 8px;
         font-size: 11px;
         background: var(--border);
         color: var(--ink);
+        border: none;
         border-radius: 4px;
         cursor: pointer;
       }
@@ -170,6 +338,70 @@
       .expand-btn:hover {
         background: var(--muted);
         color: #fff;
+      }
+
+      /* Markdown content styles */
+      .markdown-content {
+        line-height: 1.6;
+      }
+
+      .markdown-content h1,
+      .markdown-content h2,
+      .markdown-content h3 {
+        margin: 12px 0 8px;
+      }
+
+      .markdown-content h1 { font-size: 1.4em; }
+      .markdown-content h2 { font-size: 1.2em; }
+      .markdown-content h3 { font-size: 1.1em; }
+
+      .markdown-content ul,
+      .markdown-content ol {
+        margin: 8px 0;
+        padding-left: 20px;
+      }
+
+      .markdown-content li {
+        margin: 4px 0;
+      }
+
+      .markdown-content code {
+        background: #f3f3f3;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: "SF Mono", Consolas, monospace;
+        font-size: 0.9em;
+      }
+
+      .markdown-content pre {
+        background: #f3f3f3;
+        padding: 12px;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+
+      .markdown-content pre code {
+        background: none;
+        padding: 0;
+      }
+
+      .markdown-content blockquote {
+        border-left: 3px solid var(--accent);
+        padding-left: 12px;
+        margin: 8px 0;
+        color: var(--muted);
+      }
+
+      .markdown-content p {
+        margin: 8px 0;
+      }
+
+      .markdown-content p:first-child {
+        margin-top: 0;
+      }
+
+      .markdown-content p:last-child {
+        margin-bottom: 0;
       }
 
       .response-input {
@@ -186,12 +418,14 @@
       }
 
       .view-input-btn {
-        width: auto;
         padding: 4px 10px;
         font-size: 11px;
         margin-top: 8px;
         background: var(--border);
         color: var(--ink);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
       }
 
       .view-input-btn:hover {
@@ -208,11 +442,87 @@
         color: var(--muted);
       }
 
-      .chat-input {
-        display: grid;
-        grid-template-columns: 1fr 120px;
-        gap: 10px;
-        margin-top: 12px;
+      .chat-input-area {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        gap: 12px;
+      }
+
+      .chat-input-area textarea {
+        flex: 1;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 14px;
+        resize: none;
+        font-family: inherit;
+      }
+
+      .chat-input-area textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      #sendBtn {
+        padding: 10px 24px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      #sendBtn:hover {
+        opacity: 0.9;
+      }
+
+      #sendBtn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Right info panel */
+      .info-panel {
+        display: flex;
+        flex-direction: column;
+        background: var(--sidebar-bg);
+        border-left: 1px solid var(--border);
+        overflow-y: auto;
+      }
+
+      .profile-section {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .profile-section h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .profile-birth {
+        font-size: 13px;
+        margin-bottom: 8px;
+      }
+
+      .profile-gender {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .nodes-section {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+      }
+
+      .nodes-section h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
       }
 
       .nodes details {
@@ -220,19 +530,20 @@
         border-radius: 8px;
         padding: 8px 10px;
         margin-bottom: 10px;
-        background: #faf9f6;
+        background: var(--panel);
       }
 
       .nodes summary {
         cursor: pointer;
         font-weight: 600;
+        font-size: 13px;
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
 
       .status {
-        font-size: 12px;
+        font-size: 11px;
         padding: 2px 8px;
         border-radius: 999px;
         background: #ddd;
@@ -265,133 +576,359 @@
         background: #f3f3f3;
         white-space: pre-wrap;
         word-break: break-word;
-        max-height: 240px;
+        max-height: 200px;
         overflow: auto;
+        font-size: 12px;
       }
 
-      .log {
-        grid-column: 1 / -1;
+      .log-section {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .log-section h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        color: var(--muted);
       }
 
       .log-list {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--muted);
-        max-height: 160px;
+        max-height: 120px;
         overflow: auto;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 2px;
       }
 
-      .inline {
+      /* Settings modal */
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
         display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .modal-overlay.hidden {
+        display: none;
+      }
+
+      .modal {
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 480px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+
+      .modal h2 {
+        margin: 0 0 16px;
+        font-size: 18px;
+      }
+
+      .modal h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .settings-section {
+        margin-bottom: 16px;
+      }
+
+      .settings-divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 20px 0;
+      }
+
+      .modal-close {
+        float: right;
+        background: none;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: var(--muted);
+      }
+
+      .form-group {
+        margin-bottom: 16px;
+      }
+
+      .form-group label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .form-group input,
+      .form-group select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+      }
+
+      .inline-group {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
         gap: 8px;
       }
 
-      .inline > * {
-        flex: 1;
+      .modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
+        margin-top: 20px;
       }
 
-      @media (max-width: 900px) {
-        main {
+      .modal-actions button {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+      }
+
+      .btn-secondary {
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+      }
+
+      /* Responsive design */
+      @media (max-width: 1024px) {
+        .app-container {
           grid-template-columns: 1fr;
         }
 
-        .chat-input {
-          grid-template-columns: 1fr;
+        .sidebar,
+        .info-panel {
+          display: none;
+        }
+
+        .chat-header {
+          flex-wrap: wrap;
         }
       }
     </style>
   </head>
   <body>
-    <header>
-      <div>
-        <h1>Bazi Agent Web</h1>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px;">
-          选择用户与会话，输入问题后将流式展示节点输出
+    <div class="app-container">
+      <!-- Left sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>Bazi Agent</h1>
+          <button id="newChatBtn">+ 新对话</button>
         </div>
-      </div>
-        <div class="controls">
-          <div>
-            <label>用户</label>
+        <div class="conversation-list" id="conversationList"></div>
+        <div class="sidebar-footer">
+          <div class="user-info" id="userInfo">
+            <div class="user-avatar">?</div>
+            <div class="user-details">
+              <div class="user-name">未选择用户</div>
+              <div class="user-birth"></div>
+            </div>
+          </div>
+          <button id="settingsBtn">设置</button>
+        </div>
+      </aside>
+
+      <!-- Main chat area -->
+      <main class="chat-area">
+        <div class="chat-header">
+          <div class="chat-title">对话</div>
+          <button id="refreshBtn" class="icon-btn" title="刷新">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 4v6h-6"/>
+              <path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
+        <div class="messages" id="messages"></div>
+        <div class="chat-input-area">
+          <textarea id="question" rows="3" placeholder="输入问题..."></textarea>
+          <button id="sendBtn">发送</button>
+        </div>
+      </main>
+
+      <!-- Right info panel -->
+      <aside class="info-panel">
+        <div class="profile-section" id="profileSection">
+          <h3>用户档案</h3>
+          <div class="profile-birth">-</div>
+          <div class="profile-gender">-</div>
+        </div>
+        <div class="nodes-section">
+          <h3>节点输出</h3>
+          <div id="nodes" class="nodes"></div>
+        </div>
+        <div class="log-section">
+          <h3>事件日志</h3>
+          <div id="eventLog" class="log-list"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay hidden" id="settingsModal">
+      <div class="modal">
+        <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
+        <h2>设置</h2>
+
+        <!-- User Selection Section -->
+        <div class="settings-section">
+          <h3>当前用户</h3>
+          <div class="form-group">
+            <label>选择用户</label>
             <select id="userSelect"></select>
           </div>
-          <div>
-            <label>会话</label>
-            <select id="sessionSelect"></select>
-          </div>
-          <div>
+          <div class="form-group">
             <label>历史轮数 (Response prompt)</label>
             <input id="historyN" type="number" min="0" value="5" />
           </div>
-          <div class="inline">
-            <button id="newSessionBtn" class="secondary">新会话</button>
-            <button id="refreshBtn">刷新</button>
-          </div>
-        <details>
-          <summary style="cursor:pointer;font-size:12px;color:var(--muted);">创建新用户</summary>
-          <div style="margin-top:10px;display:grid;gap:8px;">
+        </div>
+
+        <hr class="settings-divider" />
+
+        <!-- Create User Section -->
+        <div class="settings-section">
+          <h3>创建新用户</h3>
+          <div class="form-group">
+            <label>用户 ID</label>
             <input id="newUserId" placeholder="user_id" />
-            <div class="inline">
+          </div>
+          <div class="form-group">
+            <label>出生日期</label>
+            <div class="inline-group">
               <input id="birthYear" type="number" placeholder="年" />
               <input id="birthMonth" type="number" placeholder="月" />
               <input id="birthDay" type="number" placeholder="日" />
             </div>
-            <div class="inline">
+          </div>
+          <div class="form-group">
+            <label>出生时间</label>
+            <div class="inline-group">
               <input id="birthHour" type="number" placeholder="时" />
               <input id="birthMinute" type="number" placeholder="分" />
               <input id="birthSecond" type="number" placeholder="秒" />
             </div>
-            <div class="inline">
-              <select id="gender">
-                <option value="male">male</option>
-                <option value="female">female</option>
-              </select>
-              <select id="timeUnknown">
-                <option value="false">已知时辰</option>
-                <option value="true">未知时辰</option>
-              </select>
-            </div>
-            <button id="createUserBtn">创建用户</button>
           </div>
-        </details>
-      </div>
-    </header>
-    <main>
-      <section class="panel">
-        <h2>对话</h2>
-        <div id="messages"></div>
-        <div class="chat-input">
-          <textarea id="question" rows="3" placeholder="输入问题..."></textarea>
-          <button id="sendBtn">发送</button>
+          <div class="form-group">
+            <label>性别</label>
+            <select id="gender">
+              <option value="male">男 (male)</option>
+              <option value="female">女 (female)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>时辰</label>
+            <select id="timeUnknown">
+              <option value="false">已知时辰</option>
+              <option value="true">未知时辰</option>
+            </select>
+          </div>
+          <button class="btn-primary" id="createUserBtn" style="width: 100%;">创建用户</button>
         </div>
-      </section>
-      <section class="panel nodes">
-        <h2>节点输出</h2>
-        <div id="nodes"></div>
-      </section>
-      <section class="panel log">
-        <h2>事件日志</h2>
-        <div id="eventLog" class="log-list"></div>
-      </section>
-    </main>
+
+        <div class="modal-actions">
+          <button class="btn-primary" onclick="closeSettingsModal()">完成</button>
+        </div>
+      </div>
+    </div>
 
     <script>
+      // Chinese node names mapping
+      const NODE_NAMES_ZH = {
+        "PAIPAN": "排盘",
+        "OVERALL": "整体分析",
+        "SHISHEN": "十神分析",
+        "GEJU": "格局分析",
+        "WUXING_PREFS": "五行偏好",
+        "CAREER": "事业",
+        "RELATIONSHIP": "感情",
+        "HEALTH": "健康",
+        "GUIREN": "贵人",
+        "LIUQIN": "六亲",
+        "XINGGE": "性格",
+        "OTHER": "其他",
+        "PLANNER": "规划器",
+        "TIME_CONTEXT": "时间上下文",
+        "RESPONSE": "回答生成"
+      };
+
+      // Tool names mapping
+      const TOOL_NAMES_ZH = {
+        "planner": "规划器",
+        "PLANNER": "规划器",
+        "time_context_tool": "时间上下文",
+        "TIME_CONTEXT": "时间上下文"
+      };
+
+      function getChineseNodeName(node) {
+        return NODE_NAMES_ZH[node?.toUpperCase()] || node;
+      }
+
+      function getChineseToolName(tool) {
+        return TOOL_NAMES_ZH[tool] || TOOL_NAMES_ZH[tool?.toUpperCase()] || tool;
+      }
+
+      // Markdown rendering
+      function renderMarkdown(text) {
+        if (!text) return "";
+        if (typeof marked !== "undefined") {
+          marked.setOptions({ breaks: true, gfm: true });
+          return marked.parse(text);
+        }
+        // Fallback: escape HTML and convert newlines
+        return escapeHtml(text).replace(/\n/g, "<br>");
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text || "";
+        return div.innerHTML;
+      }
+
       // Persistent nodes only - PLANNER, TIME_CONTEXT, FINAL removed (now tools/response)
       const nodeOrder = [
-        "PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS",
-        "CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER"
+        "PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS",
+        "CAREER", "RELATIONSHIP", "HEALTH", "GUIREN", "LIUQIN", "XINGGE", "OTHER"
       ];
+
       // Conversation-level tools (displayed inline in chat)
       const CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"];
-      // Track tool invocations for current turn
+
+      // State management
       let currentTurnTools = [];
+      let currentStreamingTool = null;
+      let currentResponseMessage = null;
       const nodes = new Map();
+
+      // DOM elements
       const messagesEl = document.getElementById("messages");
       const eventLogEl = document.getElementById("eventLog");
       const nodesEl = document.getElementById("nodes");
       const userSelect = document.getElementById("userSelect");
-      const sessionSelect = document.getElementById("sessionSelect");
+      const conversationListEl = document.getElementById("conversationList");
+      let currentSessionId = null;
 
       function logEvent(text) {
         const line = document.createElement("div");
@@ -403,27 +940,99 @@
       function appendMessage(role, text) {
         const div = document.createElement("div");
         div.className = `message ${role}`;
-        div.textContent = text;
+        if (role === "assistant") {
+          div.innerHTML = `<div class="markdown-content">${renderMarkdown(text)}</div>`;
+        } else {
+          div.textContent = text;
+        }
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      // Streaming tool card functions
+      function createStreamingToolCard(evt) {
+        const div = document.createElement("div");
+        div.className = "message tool streaming";
+        const toolName = getChineseToolName(evt.tool);
+        div.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status">处理中...</span>
+          </div>
+          <div class="tool-stream-content"></div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return {
+          element: div,
+          content: "",
+          contentEl: div.querySelector(".tool-stream-content"),
+          statusEl: div.querySelector(".tool-status")
+        };
+      }
+
+      function appendToToolStream(toolCard, delta) {
+        if (!toolCard || !delta) return;
+        toolCard.content += delta;
+        toolCard.contentEl.textContent = toolCard.content;
+        toolCard.contentEl.scrollTop = toolCard.contentEl.scrollHeight;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function finalizeToolCard(toolCard, evt) {
+        if (!toolCard) return;
+        toolCard.element.classList.remove("streaming");
+        toolCard.statusEl.textContent = "完成";
+        toolCard.statusEl.classList.add("done");
+
+        // Update with final output
+        const toolName = getChineseToolName(evt.tool);
+        const summary = formatToolSummary(evt);
+
+        toolCard.element.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status done">完成</span>
+            <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
+          </div>
+          <div class="tool-summary">${summary}</div>
+          <div class="tool-details hidden">
+            <div><strong>输入:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <div><strong>输出:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
+          </div>
+        `;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function toggleToolDetails(btn) {
+        const details = btn.closest(".message").querySelector(".tool-details");
+        details.classList.toggle("hidden");
+        btn.textContent = details.classList.contains("hidden") ? "展开" : "收起";
       }
 
       function renderToolInvocation(evt) {
         const div = document.createElement("div");
         div.className = "message tool";
+        const toolName = getChineseToolName(evt.tool);
         div.innerHTML = `
           <div class="tool-header">
             <span class="tool-icon">&#x1F527;</span>
-            <span class="tool-name">${evt.tool}</span>
-            <button class="expand-btn" onclick="this.parentElement.parentElement.querySelector('.tool-details').classList.toggle('hidden'); this.textContent = this.textContent === '展开' ? '收起' : '展开';">展开</button>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status done">完成</span>
+            <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
           </div>
           <div class="tool-summary">${formatToolSummary(evt)}</div>
           <div class="tool-details hidden">
-            <div><strong>Input:</strong></div>
+            <div><strong>输入:</strong></div>
             <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
-            <div><strong>Output:</strong></div>
+            <div><strong>输出:</strong></div>
             <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
-            <div style="color:var(--muted);font-size:11px;">Duration: ${evt.duration_ms || 0}ms</div>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
           </div>
         `;
         messagesEl.appendChild(div);
@@ -431,18 +1040,68 @@
       }
 
       function formatToolSummary(evt) {
-        if (evt.tool === "PLANNER") {
+        if (evt.tool === "PLANNER" || evt.tool === "planner") {
           const aspects = evt.output?.aspects || [];
           const times = evt.output?.times || [];
           const years = times.filter(t => t.year).map(t => t.year).join(", ");
-          return `aspects: [${aspects.join(", ")}]${years ? `, years: ${years}` : ""}`;
+          return `方面: [${aspects.join(", ")}]${years ? `, 年份: ${years}` : ""}`;
         }
-        if (evt.tool === "TIME_CONTEXT") {
+        if (evt.tool === "TIME_CONTEXT" || evt.tool === "time_context_tool") {
           const yearData = evt.output?.year_data || [];
           const years = yearData.map(yd => yd.year).join(", ");
           return years ? `${years}年` : "无年份数据";
         }
         return JSON.stringify(evt.output).slice(0, 60) + "...";
+      }
+
+      // Streaming response functions
+      function createStreamingResponseMessage() {
+        const div = document.createElement("div");
+        div.className = "message assistant streaming";
+        div.innerHTML = `<div class="markdown-content"></div>`;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return {
+          element: div,
+          content: "",
+          textEl: div.querySelector(".markdown-content")
+        };
+      }
+
+      function finalizeResponseMessage(respMsg, evt) {
+        if (!respMsg) return;
+        respMsg.element.classList.remove("streaming");
+
+        let inputSummaryHtml = "";
+        if (evt.input_summary) {
+          const summary = evt.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${evt.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(evt.llm_prompt.system_prompt || "")}\n\n${escapeHtml(evt.llm_prompt.user_prompt || "")}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        respMsg.element.innerHTML = `
+          <div class="markdown-content">${renderMarkdown(evt.text || respMsg.content)}</div>
+          <button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>
+          ${inputSummaryHtml}
+        `;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
       function renderResponse(evt) {
@@ -454,19 +1113,19 @@
           const summary = evt.input_summary;
           inputSummaryHtml = `
             <div class="response-input hidden">
-              <div class="input-summary-item"><span class="input-summary-label">Question:</span> ${summary.question || ""}</div>
-              <div class="input-summary-item"><span class="input-summary-label">Aspects:</span> ${(summary.aspects || []).join(", ")}</div>
-              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">Time:</span> ${summary.time_context_summary}</div>` : ""}
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
               ${summary.node_summaries ? `
-                <div class="input-summary-item"><span class="input-summary-label">Node Summaries:</span></div>
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
                 <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
-                  ${Object.entries(summary.node_summaries).map(([k,v]) => `<li><strong>${k}:</strong> ${v}</li>`).join("")}
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
                 </ul>
               ` : ""}
               ${evt.llm_prompt ? `
                 <details style="margin-top:8px;">
-                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">View Full Prompt</summary>
-                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${evt.llm_prompt.system_prompt || ""}\n\n${evt.llm_prompt.user_prompt || ""}</pre>
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(evt.llm_prompt.system_prompt || "")}\n\n${escapeHtml(evt.llm_prompt.user_prompt || "")}</pre>
                 </details>
               ` : ""}
             </div>
@@ -474,7 +1133,7 @@
         }
 
         div.innerHTML = `
-          <div class="response-text">${evt.text || ""}</div>
+          <div class="markdown-content">${renderMarkdown(evt.text || "")}</div>
           <button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>
           ${inputSummaryHtml}
         `;
@@ -491,7 +1150,7 @@
           detail.dataset.node = node;
           const summary = document.createElement("summary");
           const title = document.createElement("span");
-          title.textContent = node;
+          title.textContent = getChineseNodeName(node);
           const status = document.createElement("span");
           status.className = "status";
           status.textContent = "idle";
@@ -499,7 +1158,7 @@
           summary.appendChild(status);
           const promptDetail = document.createElement("details");
           const promptSummary = document.createElement("summary");
-          promptSummary.textContent = "Input";
+          promptSummary.textContent = "输入";
           const promptPre = document.createElement("pre");
           promptPre.textContent = "";
           promptDetail.appendChild(promptSummary);
@@ -558,54 +1217,87 @@
         switch (evt.type) {
           case "session":
             if (evt.session_id) {
-              ensureSessionOption(evt.session_id);
+              currentSessionId = evt.session_id;
+              loadConversationList();
             }
-            // Reset current turn tools on new session
             currentTurnTools = [];
             break;
+
           case "plan":
             logEvent(`plan: ${JSON.stringify(evt.plan)}`);
             break;
+
           case "plan_update":
             logEvent(`plan_update: ${JSON.stringify(evt.plan)}`);
             break;
+
           case "tool_call":
+            // Immediate display of tool card when tool starts
+            if (evt.tool === "planner" || evt.tool === "time_context_tool") {
+              currentStreamingTool = createStreamingToolCard(evt);
+            }
             logEvent(`tool_call: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
             break;
+
           case "tool_result":
             logEvent(`tool_result: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
             break;
+
           case "tool_invocation":
-            // New: render tool invocation inline in chat
-            renderToolInvocation(evt);
+            // Finalize streaming tool card or render new one
+            if (currentStreamingTool &&
+                (evt.tool === "PLANNER" || evt.tool === "planner" ||
+                 evt.tool === "TIME_CONTEXT" || evt.tool === "time_context_tool")) {
+              finalizeToolCard(currentStreamingTool, evt);
+              currentStreamingTool = null;
+            } else {
+              renderToolInvocation(evt);
+            }
             currentTurnTools.push(evt);
             logEvent(`tool_invocation: ${evt.tool} (${evt.invocation_id})`);
             break;
+
           case "llm_prompt": {
             const entry = nodes.get(evt.node);
             if (entry && entry.promptPre) {
-              entry.promptPre.textContent = `SYSTEM:\\n${evt.system_prompt || ""}\\n\\nUSER:\\n${evt.user_prompt || ""}`;
+              entry.promptPre.textContent = `SYSTEM:\n${evt.system_prompt || ""}\n\nUSER:\n${evt.user_prompt || ""}`;
             }
             logEvent(`input: ${evt.node}`);
             break;
           }
+
           case "node_start":
             setNodeStatus(evt.node, "running");
             setNodeOutput(evt.node, "");
             break;
+
           case "node_cache_hit":
             setNodeStatus(evt.node, "cache");
             if (evt.output) {
               setNodeOutput(evt.node, formatOutput(evt.node, evt.output));
             }
             break;
+
           case "node_delta":
+            // Stream to node panel
             if (evt.delta) appendNodeOutput(evt.node, evt.delta);
+            // Also stream to tool card if it's PLANNER
+            if (evt.node === "PLANNER" && currentStreamingTool) {
+              appendToToolStream(currentStreamingTool, evt.delta);
+            }
             break;
+
           case "response_delta":
-            // New: streaming response delta (not shown in node panel)
+            // Streaming response display
+            if (!currentResponseMessage) {
+              currentResponseMessage = createStreamingResponseMessage();
+            }
+            currentResponseMessage.content += evt.delta || "";
+            currentResponseMessage.textEl.innerHTML = renderMarkdown(currentResponseMessage.content);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
             logEvent(`response_delta: ${(evt.delta || "").slice(0, 20)}...`);
             break;
+
           case "node_end":
             if (evt.output && evt.output.error) {
               setNodeStatus(evt.node, "error");
@@ -622,26 +1314,35 @@
               }
             }
             break;
+
           case "response":
-            // New: render response with expandable input
-            renderResponse(evt);
-            currentTurnTools = []; // Reset for next turn
-            logEvent(`response: completed (${evt.duration_ms || 0}ms)`);
+            // Finalize streaming response or render new one
+            if (currentResponseMessage) {
+              finalizeResponseMessage(currentResponseMessage, evt);
+              currentResponseMessage = null;
+            } else {
+              renderResponse(evt);
+            }
+            currentTurnTools = [];
+            logEvent(`response: 完成 (${evt.duration_ms || 0}ms)`);
             break;
+
           case "assistant_final":
             // Legacy: only handle if no response event was received
-            // (backward compatibility for old conversation logs)
             if (!evt._handled_by_response) {
               appendMessage("assistant", evt.text || "");
             }
             break;
+
           case "user_message":
             appendMessage("user", evt.text || "");
-            currentTurnTools = []; // Reset tools on new user message
+            currentTurnTools = [];
             break;
+
           case "time_context":
             logEvent("time_context: " + (evt.value ? "matched" : "none"));
             break;
+
           case "server_error":
             logEvent("server_error: " + evt.error);
             break;
@@ -656,15 +1357,50 @@
         return resp.json();
       }
 
-      function ensureSessionOption(sessionId) {
-        const options = Array.from(sessionSelect.options);
-        if (!options.find((opt) => opt.value === sessionId)) {
-          const opt = document.createElement("option");
-          opt.value = sessionId;
-          opt.textContent = sessionId;
-          sessionSelect.appendChild(opt);
+      // Conversation list functions
+      function formatSessionTime(timestamp) {
+        if (!timestamp) return "";
+        // Format: 20240115T143022.jsonl -> 2024-01-15 14:30
+        const clean = timestamp.replace(".jsonl", "");
+        const match = clean.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
+        if (match) {
+          return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
         }
-        sessionSelect.value = sessionId;
+        return timestamp;
+      }
+
+      async function loadConversationList() {
+        const userId = userSelect.value;
+        if (!userId) return;
+
+        try {
+          const data = await fetchJson(`/api/session_metadata?user_id=${encodeURIComponent(userId)}`);
+          conversationListEl.innerHTML = "";
+
+          if (data.sessions && data.sessions.length > 0) {
+            data.sessions.forEach(session => {
+              const item = document.createElement("div");
+              const isActive = session.session_id === currentSessionId;
+              item.className = "conversation-item" + (isActive ? " active" : "");
+              item.innerHTML = `
+                <div class="conv-preview">${escapeHtml(session.preview || "新对话")}</div>
+                <div class="conv-time">${formatSessionTime(session.timestamp)}</div>
+              `;
+              item.onclick = () => selectSession(session.session_id);
+              conversationListEl.appendChild(item);
+            });
+          } else {
+            conversationListEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">暂无对话历史</div>';
+          }
+        } catch (err) {
+          logEvent("加载对话列表失败: " + err.message);
+        }
+      }
+
+      async function selectSession(sessionId) {
+        currentSessionId = sessionId;
+        await loadConversationList();
+        await loadHistory();
       }
 
       async function loadUsers() {
@@ -681,6 +1417,8 @@
         }
         await loadSessions();
         await loadProfileCache();
+        await loadUserInfo();
+        await loadConversationList();
         await loadHistory();
       }
 
@@ -688,14 +1426,49 @@
         const userId = userSelect.value;
         if (!userId) return;
         const data = await fetchJson(`/api/sessions?user_id=${encodeURIComponent(userId)}`);
-        sessionSelect.innerHTML = "";
-        data.sessions.forEach((sid) => {
-          const opt = document.createElement("option");
-          opt.value = sid;
-          opt.textContent = sid;
-          sessionSelect.appendChild(opt);
-        });
-        if (data.sessions.length) sessionSelect.value = data.sessions[0];
+        if (data.sessions.length) {
+          currentSessionId = data.sessions[0];
+        } else {
+          currentSessionId = null;
+        }
+      }
+
+      async function loadUserInfo() {
+        const userId = userSelect.value;
+        if (!userId) {
+          document.getElementById("userInfo").innerHTML = `
+            <div class="user-avatar">?</div>
+            <div class="user-details">
+              <div class="user-name">未选择用户</div>
+              <div class="user-birth"></div>
+            </div>
+          `;
+          return;
+        }
+
+        try {
+          const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+          const birth = profile.birth || {};
+          const userInfoEl = document.getElementById("userInfo");
+          userInfoEl.innerHTML = `
+            <div class="user-avatar">${userId.charAt(0).toUpperCase()}</div>
+            <div class="user-details">
+              <div class="user-name">${escapeHtml(userId)}</div>
+              <div class="user-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日</div>
+            </div>
+          `;
+
+          // Update profile section in right panel
+          const profileSection = document.getElementById("profileSection");
+          const genderText = profile.gender === "male" ? "男" : profile.gender === "female" ? "女" : profile.gender;
+          profileSection.innerHTML = `
+            <h3>用户档案</h3>
+            <div class="profile-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日 ${birth.hour || 0}时${birth.minute || 0}分</div>
+            <div class="profile-gender">性别: ${genderText}${profile.birth_time_unknown ? " (时辰未知)" : ""}</div>
+          `;
+        } catch (err) {
+          logEvent("加载用户信息失败: " + err.message);
+        }
       }
 
       async function loadProfileCache() {
@@ -705,7 +1478,6 @@
         createNodeCards();
         if (profile.node_cache) {
           Object.entries(profile.node_cache).forEach(([node, entry]) => {
-            // Skip conversation-level tools and legacy FINAL - they're not nodes anymore
             if (CONVERSATION_TOOLS.includes(node) || node === "FINAL") {
               return;
             }
@@ -720,13 +1492,30 @@
       async function loadHistory() {
         messagesEl.innerHTML = "";
         const userId = userSelect.value;
-        const sessionId = sessionSelect.value;
-        if (!userId || !sessionId) return;
+        if (!userId || !currentSessionId) return;
         try {
           const data = await fetchJson(
-            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}&include_inputs=1`
+            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(currentSessionId)}&include_inputs=1`
           );
-          data.messages.forEach((msg) => appendMessage(msg.role, msg.text));
+          // Render events in order (includes messages and tool invocations)
+          if (data.events) {
+            data.events.forEach((evt) => {
+              if (evt.type === "message") {
+                const msg = evt.data;
+                if (msg.role === "assistant" && msg.input_summary) {
+                  // Render response with input summary
+                  renderResponseFromHistory(msg);
+                } else {
+                  appendMessage(msg.role, msg.text);
+                }
+              } else if (evt.type === "tool_invocation") {
+                renderToolInvocation(evt.data);
+              }
+            });
+          } else {
+            // Fallback to old format
+            data.messages.forEach((msg) => appendMessage(msg.role, msg.text));
+          }
           if (data.llm_prompts) {
             Object.entries(data.llm_prompts).forEach(([node, prompt]) => {
               setNodeInput(node, prompt.system_prompt, prompt.user_prompt);
@@ -735,6 +1524,45 @@
         } catch (err) {
           logEvent("history: " + err.message);
         }
+      }
+
+      // Render response from history with input summary
+      function renderResponseFromHistory(msg) {
+        const div = document.createElement("div");
+        div.className = "message assistant";
+
+        let inputSummaryHtml = "";
+        if (msg.input_summary) {
+          const summary = msg.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${msg.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(msg.llm_prompt.system_prompt || "")}\n\n${escapeHtml(msg.llm_prompt.user_prompt || "")}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        div.innerHTML = `
+          <div class="markdown-content">${renderMarkdown(msg.text || "")}</div>
+          ${msg.input_summary ? `<button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>` : ""}
+          ${inputSummaryHtml}
+        `;
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
       async function createUser() {
@@ -757,6 +1585,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
+        closeSettingsModal();
         await loadUsers();
       }
 
@@ -768,24 +1597,31 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user_id: userId }),
         });
-        ensureSessionOption(data.session_id);
+        currentSessionId = data.session_id;
+        await loadConversationList();
         await loadHistory();
       }
 
       async function askStream() {
         const userId = userSelect.value;
-        const sessionId = sessionSelect.value;
         const question = document.getElementById("question").value.trim();
         const historyValue = Number(document.getElementById("historyN").value || 5);
         const historyN = Number.isFinite(historyValue) ? Math.max(0, Math.floor(historyValue)) : 5;
         if (!userId || !question) return;
+
         document.getElementById("question").value = "";
+        document.getElementById("sendBtn").disabled = true;
         appendMessage("user", question);
 
         const resp = await fetch("/api/ask_stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: userId, question, session_id: sessionId, history_n: historyN }),
+          body: JSON.stringify({
+            user_id: userId,
+            question,
+            session_id: currentSessionId,
+            history_n: historyN
+          }),
         });
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -811,22 +1647,48 @@
             });
           });
         }
+        document.getElementById("sendBtn").disabled = false;
       }
 
+      // Settings modal functions
+      function openSettingsModal() {
+        document.getElementById("settingsModal").classList.remove("hidden");
+      }
+
+      function closeSettingsModal() {
+        document.getElementById("settingsModal").classList.add("hidden");
+      }
+
+      // Event listeners
       document.getElementById("sendBtn").addEventListener("click", askStream);
-      document.getElementById("refreshBtn").addEventListener("click", async () => {
-        await loadUsers();
-        await loadHistory();
+      document.getElementById("question").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          askStream();
+        }
       });
-      document.getElementById("newSessionBtn").addEventListener("click", createSession);
+      document.getElementById("refreshBtn").addEventListener("click", async () => {
+        const btn = document.getElementById("refreshBtn");
+        btn.classList.add("spinning");
+        try {
+          await loadUsers();
+          await loadHistory();
+        } finally {
+          setTimeout(() => btn.classList.remove("spinning"), 800);
+        }
+      });
+      document.getElementById("newChatBtn").addEventListener("click", createSession);
+      document.getElementById("settingsBtn").addEventListener("click", openSettingsModal);
       document.getElementById("createUserBtn").addEventListener("click", createUser);
       userSelect.addEventListener("change", async () => {
         await loadSessions();
         await loadProfileCache();
+        await loadUserInfo();
+        await loadConversationList();
         await loadHistory();
       });
-      sessionSelect.addEventListener("change", loadHistory);
 
+      // Initialize
       createNodeCards();
       loadUsers().catch((err) => logEvent("init error: " + err.message));
     </script>
