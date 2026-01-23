@@ -90,7 +90,7 @@ def build_prompt(
     if geju:
         prompt_parts.append(f"## 格局:\n{geju}")
     if wuxing:
-        prompt_parts.append(f"## 五行偏好:\n{wuxing}")
+        prompt_parts.append(f"## 五行喜忌:\n{wuxing}")
 
     # Aspect blocks (only for FINAL node, already filtered above)
     if aspect_blocks:
@@ -183,7 +183,7 @@ def build_response_prompt(
     if geju:
         prompt_parts.append(f"## 格局:\n{geju}")
     if wuxing:
-        prompt_parts.append(f"## 五行偏好:\n{wuxing}")
+        prompt_parts.append(f"## 五行喜忌:\n{wuxing}")
 
     # Aspect blocks
     if aspect_blocks:
