@@ -216,6 +216,26 @@ def ensure_node(
 
     ended_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     duration_ms = int((time.perf_counter() - started_ts) * 1000)
+
+    # Don't cache failed outputs - they should be retried on next request
+    if _is_failure_output(output):
+        _debug(f"node {node} failed, not caching duration={duration_ms}ms")
+        with _LOCK:
+            inflight = _IN_FLIGHT.pop(inflight_key, None)
+            if inflight:
+                inflight.set()
+        emit_event(
+            event_sink,
+            {
+                "type": "node_end",
+                "node": node,
+                "output": output,
+                "duration_ms": duration_ms,
+                "error": True,
+            },
+        )
+        return output
+
     entry = {
         "created_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
         "inputs_hash": inputs_hash,
@@ -446,6 +466,7 @@ def run_nodes_parallel(
     deps = {node: set(DEPS.get(node, [])) for node in ordered}
     remaining = set(ordered)
     done: set[str] = set()
+    failed_nodes: set[str] = set()  # Track nodes that failed
     futures = {}
     outputs: Dict[str, Any] = dict(precomputed_outputs or {})
     skip_nodes = skip_nodes or set()
@@ -474,6 +495,30 @@ def run_nodes_parallel(
                             outputs[node] = cached
                     done.add(node)
                     continue
+
+                # Check if any prerequisite has failed - skip this node if so
+                node_deps = deps.get(node, set())
+                failed_prereqs = node_deps & failed_nodes
+                if failed_prereqs:
+                    _debug(f"skip node {node} due to failed prereqs: {failed_prereqs}")
+                    outputs[node] = {
+                        "type": "error",
+                        "content": f"[SKIPPED:{node}] prerequisite(s) {', '.join(sorted(failed_prereqs))} failed",
+                        "error": True,
+                        "skipped": True,
+                    }
+                    emit_event(
+                        event_sink,
+                        {
+                            "type": "node_skipped",
+                            "node": node,
+                            "reason": f"prerequisite(s) {', '.join(sorted(failed_prereqs))} failed",
+                        },
+                    )
+                    done.add(node)
+                    failed_nodes.add(node)  # Mark as failed so its dependents are also skipped
+                    continue
+
                 _debug(f"submit node {node} deps={deps.get(node, set())}")
                 futures[
                     executor.submit(
@@ -490,7 +535,22 @@ def run_nodes_parallel(
             completed, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
             for fut in completed:
                 node = futures.pop(fut)
-                outputs[node] = fut.result()
+                output = fut.result()
+                outputs[node] = output
                 done.add(node)
-                _debug(f"node future complete {node}")
+
+                # Track failures to skip dependents
+                if _is_failure_output(output):
+                    _debug(f"node {node} failed, will skip dependents")
+                    failed_nodes.add(node)
+                    emit_event(
+                        event_sink,
+                        {
+                            "type": "node_failed",
+                            "node": node,
+                            "error": output.get("content", ""),
+                        },
+                    )
+                else:
+                    _debug(f"node future complete {node}")
     return outputs

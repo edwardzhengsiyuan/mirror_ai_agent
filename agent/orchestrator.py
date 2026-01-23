@@ -102,6 +102,37 @@ def run_turn(
     )
     outputs["PAIPAN"] = paipan_output
 
+    # Check for critical failures - return error response instead of generating with bad data
+    failed_nodes = [
+        n for n, o in outputs.items()
+        if isinstance(o, dict) and o.get("error") and not o.get("skipped")
+    ]
+    skipped_nodes = [
+        n for n, o in outputs.items()
+        if isinstance(o, dict) and o.get("skipped")
+    ]
+    if failed_nodes:
+        error_response = f"无法完成分析，以下节点执行失败：{', '.join(sorted(failed_nodes))}。请稍后重试。"
+        emit_event(
+            event_sink,
+            {
+                "type": "workflow_error",
+                "failed_nodes": failed_nodes,
+                "skipped_nodes": skipped_nodes,
+                "message": error_response,
+            },
+        )
+        return {
+            "plan": plan_result,
+            "outputs": outputs,
+            "time_context": None,
+            "response": error_response,
+            "tool_invocations": tool_invocations,
+            "error": True,
+            "failed_nodes": failed_nodes,
+            "skipped_nodes": skipped_nodes,
+        }
+
     # 4. Execute TIME_CONTEXT tool if needed (conversation-level, not cached)
     time_context = None
     plan_times = plan_result.get("times", [])

@@ -37,6 +37,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_multiuser_live.py -v
 | `test_cli_state.py` | UI state management events | `pytest tests/test_cli_state.py` |
 | `test_prompt_history.py` | Conversation history loading | `pytest tests/test_prompt_history.py` |
 | `test_cache_retry_on_error.py` | Auto-retry failed cache entries | `pytest tests/test_cache_retry_on_error.py` |
+| `test_error_propagation.py` | Error handling: failed nodes not cached, workflow stops, clean error response | `pytest tests/test_error_propagation.py` |
 | `test_deps_unit.py` | DAG toposort and cycle detection | `pytest tests/test_deps_unit.py` |
 | `test_planning_unit.py` | Planning functions (aspect/time detection) | `pytest tests/test_planning_unit.py` |
 | `test_tools_unit.py` | Tool validation and normalization | `pytest tests/test_tools_unit.py` |
@@ -102,7 +103,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_multiuser_live.py -v
 
 ### By Speed
 
-- **Fast (<1s)**: `test_llm_tool_stub.py`, `test_planning_tool_normalization.py`, `test_cli_state.py`, `test_prompt_history.py`, `test_cache_retry_on_error.py`, `test_deps_unit.py`, `test_planning_unit.py`, `test_tools_unit.py`, `test_prompt_builder_unit.py`, `test_bazi_property.py`, `test_bazi_frame.py`
+- **Fast (<1s)**: `test_llm_tool_stub.py`, `test_planning_tool_normalization.py`, `test_cli_state.py`, `test_prompt_history.py`, `test_cache_retry_on_error.py`, `test_error_propagation.py`, `test_deps_unit.py`, `test_planning_unit.py`, `test_tools_unit.py`, `test_prompt_builder_unit.py`, `test_bazi_property.py`, `test_bazi_frame.py`
 - **Medium (1-5s)**: `test_parallel_execution.py`, `test_event_streaming_stub.py`, `test_inflight_dedup.py`, `test_multi_time_context.py`, `test_edge_cases.py`
 - **Slow (5-30s)**: `run_local_tester.py`, `test_web_server.py`, `test_resume_cache_live_profiles.py`
 - **Live (variable)**: `test_llm_live.py`, `test_multiuser_live.py`, `run_live_suite.py`
@@ -203,7 +204,10 @@ The following areas lack test coverage:
    - Special characters and emoji in questions
    - Malformed data raises exceptions (documented as known limitation)
 
-2. **Error paths**:
+2. **Error paths** (partially addressed in `test_error_propagation.py`):
+   - Failed nodes not cached (✓ covered)
+   - Workflow stops on prerequisite failure (✓ covered)
+   - Clean error response on critical failure (✓ covered)
    - Network timeouts during LLM calls
    - Rate limiting responses
    - Invalid profile.json structure (partial: missing node_cache tested)
@@ -276,7 +280,7 @@ TEST_RESUME_PROFILE=/path/to/profile.json pytest tests/test_resume_cache_live_pr
 ```yaml
 # Stage 1: Fast unit tests
 - name: Unit Tests
-  run: .venv/bin/python -m pytest tests/test_*stub*.py tests/test_planning*.py tests/test_cli*.py tests/test_prompt*.py tests/test_cache*.py tests/test_deps*.py tests/test_tools*.py tests/test_bazi*.py -v
+  run: .venv/bin/python -m pytest tests/test_*stub*.py tests/test_planning*.py tests/test_cli*.py tests/test_prompt*.py tests/test_cache*.py tests/test_error*.py tests/test_deps*.py tests/test_tools*.py tests/test_bazi*.py -v
 
 # Stage 2: Integration tests
 - name: Integration Tests

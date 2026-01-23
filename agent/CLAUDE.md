@@ -77,14 +77,22 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 - Input hash: `_hash_inputs` JSON-serializes inputs + sha256 for cache hit checking.
 - Failure detection: `_is_failure_output` checks `output.error` or `content` starting with `[LLM_ERROR:` → treated as failure, cache cleared and re-run; tool exceptions wrapped as `[NODE_ERROR:...]` output with `error=true`.
 - Cache structure: `profile["node_cache"][node] = {"created_at","inputs_hash","output","meta":{started_at,ended_at,duration_ms}}`.
+- **Failed outputs NOT cached**: When a node fails, its output is NOT stored in cache. This ensures automatic retry on the next request without requiring manual cache eviction.
 - In-flight deduplication: During concurrency, same node in same profile instance + same inputs hash executes only once, other threads wait for event completion then reuse result.
 - Concurrency: `run_nodes_parallel` uses thread pool (default `min(8,len(nodes))`, controllable via `LLM_PARALLEL_WORKERS`). Ready nodes (dependencies completed) batch-submitted; TIME_CONTEXT skipped.
+- **Workflow stops on failure**: When a node fails, all dependent nodes are automatically skipped (marked with `error=true, skipped=true`). This prevents wasted computation and avoids generating responses with incomplete data.
 - Single node execution:
   - PAIPAN → `paipan_tool`
   - TIME_CONTEXT → `time_context_tool`
   - Others → build prompt → `llm_report_tool`
 - Retry: LLM tool layer controlled by `LLM_MAX_RETRIES` (default 2 attempts); execution layer has no additional retry wrapper.
 - Logging: `LLM_DEBUG` prints node start/end/cache hit/wait; `meta.duration_ms` records duration.
+
+### Error Handling in `run_turn`
+- After DAG execution, orchestrator checks for failed nodes (nodes with `error=true` but not `skipped`)
+- If any critical node failed, returns early with clean error response instead of generating response with bad data
+- Return structure includes: `error=true`, `failed_nodes=["NODE1", ...]`, `skipped_nodes=["NODE2", ...]`
+- Error response is user-friendly Chinese: `"无法完成分析，以下节点执行失败：...。请稍后重试。"`
 
 ---
 
@@ -114,7 +122,10 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 | `tool_invocation` | Conversation-level tool call completed, contains `{tool, invocation_id, input, output, duration_ms, llm_prompt}` |
 | `response` | Response generation completed, contains `{text, input_summary, llm_prompt, duration_ms}` |
 | `plan` | Planning result (backward compatible, also has `tool_invocation` event) |
-| `node_start` / `node_end` | Persistent node start/end; `node_end.output` is final output; cache hit has `cached=true` |
+| `node_start` / `node_end` | Persistent node start/end; `node_end.output` is final output; cache hit has `cached=true`; error has `error=true` |
+| `node_failed` | Node execution failed, contains `{node, error}` - emitted when a node completes with error |
+| `node_skipped` | Node skipped due to failed prerequisite, contains `{node, reason}` |
+| `workflow_error` | Critical failure in DAG, contains `{failed_nodes, skipped_nodes, message}` - response generation aborted |
 | `node_delta` | Streaming output fragment (`delta`/`reasoning_delta`) |
 | `response_delta` | Response streaming output fragment |
 | `tool_call` / `tool_result` | Low-level tool call and completion (paipan_tool/llm_report_tool/time_context_tool) |
