@@ -127,6 +127,26 @@ def _run_single_user(user_config: dict, question: str, now: dt.datetime) -> dict
                 "node": event.get("node"),
                 "error": event.get("error"),
             })
+        elif event_type == "tool_invocation":
+            append_event(convo_path, {
+                "ts": now.isoformat(),
+                "type": "tool_invocation",
+                "tool": event.get("tool"),
+                "invocation_id": event.get("invocation_id"),
+                "input": event.get("input"),
+                "output": event.get("output"),
+                "duration_ms": event.get("duration_ms"),
+                "llm_prompt": event.get("llm_prompt"),
+            })
+        elif event_type == "response":
+            append_event(convo_path, {
+                "ts": now.isoformat(),
+                "type": "response",
+                "text": event.get("text"),
+                "input_summary": event.get("input_summary"),
+                "llm_prompt": event.get("llm_prompt"),
+                "duration_ms": event.get("duration_ms"),
+            })
         events.append(event)
 
     history_rounds = load_recent_rounds(convo_path, 5)
