@@ -40,7 +40,6 @@ def _configure_live_env() -> tuple[bool, str, str]:
     os.environ.setdefault("LLM_DEBUG", "1")
     os.environ.setdefault("LLM_MAX_RETRIES", "3")
     os.environ.setdefault("LLM_TIMEOUT_SECONDS", "400")
-    os.environ.setdefault("LLM_TRACE", "1")
     api_base = os.environ.get("LLM_API_BASE") or os.environ.get("OPENAI_API_BASE") or ""
     api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
     enabled = os.environ.get("LLM_MODE") != "stub" and bool(api_base) and bool(api_key)
@@ -142,7 +141,8 @@ def _run_llm_full_pipeline() -> None:
     events = []
 
     def sink(event):
-        if event.get("type") == "llm_prompt":
+        event_type = event.get("type")
+        if event_type == "llm_prompt":
             append_event(
                 convo_path,
                 {
@@ -151,6 +151,38 @@ def _run_llm_full_pipeline() -> None:
                     "node": event.get("node"),
                     "system_prompt": event.get("system_prompt", ""),
                     "user_prompt": event.get("user_prompt", ""),
+                },
+            )
+        elif event_type == "llm_request":
+            append_event(
+                convo_path,
+                {
+                    "ts": now.isoformat(),
+                    "type": "llm_request",
+                    "node": event.get("node"),
+                    "model": event.get("model"),
+                    "attempt": event.get("attempt"),
+                },
+            )
+        elif event_type == "llm_response":
+            append_event(
+                convo_path,
+                {
+                    "ts": now.isoformat(),
+                    "type": "llm_response",
+                    "node": event.get("node"),
+                    "model": event.get("model"),
+                    "duration_ms": event.get("duration_ms"),
+                },
+            )
+        elif event_type == "llm_error":
+            append_event(
+                convo_path,
+                {
+                    "ts": now.isoformat(),
+                    "type": "llm_error",
+                    "node": event.get("node"),
+                    "error": event.get("error"),
                 },
             )
         events.append(event)

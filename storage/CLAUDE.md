@@ -8,13 +8,11 @@ Directory layout for user data and logs.
 
 ```
 storage/
-├── users/
-│   └── <user_id>/
-│       ├── profile.json              # User profile (includes node_cache)
-│       └── conversations/
-│           └── <session>.jsonl       # Session logs
-└── logs/
-    └── llm_trace.jsonl               # LLM call trace
+└── users/
+    └── <user_id>/
+        ├── profile.json              # User profile (includes node_cache)
+        └── conversations/
+            └── <session>.jsonl       # Session logs (includes LLM traces)
 ```
 
 ## Path Conventions
@@ -23,7 +21,6 @@ storage/
 |------|------|
 | Profile | `storage/users/<user_id>/profile.json` |
 | Conversations | `storage/users/<user_id>/conversations/<session>.jsonl` |
-| Logs | `storage/logs/` |
 
 ## Notes
 
