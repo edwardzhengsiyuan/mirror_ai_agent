@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from agent.orchestrator import run_turn
-from agent.storage.conversation_store import append_event, load_recent_rounds
+from agent.storage.conversation_store import append_event, load_recent_rounds, log_event_to_conversation
 from agent.storage.paths import session_paths
 from agent.storage.profile_store import save_profile
 
@@ -95,58 +95,7 @@ def _run_single_user(user_config: dict, question: str, now: dt.datetime) -> dict
     events = []
 
     def sink(event):
-        event_type = event.get("type")
-        if event_type == "llm_prompt":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "llm_prompt",
-                "node": event.get("node"),
-                "system_prompt": event.get("system_prompt", ""),
-                "user_prompt": event.get("user_prompt", ""),
-            })
-        elif event_type == "llm_request":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "llm_request",
-                "node": event.get("node"),
-                "model": event.get("model"),
-                "attempt": event.get("attempt"),
-            })
-        elif event_type == "llm_response":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "llm_response",
-                "node": event.get("node"),
-                "model": event.get("model"),
-                "duration_ms": event.get("duration_ms"),
-            })
-        elif event_type == "llm_error":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "llm_error",
-                "node": event.get("node"),
-                "error": event.get("error"),
-            })
-        elif event_type == "tool_invocation":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "tool_invocation",
-                "tool": event.get("tool"),
-                "invocation_id": event.get("invocation_id"),
-                "input": event.get("input"),
-                "output": event.get("output"),
-                "duration_ms": event.get("duration_ms"),
-                "llm_prompt": event.get("llm_prompt"),
-            })
-        elif event_type == "response":
-            append_event(convo_path, {
-                "ts": now.isoformat(),
-                "type": "response",
-                "text": event.get("text"),
-                "input_summary": event.get("input_summary"),
-                "llm_prompt": event.get("llm_prompt"),
-                "duration_ms": event.get("duration_ms"),
-            })
+        log_event_to_conversation(convo_path, event, ts=now.isoformat())
         events.append(event)
 
     history_rounds = load_recent_rounds(convo_path, 5)

@@ -12,7 +12,7 @@ from typing import Callable, Dict, Optional
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from agent.orchestrator import run_turn
-from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts
+from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
 
 
@@ -85,96 +85,8 @@ def create_app(
 
         return None
 
-    def log_event_to_conversation(convo_path: str, event: Dict) -> None:
-        """Log relevant events to the conversation JSONL file."""
-        event_type = event.get("type")
-
-        if event_type == "llm_prompt":
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "llm_prompt",
-                    "node": event.get("node"),
-                    "system_prompt": event.get("system_prompt", ""),
-                    "user_prompt": event.get("user_prompt", ""),
-                },
-            )
-        elif event_type == "llm_request":
-            # Always-on LLM tracing: log request before API call
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "llm_request",
-                    "node": event.get("node"),
-                    "model": event.get("model"),
-                    "attempt": event.get("attempt"),
-                    "url": event.get("url"),
-                    "timeout_seconds": event.get("timeout_seconds"),
-                    "system_prompt": event.get("system_prompt"),
-                    "user_prompt": event.get("user_prompt"),
-                    "stub": event.get("stub"),
-                },
-            )
-        elif event_type == "llm_response":
-            # Always-on LLM tracing: log response after API call
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "llm_response",
-                    "node": event.get("node"),
-                    "model": event.get("model"),
-                    "content": event.get("content"),
-                    "reasoning_content": event.get("reasoning_content"),
-                    "raw": event.get("raw"),
-                    "duration_ms": event.get("duration_ms"),
-                    "stub": event.get("stub"),
-                },
-            )
-        elif event_type == "llm_error":
-            # Always-on LLM tracing: log API errors
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "llm_error",
-                    "node": event.get("node"),
-                    "model": event.get("model"),
-                    "attempt": event.get("attempt"),
-                    "error": event.get("error"),
-                    "error_type": event.get("error_type"),
-                },
-            )
-        elif event_type == "tool_invocation":
-            # New: log tool invocations (PLANNER, TIME_CONTEXT)
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "tool_invocation",
-                    "tool": event.get("tool"),
-                    "invocation_id": event.get("invocation_id"),
-                    "input": event.get("input"),
-                    "output": event.get("output"),
-                    "duration_ms": event.get("duration_ms"),
-                    "llm_prompt": event.get("llm_prompt"),
-                },
-            )
-        elif event_type == "response":
-            # New: log response events
-            append_event(
-                convo_path,
-                {
-                    "ts": dt.datetime.now().isoformat(),
-                    "type": "response",
-                    "text": event.get("text"),
-                    "input_summary": event.get("input_summary"),
-                    "llm_prompt": event.get("llm_prompt"),
-                    "duration_ms": event.get("duration_ms"),
-                },
-            )
+    # Event logging uses shared function from conversation_store
+    # (log_event_to_conversation imported at module level)
 
     @app.route("/")
     def index() -> Response:

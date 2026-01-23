@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 from typing import Any, Dict, List
@@ -146,3 +147,91 @@ def load_llm_traces(
                 continue
             traces.append(event)
     return traces
+
+
+def log_event_to_conversation(
+    path: str,
+    event: Dict[str, Any],
+    ts: str | None = None,
+) -> None:
+    """Log a streaming event to conversation JSONL.
+
+    Shared by web server and tests. Handles all standard event types:
+    - llm_prompt: LLM call prompts (system/user) per node
+    - llm_request: LLM API request details (always-on tracing)
+    - llm_response: LLM API response (always-on tracing)
+    - llm_error: LLM API errors (always-on tracing)
+    - tool_invocation: Conversation-level tool calls (PLANNER, TIME_CONTEXT)
+    - response: Final response generation
+
+    Args:
+        path: Path to the conversation JSONL file
+        event: The event dict from event_sink callback
+        ts: Optional timestamp override (defaults to now)
+    """
+    event_type = event.get("type")
+    timestamp = ts or dt.datetime.now().isoformat()
+
+    if event_type == "llm_prompt":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "llm_prompt",
+            "node": event.get("node"),
+            "system_prompt": event.get("system_prompt", ""),
+            "user_prompt": event.get("user_prompt", ""),
+        })
+    elif event_type == "llm_request":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "llm_request",
+            "node": event.get("node"),
+            "model": event.get("model"),
+            "attempt": event.get("attempt"),
+            "url": event.get("url"),
+            "timeout_seconds": event.get("timeout_seconds"),
+            "system_prompt": event.get("system_prompt"),
+            "user_prompt": event.get("user_prompt"),
+            "stub": event.get("stub"),
+        })
+    elif event_type == "llm_response":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "llm_response",
+            "node": event.get("node"),
+            "model": event.get("model"),
+            "content": event.get("content"),
+            "reasoning_content": event.get("reasoning_content"),
+            "raw": event.get("raw"),
+            "duration_ms": event.get("duration_ms"),
+            "stub": event.get("stub"),
+        })
+    elif event_type == "llm_error":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "llm_error",
+            "node": event.get("node"),
+            "model": event.get("model"),
+            "attempt": event.get("attempt"),
+            "error": event.get("error"),
+            "error_type": event.get("error_type"),
+        })
+    elif event_type == "tool_invocation":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "tool_invocation",
+            "tool": event.get("tool"),
+            "invocation_id": event.get("invocation_id"),
+            "input": event.get("input"),
+            "output": event.get("output"),
+            "duration_ms": event.get("duration_ms"),
+            "llm_prompt": event.get("llm_prompt"),
+        })
+    elif event_type == "response":
+        append_event(path, {
+            "ts": timestamp,
+            "type": "response",
+            "text": event.get("text"),
+            "input_summary": event.get("input_summary"),
+            "llm_prompt": event.get("llm_prompt"),
+            "duration_ms": event.get("duration_ms"),
+        })

@@ -59,6 +59,10 @@ See `agent/CLAUDE.md` §4 for execution caching details.
 | `time_context` | Legacy: time context result |
 | `assistant_final` | **Deprecated** (no longer written in new conversations) |
 
+## Event Logging
+
+`conversation_store.log_event_to_conversation(path, event, ts=None)` - Shared event logging function used by web server and tests. Handles all standard event types (llm_prompt, llm_request, llm_response, llm_error, tool_invocation, response).
+
 ## Convenience Read Functions
 
 | Function | Description |
@@ -71,5 +75,5 @@ See `agent/CLAUDE.md` §4 for execution caching details.
 ## Modules
 
 - `profile_store.py`: `load_profile()`, `save_profile()`
-- `conversation_store.py`: `append_event()`, `load_recent_rounds()`, `load_tool_invocations()`, `load_responses()`, `load_llm_traces()`
+- `conversation_store.py`: `append_event()`, `log_event_to_conversation()`, `load_recent_rounds()`, `load_tool_invocations()`, `load_responses()`, `load_llm_traces()`
 - `paths.py`: `session_paths()`, `profile_path()`, `conversation_path()`
