@@ -89,7 +89,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 | `LLM_LIVE_FULL` | `0` | Set to `1` for full pipeline live test |
 | `LLM_PLANNER_MODE` | `llm` | `rule` for keyword-based planning |
 | `LLM_DEBUG` | `0` | Print debug logs |
-| `LLM_TRACE` | `0` | Log requests to `storage/logs/llm_trace.jsonl` |
+| `LLM_TRACE_RAW` | `0` | Include raw API response in llm_response events |
 | `TEST_RESUME_PROFILE` | - | Path to specific profile fixture |
 
 ---

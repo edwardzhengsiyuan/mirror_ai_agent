@@ -72,9 +72,22 @@ Time context tool that retrieves major luck/annual/monthly fortune data for targ
 
 ---
 
-## llm_report_tool(system_prompt, user_prompt, model=None, node=None, sleep_ms=None)
+## llm_report_tool(system_prompt, user_prompt, model=None, node=None, sleep_ms=None, stream=False, on_delta=None, event_sink=None)
 
 LLM call tool for generating reports.
+
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `system_prompt` | str | System prompt for the LLM |
+| `user_prompt` | str | User prompt for the LLM |
+| `model` | str \| None | Model name override (default: LLM_MODEL_FAST) |
+| `node` | str \| None | Node label for logging/tracing |
+| `sleep_ms` | int \| None | Optional delay before call |
+| `stream` | bool | Enable streaming response |
+| `on_delta` | Callable | Callback for streaming chunks |
+| `event_sink` | EventSink \| None | Event sink for LLM tracing (always-on) |
 
 **Environment Loading**
 Automatically reads `.env` from repo root (ignored if missing).
@@ -94,5 +107,13 @@ Automatically reads `.env` from repo root (ignored if missing).
 **Failure Injection**
 `LLM_FORCE_ERROR=NODE1,NODE2|ALL` returns `{"error":True,"content":"[LLM_ERROR:...]"}`
 
-**Trace**
-`LLM_TRACE=1` logs request/response/forced_error to `storage/logs/llm_trace.jsonl` (`LLM_TRACE_PATH` can override)
+**Always-On Tracing**
+When `event_sink` is provided, the following events are emitted to the session's conversation JSONL:
+
+| Event Type | When Emitted | Key Fields |
+|------------|--------------|------------|
+| `llm_request` | Before each API attempt | `node`, `model`, `attempt`, `url`, `timeout_seconds`, `system_prompt`, `user_prompt`, `stub` |
+| `llm_response` | On successful response | `node`, `model`, `content`, `reasoning_content`, `duration_ms`, `raw?`, `stub` |
+| `llm_error` | On API error (per attempt) | `node`, `model`, `attempt`, `error`, `error_type` |
+
+Set `LLM_TRACE_RAW=1` to include raw API response in `llm_response` events.

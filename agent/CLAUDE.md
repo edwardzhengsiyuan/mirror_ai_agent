@@ -90,7 +90,8 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 
 ## 5. Debugging Guide
 
-- **No response/`[LLM_ERROR:*]` error**: Check `.env` BASE/KEY; or enable `LLM_MODE=stub`; check `storage/logs/llm_trace.jsonl`.
+- **No response/`[LLM_ERROR:*]` error**: Check `.env` BASE/KEY; or enable `LLM_MODE=stub`; check conversation JSONL for `llm_request`/`llm_response`/`llm_error` events.
+- **LLM tracing**: All LLM calls are automatically traced to the session's conversation JSONL file. Use `load_llm_traces(convo_path)` to retrieve all trace events. Enable `LLM_TRACE_RAW=1` to include raw API responses.
 - **Chart calculation failed**: Verify profile `birth` field is complete (includes hour:minute:second), `gender` and `birth_time_unknown` are valid; date must be within `lunar-python` supported range.
 - **Cache miss/repeated execution**: Check if inputs were modified (causing `inputs_hash` change); `LLM_FORCE_ERROR` causes cache to be treated as failure and recalculated.
 - **Concurrency blocking**: Verify `LLM_PARALLEL_WORKERS` is not too small; in-flight deduplication causes same node to wait for same execution to complete.
@@ -118,6 +119,9 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 | `response_delta` | Response streaming output fragment |
 | `tool_call` / `tool_result` | Low-level tool call and completion (paipan_tool/llm_report_tool/time_context_tool) |
 | `llm_prompt` | Each LLM call's system/user prompt (for frontend audit and debugging) |
+| `llm_request` | Always-on tracing: emitted before each LLM API call, contains `{node, model, attempt, url, timeout_seconds, system_prompt, user_prompt, stub}` |
+| `llm_response` | Always-on tracing: emitted on successful LLM response, contains `{node, model, content, reasoning_content, duration_ms, raw?, stub}` |
+| `llm_error` | Always-on tracing: emitted on LLM API error, contains `{node, model, attempt, error, error_type}` |
 | `time_context` | Time context result (legacy event) |
 | `assistant_final` | **Deprecated**, new conversations use `response` event |
 

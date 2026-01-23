@@ -11,7 +11,7 @@ from agent import planning
 
 
 def test_planner_llm_tool_call(monkeypatch) -> None:
-    def fake_llm(system_prompt, user_prompt, model=None, node=None, sleep_ms=None, stream=False, on_delta=None):
+    def fake_llm(system_prompt, user_prompt, model=None, node=None, sleep_ms=None, stream=False, on_delta=None, event_sink=None):
         return {
             "type": "report",
             "content": '{"tool":"planning_tool","args":{"aspects":["career"],"times":[{"need_tool":true,"granularity":"year","ref_text":"今年","year":2025}]}}',

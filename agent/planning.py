@@ -181,6 +181,7 @@ def plan_with_llm(
         )
         if event_sink
         else None,
+        event_sink=event_sink,
     )
     emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "PLANNER"})
     args = _parse_tool_call(response.get("content", ""))

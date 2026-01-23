@@ -75,9 +75,10 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `LLM_MAX_RETRIES` | 2 | Retry count |
 | `LLM_PARALLEL_WORKERS` | min(8, nodes) | Concurrent thread count |
 | `LLM_DEBUG` | - | Print debug logs |
-| `LLM_TRACE` | - | Log request/response traces |
-| `LLM_TRACE_PATH` | storage/logs/llm_trace.jsonl | Trace output path |
+| `LLM_TRACE_RAW` | false | Include raw API response in llm_response events |
 | `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
+
+**Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
 ### Python Environment
 
@@ -121,7 +122,7 @@ For HTTP JSON interface, wrap: `POST /ask`
 - Request: `{user_id, question, session_id?}`
 - Response: `{plan, time_context, response, cache_keys?}`
 
-Streaming interface `POST /api/ask_stream` also pushes `llm_prompt` events.
+Streaming interface `POST /api/ask_stream` also pushes `llm_prompt`, `llm_request`, `llm_response`, and `llm_error` events for full LLM tracing.
 
 ---
 

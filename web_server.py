@@ -100,6 +100,53 @@ def create_app(
                     "user_prompt": event.get("user_prompt", ""),
                 },
             )
+        elif event_type == "llm_request":
+            # Always-on LLM tracing: log request before API call
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "llm_request",
+                    "node": event.get("node"),
+                    "model": event.get("model"),
+                    "attempt": event.get("attempt"),
+                    "url": event.get("url"),
+                    "timeout_seconds": event.get("timeout_seconds"),
+                    "system_prompt": event.get("system_prompt"),
+                    "user_prompt": event.get("user_prompt"),
+                    "stub": event.get("stub"),
+                },
+            )
+        elif event_type == "llm_response":
+            # Always-on LLM tracing: log response after API call
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "llm_response",
+                    "node": event.get("node"),
+                    "model": event.get("model"),
+                    "content": event.get("content"),
+                    "reasoning_content": event.get("reasoning_content"),
+                    "raw": event.get("raw"),
+                    "duration_ms": event.get("duration_ms"),
+                    "stub": event.get("stub"),
+                },
+            )
+        elif event_type == "llm_error":
+            # Always-on LLM tracing: log API errors
+            append_event(
+                convo_path,
+                {
+                    "ts": dt.datetime.now().isoformat(),
+                    "type": "llm_error",
+                    "node": event.get("node"),
+                    "model": event.get("model"),
+                    "attempt": event.get("attempt"),
+                    "error": event.get("error"),
+                    "error_type": event.get("error_type"),
+                },
+            )
         elif event_type == "tool_invocation":
             # New: log tool invocations (PLANNER, TIME_CONTEXT)
             append_event(

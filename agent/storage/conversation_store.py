@@ -115,3 +115,34 @@ def load_responses(path: str) -> List[Dict[str, Any]]:
             if event.get("type") in ("response", "assistant_final"):
                 responses.append(event)
     return responses
+
+
+def load_llm_traces(
+    path: str,
+    node: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Load LLM request/response/error events from a conversation log.
+
+    Args:
+        path: Path to the conversation JSONL file
+        node: Optional filter by node name (PLANNER, RESPONSE, CAREER, etc.)
+
+    Returns:
+        List of LLM trace events (llm_request, llm_response, llm_error)
+    """
+    if not os.path.exists(path):
+        return []
+    trace_types = ("llm_request", "llm_response", "llm_error")
+    traces: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") not in trace_types:
+                continue
+            if node and event.get("node") != node:
+                continue
+            traces.append(event)
+    return traces

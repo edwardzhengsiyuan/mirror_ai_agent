@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, Optional
 
+from ..events import EventSink, emit_event
+
 _TRACE_NAMES = ("1", "true", "yes")
 
 
@@ -69,20 +71,9 @@ def _debug(msg: str) -> None:
     print(f"[DEBUG llm_tool] {ts} {msg}", flush=True)
 
 
-def _trace_enabled() -> bool:
-    return os.environ.get("LLM_TRACE", "").lower() in _TRACE_NAMES
-
-
-def _trace(repo_root: str, event: Dict[str, Any]) -> None:
-    if not _trace_enabled():
-        return
-    path = os.environ.get("LLM_TRACE_PATH") or os.path.join(
-        repo_root, "storage", "logs", "llm_trace.jsonl"
-    )
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False))
-        f.write("\n")
+def _trace_raw_enabled() -> bool:
+    """Check if raw API response should be included in trace events."""
+    return os.environ.get("LLM_TRACE_RAW", "").lower() in _TRACE_NAMES
 
 
 def _emit_stub_stream(content: str, on_delta: Callable[[Dict[str, str]], None]) -> None:
@@ -128,11 +119,27 @@ def llm_report_tool(
     sleep_ms: int | None = None,
     stream: bool = False,
     on_delta: Callable[[Dict[str, str]], None] | None = None,
+    event_sink: EventSink | None = None,
 ) -> Dict[str, Any]:
-    """LLM call with stub fallback for local testing."""
+    """LLM call with stub fallback for local testing.
+
+    Args:
+        system_prompt: System prompt for the LLM
+        user_prompt: User prompt for the LLM
+        model: Model name override (default: LLM_MODEL_FAST)
+        node: Node label for logging/tracing
+        sleep_ms: Optional delay before call
+        stream: Enable streaming response
+        on_delta: Callback for streaming chunks
+        event_sink: Event sink for LLM tracing (llm_request/response/error events)
+
+    Returns:
+        Dict with content, structured, reasoning_content, error fields
+    """
     if sleep_ms:
         time.sleep(sleep_ms / 1000.0)
     node_label = node or "UNKNOWN"
+    call_started_ts = time.perf_counter()
 
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     _load_env_file(os.path.join(repo_root, ".env"))
@@ -147,13 +154,15 @@ def llm_report_tool(
     force_error_set = {n.strip().upper() for n in force_error.split(",") if n.strip()}
     if "ALL" in force_error_set or node_label.upper() in force_error_set:
         err_msg = f"[LLM_ERROR:{node_label}] forced error via LLM_FORCE_ERROR"
-        _trace(
-            repo_root,
+        emit_event(
+            event_sink,
             {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "type": "llm_error",
                 "node": node_label,
-                "event": "forced_error",
-                "message": err_msg,
+                "model": model_name,
+                "attempt": 1,
+                "error": err_msg,
+                "error_type": "ForcedError",
             },
         )
         return {
@@ -172,20 +181,36 @@ def llm_report_tool(
             f"stub response for {node_label} mode={mode} api_base={api_base} "
             f"api_key={'set' if api_key else 'missing'}"
         )
+        # Emit llm_request event for stub mode
+        emit_event(
+            event_sink,
+            {
+                "type": "llm_request",
+                "node": node_label,
+                "model": model_name,
+                "attempt": 1,
+                "url": None,
+                "timeout_seconds": None,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "stub": True,
+            },
+        )
         resp = _stub_response(node_label)
         if stream and on_delta:
             _emit_stub_stream(resp.get("content", ""), on_delta)
-        _trace(
-            repo_root,
+        duration_ms = int((time.perf_counter() - call_started_ts) * 1000)
+        # Emit llm_response event for stub mode
+        emit_event(
+            event_sink,
             {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "type": "llm_response",
                 "node": node_label,
                 "model": model_name,
-                "mode": mode,
-                "event": "stub",
-                "system_prompt": system_prompt,
-                "user_prompt": user_prompt,
-                "response": resp,
+                "content": resp.get("content", ""),
+                "reasoning_content": resp.get("reasoning_content"),
+                "duration_ms": duration_ms,
+                "stub": True,
             },
         )
         return resp
@@ -225,14 +250,14 @@ def llm_report_tool(
     for attempt in range(1, max_retries + 1):
         try:
             _debug(f"POST {url} attempt={attempt}/{max_retries} model={model_name} node={node_label}")
-            _trace(
-                repo_root,
+            # Emit llm_request event before API call
+            emit_event(
+                event_sink,
                 {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "type": "llm_request",
                     "node": node_label,
                     "model": model_name,
                     "attempt": attempt,
-                    "event": "request",
                     "url": url,
                     "timeout_seconds": timeout_seconds,
                     "system_prompt": system_prompt,
@@ -261,15 +286,16 @@ def llm_report_tool(
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
             last_err = e
             _debug(f"error attempt={attempt} node={node_label} err={e}")
-            _trace(
-                repo_root,
+            # Emit llm_error event for this attempt
+            emit_event(
+                event_sink,
                 {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "type": "llm_error",
                     "node": node_label,
                     "model": model_name,
                     "attempt": attempt,
-                    "event": "error",
                     "error": str(e),
+                    "error_type": type(e).__name__,
                 },
             )
             time.sleep(min(2 * attempt, 5))
@@ -300,22 +326,23 @@ def llm_report_tool(
     reasoning_content = message.get("reasoning") or message.get("reasoning_content")
     if reasoning_content is None:
         reasoning_content = ""
+    duration_ms = int((time.perf_counter() - call_started_ts) * 1000)
     _debug(
         f"success node={node_label} model={model_name} "
         f"content_preview={content[:120].replace(chr(10), ' ')}"
     )
-    _trace(
-        repo_root,
-        {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "node": node_label,
-            "model": model_name,
-            "event": "response",
-            "content": content,
-            "reasoning_content": reasoning_content,
-            "raw": parsed,
-        },
-    )
+    # Emit llm_response event
+    response_event: Dict[str, Any] = {
+        "type": "llm_response",
+        "node": node_label,
+        "model": model_name,
+        "content": content,
+        "reasoning_content": reasoning_content,
+        "duration_ms": duration_ms,
+    }
+    if _trace_raw_enabled():
+        response_event["raw"] = parsed
+    emit_event(event_sink, response_event)
 
     structured = {
         "node": node_label,

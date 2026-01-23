@@ -207,6 +207,7 @@ def ensure_node(
                 )
                 if event_sink
                 else None,
+                event_sink=event_sink,
             )
             emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": node})
     except Exception as exc:
@@ -390,6 +391,7 @@ def run_response(
             )
             if event_sink
             else None,
+            event_sink=event_sink,
         )
     except Exception as exc:
         _debug(f"run_response error: {exc}")
