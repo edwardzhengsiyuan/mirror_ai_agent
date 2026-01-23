@@ -1,11 +1,10 @@
-# Tests Documentation / 测试文档
+# Tests Documentation
 
-> Instructions for the coding agent and maintainers on how to run and extend tests.
-> 面向编码代理和维护者：如何运行和扩展测试。
+Instructions for the coding agent and maintainers on how to run and extend tests.
 
 ---
 
-## Quick Reference / 快速参考
+## Quick Reference
 
 ```bash
 # Minimum required (stub mode, fast)
@@ -23,7 +22,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 
 ---
 
-## Test Files Overview / 测试文件概览
+## Test Files Overview
 
 ### Core Unit Tests (Stub Mode)
 
@@ -41,7 +40,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 | `test_prompt_builder_unit.py` | Prompt building for all nodes | `pytest tests/test_prompt_builder_unit.py` |
 | `test_edge_cases.py` | Edge cases and error handling | `pytest tests/test_edge_cases.py` |
 
-### Bazi Engine Tests
+### BaZi Engine Tests
 
 | File | Purpose | Run Command |
 |------|---------|-------------|
@@ -80,7 +79,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 
 ---
 
-## Environment Variables / 环境变量
+## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -95,7 +94,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 
 ---
 
-## Test Categories / 测试分类
+## Test Categories
 
 ### By Speed
 
@@ -116,7 +115,7 @@ pytest -m "not llm_live"
 
 ---
 
-## Writing New Tests / 编写新测试
+## Writing New Tests
 
 ### Conventions
 
@@ -167,7 +166,7 @@ def test_my_feature(monkeypatch) -> None:
         "node_cache": {},
     }
 
-    result = run_turn(profile, "测试问题")
+    result = run_turn(profile, "Test question")
     assert result["response"]
 ```
 
@@ -189,28 +188,28 @@ def test_my_live_feature() -> None:
 
 ---
 
-## Known Gaps / 已知缺口
+## Known Gaps
 
 The following areas lack test coverage:
 
-1. **Edge cases** (✅ Partially addressed in `test_edge_cases.py`):
-   - ✅ Empty/whitespace-only questions
-   - ✅ Very long questions
-   - ✅ Boundary date values (month/hour ranges)
-   - ✅ Special characters and emoji in questions
-   - ⚠️ Malformed data raises exceptions (documented as known limitation)
+1. **Edge cases** (partially addressed in `test_edge_cases.py`):
+   - Empty/whitespace-only questions
+   - Very long questions
+   - Boundary date values (month/hour ranges)
+   - Special characters and emoji in questions
+   - Malformed data raises exceptions (documented as known limitation)
 
 2. **Error paths**:
    - Network timeouts during LLM calls
    - Rate limiting responses
    - Invalid profile.json structure (partial: missing node_cache tested)
 
-3. **Unit tests** (✅ Mostly addressed):
-   - ✅ `agent/deps.py` circular dependency detection (`test_deps_unit.py`)
-   - ✅ `agent/planning.py` rule-based keyword parsing (`test_planning_unit.py`)
-   - ✅ `agent/nodes/prompt_builder.py` build functions (`test_prompt_builder_unit.py`)
-   - ✅ `bazi/` Gan/Zhi enums and namespacing (`test_bazi_property.py`)
-   - ✅ `bazi/` BaziChartAnalyseFrame (`test_bazi_frame.py`)
+3. **Unit tests** (mostly addressed):
+   - `agent/deps.py` circular dependency detection (`test_deps_unit.py`)
+   - `agent/planning.py` rule-based keyword parsing (`test_planning_unit.py`)
+   - `agent/nodes/prompt_builder.py` build functions (`test_prompt_builder_unit.py`)
+   - `bazi/` Gan/Zhi enums and namespacing (`test_bazi_property.py`)
+   - `bazi/` BaziChartAnalyseFrame (`test_bazi_frame.py`)
    - Template fallback edge cases
 
 4. **Performance**:
@@ -223,7 +222,7 @@ The following areas lack test coverage:
 
 ---
 
-## Troubleshooting / 故障排查
+## Troubleshooting
 
 ### Tests fail with import errors
 
@@ -265,7 +264,7 @@ TEST_RESUME_PROFILE=/path/to/profile.json pytest tests/test_resume_cache_live_pr
 
 ---
 
-## CI Integration / CI 集成
+## CI Integration
 
 ### Recommended CI stages
 
@@ -294,7 +293,7 @@ TEST_RESUME_PROFILE=/path/to/profile.json pytest tests/test_resume_cache_live_pr
 
 ---
 
-## Updating This Document / 更新本文档
+## Updating This Document
 
 When adding new tests:
 1. Add entry to the appropriate table in "Test Files Overview"

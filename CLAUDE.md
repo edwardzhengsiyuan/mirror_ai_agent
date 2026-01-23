@@ -1,75 +1,176 @@
-# Agent Rules / 代理规则
+# BaZi Agent
 
-## Purpose / 目的
-- EN: Mandatory rules and commands the coding agent must follow for this repo.
-- 中文：编码代理必须遵守的规则与命令。
+Backend agent for BaZi (八字, Four Pillars) Q&A: chart calculation (paipan), planning, caching, LLM integration, time context, and web API.
 
----
-
-## Mandatory Post-Change Steps / 变更后必做步骤
-
-**After completing any code changes, the agent MUST:**
-
-### 1. Update Documentation / 更新文档
-- **Always update `DEV.md`** when changes affect:
-  - Architecture or execution flow (§3 运行流程)
-  - Node dependencies or DAG (§4 节点与依赖)
-  - Planning logic or time handling (§5 规划逻辑)
-  - Tool interfaces or parameters (§7 工具接口)
-  - Prompt organization (§8 Prompt 组织)
-  - Storage paths or structure (§9 存储与路径)
-  - Configuration options (§10 配置)
-  - Test commands or paths (§11 测试)
-  - Known limitations (§12 已知限制)
-- Update the **English Summary (TL;DR)** section if major behavior changes
-- Update **CLAUDE.md** if rules or policies change
-
-### 2. Run Tests / 运行测试
-- **Minimum required**: `.venv/bin/python -m pytest tests/test_planning_tool_normalization.py -v`
-- **Recommended**: `.venv/bin/python tests/run_local_tester.py` (end-to-end stub test)
-- **Full test** (if API available): `LLM_LIVE_FULL=1 .venv/bin/pytest`
-- If tests fail, fix the issues before completing the task
-- If tests are skipped, explicitly state why in the final response
-
-### 3. Verify Changes / 验证变更
-- Confirm no syntax errors: `.venv/bin/python -c "import agent.orchestrator"`
-- Check storage paths are consistent with `storage/users/<user_id>/` structure
-- Ensure no references to deprecated paths (e.g., `storage/profile_demo.json`, `storage/conversations/`)
+> Focus: Operability and maintainability. BaZi interpretation accuracy is out of scope.
 
 ---
 
-## Update Rules / 更新规则
-- Any structural/code change must update `DEV.md` if it affects architecture, APIs, dependencies, or ops.
-- Any change to these rules must update `CLAUDE.md`.
-- Keep the top-level `README.md` minimal (entry point only).
+## Overview
 
-## Test Policy / 测试策略
-- Default full test run (includes live LLM): `LLM_LIVE_FULL=1 pytest` (requires API config).
-- Live LLM requires `LLM_API_BASE`/`LLM_API_KEY` (or OpenAI equivalents) and `LLM_MODE` not set to `stub`.
-- If tests are not run, the final response must say so explicitly.
-- **Always use `.venv/bin/python`** for running tests (not system Python).
+**Goals**
+- On-demand planning with minimal node execution
+- Cacheable and reusable computations
+- Observable and testable architecture
 
-## LLM Modes / LLM 模式
-- Use `LLM_MODE=stub` for offline/dev runs.
-- Use live mode only with valid API config and when needed.
+**Non-goals**
+- No guarantee of BaZi conclusion accuracy
+- No complex evaluation systems
+- UI/conversation management left to upper layers
 
-## Documentation Policy / 文档策略
-- Canonical dev doc: `DEV.md`.
-- Canonical agent rules: `CLAUDE.md`.
-- Engine API reference stays in `bazi/README.md`.
-- **Documentation updates are NOT optional** - they are part of completing a task.
+**Entry Points**
+- `app.py`: CLI entry point, loads/saves user profiles
+- `web_server.py`: HTTP/SSE service and frontend interface
 
-## Storage Structure / 存储结构
-- All user data must be stored in `storage/users/<user_id>/`
-- Profile: `storage/users/<user_id>/profile.json`
-- Conversations: `storage/users/<user_id>/conversations/<session>.jsonl`
-- Logs: `storage/logs/` (LLM trace, etc.)
-- **Do not create files at `storage/` root level** (legacy structure)
+**Core Flow**
+`agent/orchestrator.py` → Planning → DAG Execution → Time Context → Response Assembly
 
-## Change Checklist / 变更清单
-Before marking a task as complete, verify:
-- [ ] Code changes are syntactically correct (import test passes)
-- [ ] `DEV.md` updated if architecture/APIs/behavior changed
-- [ ] Tests run successfully (at minimum: stub tests)
-- [ ] No references to deprecated paths
-- [ ] Links/paths in documentation are still valid
+---
+
+## Directory Structure
+
+| Directory/File | Description |
+|----------------|-------------|
+| `app.py` | CLI entry point |
+| `web_server.py` | HTTP/SSE service |
+| `agent/` | Orchestration core (planning, deps, execution, nodes, response) |
+| `agent/tools/` | Tool implementations (paipan, time_context, llm) |
+| `agent/prompts/` | Prompt templates |
+| `agent/storage/` | Profile/conversation storage |
+| `bazi/` | BaZi calculation engine |
+| `web/` | Web UI frontend |
+| `storage/` | User data and logs |
+| `tests/` | Test suite |
+
+---
+
+## Quick Start
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Run CLI (stub mode)
+LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.json --question "How is my career this year?"
+
+# Run Web service
+.venv/bin/python web_server.py
+```
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_API_BASE` / `OPENAI_API_BASE` | - | API endpoint URL |
+| `LLM_API_KEY` / `OPENAI_API_KEY` | - | API key |
+| `LLM_MODE` | - | `stub` for placeholder output |
+| `LLM_MODEL_REASONING` | gpt-5 | Reasoning model |
+| `LLM_MODEL_FAST` | gpt-5-nano | Fast model |
+| `LLM_TIMEOUT_SECONDS` | 120 | Timeout in seconds |
+| `LLM_MAX_RETRIES` | 2 | Retry count |
+| `LLM_PARALLEL_WORKERS` | min(8, nodes) | Concurrent thread count |
+| `LLM_DEBUG` | - | Print debug logs |
+| `LLM_TRACE` | - | Log request/response traces |
+| `LLM_TRACE_PATH` | storage/logs/llm_trace.jsonl | Trace output path |
+| `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
+
+### Python Environment
+
+- Use the in-repo virtual environment: `.venv/`
+- Create: `python3 -m venv .venv`
+- Install: `.venv/bin/pip install -r requirements.txt`
+- Run tests: `.venv/bin/pytest`
+- **Do not rely on system global Python** (may be restricted by PEP 668)
+
+---
+
+## Integration Guide
+
+### Python Usage
+
+```python
+from agent.orchestrator import run_turn
+from agent.storage.profile_store import load_profile, save_profile
+from agent.storage.conversation_store import append_event, load_recent_rounds
+from agent.storage.paths import session_paths
+import datetime as dt
+
+user_id = "u_demo"
+profile_path, convo_path = session_paths(user_id, session_id="sess_1")
+profile = load_profile(profile_path)
+
+question = "How is my career this year?"
+now = dt.datetime.now()
+history_rounds = load_recent_rounds(convo_path, 5)
+append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
+
+result = run_turn(profile, question, now=now, history_rounds=history_rounds)
+# result = {"plan", "outputs", "time_context", "response", "tool_invocations"}
+
+save_profile(profile_path, profile)
+```
+
+### HTTP API
+
+For HTTP JSON interface, wrap: `POST /ask`
+- Request: `{user_id, question, session_id?}`
+- Response: `{plan, time_context, response, cache_keys?}`
+
+Streaming interface `POST /api/ask_stream` also pushes `llm_prompt` events.
+
+---
+
+## Known Limitations
+
+- **Simple planning**: Keywords + regex only; context memory injects only recent N rounds (default 5, configurable)
+- **Time parsing**: LLM planner can handle time range expressions (e.g., "next two years"), expanding to multiple year entries; rule mode only supports relative/absolute year
+- **LLM retry**: Only at tool layer per `LLM_MAX_RETRIES`; unified 3-retry or circuit breaker requires execution layer wrapper
+- **Prompt fallback**: Missing upstream content inserts empty string
+- **Security**: Repo contains example `.env`; replace keys in production
+
+---
+
+## BaZi Domain Glossary
+
+Chinese terms preserved in code and documentation:
+
+| Chinese (Pinyin) | English | Description |
+|------------------|---------|-------------|
+| 八字 (bazi) | Four Pillars | Birth chart based on year, month, day, hour |
+| 排盘 (paipan) | Chart Calculation | Computing the full birth chart |
+| 十神 (shishen) | Ten Gods | Relationship types between stems |
+| 大运 (dayun) | Major Luck Cycle | 10-year fortune periods |
+| 流年 (liunian) | Annual Fortune | Year-by-year fortune |
+| 流月 (liuyue) | Monthly Fortune | Month-by-month fortune |
+| 五行 (wuxing) | Five Elements | Wood, Fire, Earth, Metal, Water |
+| 五行喜忌 (wuxing xiji) | Five Element Preferences | Favorable/unfavorable elements |
+| 格局 (geju) | Chart Pattern | Overall chart structure type |
+| 天干 (tiangan) | Heavenly Stems | 10 cyclical characters |
+| 地支 (dizhi) | Earthly Branches | 12 cyclical characters |
+| 神煞 (shensha) | Spirit Influences | Special star/spirit indicators |
+| 贵人 (guiren) | Noble Helper | Beneficial influence indicator |
+| 六亲 (liuqin) | Six Relations | Family relationship indicators |
+| 性格 (xingge) | Personality | Character analysis |
+| 纳音 (nayin) | Elemental Sound | 60 Jiazi cycle elements |
+| 地势 (dishi) | Life Phase | 12 stages of element strength |
+
+---
+
+## Documentation Index
+
+| Documentation | Description |
+|---------------|-------------|
+| `CLAUDE.md` | Project entry (this file) |
+| `agent/CLAUDE.md` | Orchestration core (flow, DAG, caching, debugging, events) |
+| `agent/tools/CLAUDE.md` | Tool interface API |
+| `agent/prompts/CLAUDE.md` | Prompt template management |
+| `agent/storage/CLAUDE.md` | Storage API |
+| `bazi/CLAUDE.md` | Engine API reference |
+| `web/CLAUDE.md` | Web UI documentation |
+| `storage/CLAUDE.md` | Storage directory structure |
+| `tests/CLAUDE.md` | Test documentation |
