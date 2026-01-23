@@ -18,6 +18,9 @@ Instructions for the coding agent and maintainers on how to run and extend tests
 
 # Live LLM tests (requires API config)
 LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
+
+# Multi-user live LLM test (concurrent users)
+LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_multiuser_live.py -v
 ```
 
 ---
@@ -75,6 +78,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 | File | Purpose | Run Command |
 |------|---------|-------------|
 | `test_llm_live.py` | Live LLM ping, single node, full pipeline | `pytest -m llm_live` |
+| `test_multiuser_live.py` | Multi-user concurrent/sequential with real LLM | `pytest tests/test_multiuser_live.py -m llm_live` |
 | `run_live_suite.py` | Test matrix runner (scenarios) | `python tests/run_live_suite.py --scenario fast_nano` |
 
 ---
@@ -101,7 +105,7 @@ LLM_LIVE_FULL=1 .venv/bin/pytest tests/test_llm_live.py -v
 - **Fast (<1s)**: `test_llm_tool_stub.py`, `test_planning_tool_normalization.py`, `test_cli_state.py`, `test_prompt_history.py`, `test_cache_retry_on_error.py`, `test_deps_unit.py`, `test_planning_unit.py`, `test_tools_unit.py`, `test_prompt_builder_unit.py`, `test_bazi_property.py`, `test_bazi_frame.py`
 - **Medium (1-5s)**: `test_parallel_execution.py`, `test_event_streaming_stub.py`, `test_inflight_dedup.py`, `test_multi_time_context.py`, `test_edge_cases.py`
 - **Slow (5-30s)**: `run_local_tester.py`, `test_web_server.py`, `test_resume_cache_live_profiles.py`
-- **Live (variable)**: `test_llm_live.py`, `run_live_suite.py`
+- **Live (variable)**: `test_llm_live.py`, `test_multiuser_live.py`, `run_live_suite.py`
 
 ### By pytest Markers
 
@@ -216,7 +220,8 @@ The following areas lack test coverage:
    - No benchmarks beyond parallel execution timing
    - No memory usage tests
 
-5. **Concurrency**:
+5. **Concurrency** (partially addressed in `test_multiuser_live.py`):
+   - Multi-user concurrent requests with real LLM (✓ covered)
    - Race conditions in profile save/load
    - Concurrent session writes to same JSONL
 
@@ -288,7 +293,7 @@ TEST_RESUME_PROFILE=/path/to/profile.json pytest tests/test_resume_cache_live_pr
     LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
     LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
     LLM_LIVE_FULL: "1"
-  run: .venv/bin/python -m pytest tests/test_llm_live.py -v
+  run: .venv/bin/python -m pytest tests/test_llm_live.py tests/test_multiuser_live.py -v
 ```
 
 ---
