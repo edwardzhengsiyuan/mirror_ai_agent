@@ -861,7 +861,7 @@
         "OVERALL": "整体分析",
         "SHISHEN": "十神分析",
         "GEJU": "格局分析",
-        "WUXING_PREFS": "五行偏好",
+        "WUXING_PREFS": "五行喜忌",
         "CAREER": "事业",
         "RELATIONSHIP": "感情",
         "HEALTH": "健康",
@@ -869,17 +869,15 @@
         "LIUQIN": "六亲",
         "XINGGE": "性格",
         "OTHER": "其他",
-        "PLANNER": "规划器",
-        "TIME_CONTEXT": "时间上下文",
+        "PLANNER": "规划分析维度和时间",
+        "TIME_CONTEXT": "获取大运流年流月",
         "RESPONSE": "回答生成"
       };
 
-      // Tool names mapping
-      const TOOL_NAMES_ZH = {
-        "planner": "规划器",
-        "PLANNER": "规划器",
-        "time_context_tool": "时间上下文",
-        "TIME_CONTEXT": "时间上下文"
+      // Tool name to node name mapping (backend uses different names)
+      const TOOL_TO_NODE = {
+        "planner": "PLANNER",
+        "time_context_tool": "TIME_CONTEXT"
       };
 
       function getChineseNodeName(node) {
@@ -887,7 +885,9 @@
       }
 
       function getChineseToolName(tool) {
-        return TOOL_NAMES_ZH[tool] || TOOL_NAMES_ZH[tool?.toUpperCase()] || tool;
+        // Map tool names to node names, then get Chinese name
+        const nodeName = TOOL_TO_NODE[tool] || tool?.toUpperCase();
+        return NODE_NAMES_ZH[nodeName] || tool;
       }
 
       // Markdown rendering
