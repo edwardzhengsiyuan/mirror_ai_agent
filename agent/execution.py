@@ -36,6 +36,18 @@ def _hash_inputs(inputs: Dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _cache_key_inputs(inputs: Dict[str, Any]) -> str:
+    """Compute cache key excluding model field (model-agnostic lookup).
+
+    This allows cache hits even when the LLM model changes, as long as other
+    inputs (like prompt_config) remain the same. PAIPAN cache is unaffected
+    since it never includes model in inputs.
+    """
+    filtered = {k: v for k, v in inputs.items() if k != "model"}
+    payload = json.dumps(filtered, ensure_ascii=True, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _profile_scope(profile: Dict[str, Any]) -> str:
     return f"obj:{id(profile)}"
 
@@ -83,50 +95,68 @@ def ensure_node(
     event_sink: Optional[EventSink] = None,
     stream: bool = False,
 ) -> Dict[str, Any]:
+    # Check bypass cache setting (env var or profile field)
+    bypass_cache = (
+        os.environ.get("LLM_BYPASS_CACHE", "").lower() in ("1", "true", "yes")
+        or profile.get("bypass_cache", False)
+    )
+
     cache = profile.setdefault("node_cache", {})
-    inputs_hash = _hash_inputs(inputs)
-    inflight_key = _inflight_key(profile, node, inputs_hash)
+    cache_key = _cache_key_inputs(inputs)  # Model-agnostic key for lookup
+    inputs_hash = _hash_inputs(inputs)     # Full hash for storage reference
+    inflight_key = _inflight_key(profile, node, cache_key)  # Use cache_key for dedup
+
+    if bypass_cache:
+        _debug(f"bypass_cache enabled, skipping cache lookup for {node}")
+    else:
+        with _LOCK:
+            # Check cache with model-agnostic key
+            # Backward compat: also check inputs_hash for old cache entries without cache_key
+            if node in cache:
+                entry = cache[node]
+                if entry.get("cache_key") == cache_key or entry.get("inputs_hash") == cache_key:
+                    cached_output = entry["output"]
+                    if _is_failure_output(cached_output):
+                        _debug(f"cache contains failure for {node}, will retry cache_key={cache_key[:8]}")
+                        cache.pop(node, None)
+                    else:
+                        _debug(f"cache hit for {node} cache_key={cache_key[:8]}")
+                        emit_event(
+                            event_sink,
+                            {
+                                "type": "node_cache_hit",
+                                "node": node,
+                                "inputs_hash": inputs_hash,
+                                "cache_key": cache_key,
+                                "output": cached_output,
+                            },
+                        )
+                        emit_event(
+                            event_sink,
+                            {
+                                "type": "node_end",
+                                "node": node,
+                                "output": cached_output,
+                                "cached": True,
+                            },
+                        )
+                        return cached_output
+
     with _LOCK:
-        if node in cache and cache[node].get("inputs_hash") == inputs_hash:
-            cached_output = cache[node]["output"]
-            if _is_failure_output(cached_output):
-                _debug(f"cache contains failure for {node}, will retry hash={inputs_hash[:8]}")
-                cache.pop(node, None)
-            else:
-                _debug(f"cache hit for {node} hash={inputs_hash[:8]}")
-                emit_event(
-                    event_sink,
-                    {
-                        "type": "node_cache_hit",
-                        "node": node,
-                        "inputs_hash": inputs_hash,
-                        "output": cached_output,
-                    },
-                )
-                emit_event(
-                    event_sink,
-                    {
-                        "type": "node_end",
-                        "node": node,
-                        "output": cached_output,
-                        "cached": True,
-                    },
-                )
-                return cached_output
         if inflight_key in _IN_FLIGHT:
             event = _IN_FLIGHT[inflight_key]
-            _debug(f"waiting on inflight node {node} hash={inputs_hash[:8]}")
+            _debug(f"waiting on inflight node {node} cache_key={cache_key[:8]}")
         else:
             event = threading.Event()
             _IN_FLIGHT[inflight_key] = event
-            _debug(f"start node {node} hash={inputs_hash[:8]}")
+            _debug(f"start node {node} cache_key={cache_key[:8]}")
             event = None
     if event is not None:
         event.wait()
         with _LOCK:
-            _debug(f"join inflight node {node} hash={inputs_hash[:8]}")
+            _debug(f"join inflight node {node} cache_key={cache_key[:8]}")
             cached_entry = cache.get(node)
-            if cached_entry and cached_entry.get("inputs_hash") == inputs_hash:
+            if cached_entry and (cached_entry.get("cache_key") == cache_key or cached_entry.get("inputs_hash") == cache_key):
                 return cached_entry.get("output")
         return _error_output(node, RuntimeError("inflight completed without cached output"))
 
@@ -238,7 +268,8 @@ def ensure_node(
 
     entry = {
         "created_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
-        "inputs_hash": inputs_hash,
+        "cache_key": cache_key,      # Model-agnostic key (used for lookup)
+        "inputs_hash": inputs_hash,  # Full hash (for debugging/reference)
         "output": output,
         "meta": {
             "started_at": started_at,

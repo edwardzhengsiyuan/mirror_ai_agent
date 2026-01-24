@@ -76,6 +76,7 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `LLM_DEBUG` | - | Print debug logs |
 | `LLM_TRACE_RAW` | false | Include raw API response in llm_response events |
 | `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
+| `LLM_BYPASS_CACHE` | false | Skip all cache lookups and re-run nodes |
 
 **Available Models** (via `agent/models.py`):
 - `claude-sonnet-4-5-20250929`
@@ -87,7 +88,7 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 **Note**: `LLM_MODEL_REASONING` and `LLM_MODEL_FAST` are deprecated. Use `LLM_MODEL` or the per-profile `llm_model` field instead.
 
-**Cache behavior on model switch**: When user changes model, PAIPAN cache is preserved (model-independent), but all LLM node caches are invalidated and regenerated. See `agent/CLAUDE.md` §4 for details.
+**Cache behavior**: Cache lookup is model-agnostic by default - changing models will still use cached outputs if prompt_config matches. Use `LLM_BYPASS_CACHE=1` or `profile.bypass_cache=true` to force re-run all nodes. See `agent/CLAUDE.md` §4 for details.
 
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 

@@ -27,6 +27,7 @@ Three-column layout (ChatGPT/Claude style):
 | Feature | Description |
 |---------|-------------|
 | Model selector | Dropdown in chat header to select LLM model, persists to user profile |
+| Bypass cache toggle | Checkbox in settings modal to skip cache and re-run all nodes |
 | Streaming response display | Listens to `response_delta` events for real-time LLM output rendering |
 | Instant tool call display | `tool_call` event triggers placeholder card creation, updates on `tool_invocation` completion |
 | Markdown rendering | Uses marked.js to render assistant messages (headings, lists, code blocks, quotes) |
@@ -43,7 +44,7 @@ Three-column layout (ChatGPT/Claude style):
 | `/api/sessions` | GET/POST | List sessions / Create new session |
 | `/api/users` | GET/POST | List users / Create user (accepts `llm_model`) |
 | `/api/profile` | GET | Get user profile |
-| `/api/profile` | PUT | Update user profile (supports `llm_model`, `prompt_config`) |
+| `/api/profile` | PUT | Update user profile (supports `llm_model`, `prompt_config`, `bypass_cache`) |
 | `/api/history` | GET | Get session message history |
 | `/api/ask_stream` | POST | Streaming Q&A (SSE) |
 
@@ -59,8 +60,11 @@ Three-column layout (ChatGPT/Claude style):
 
 **PUT /api/profile**
 ```json
-// Request
+// Request - update model
 {"user_id": "u_demo", "llm_model": "gpt-5.2"}
+
+// Request - enable bypass cache
+{"user_id": "u_demo", "bypass_cache": true}
 
 // Response
 {"success": true, "profile": {...}}

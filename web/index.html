@@ -826,6 +826,11 @@
             <label>历史轮数 (Response prompt)</label>
             <input id="historyN" type="number" min="0" value="5" />
           </div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="bypassCacheCheckbox" style="width:auto;" />
+            <label for="bypassCacheCheckbox" style="margin:0;">绕过缓存</label>
+          </div>
+          <p style="font-size:11px;color:var(--muted);margin-top:-8px;">开启后所有分析节点将重新运行，不使用缓存结果</p>
         </div>
 
         <hr class="settings-divider" />
@@ -1461,6 +1466,21 @@
         }
       }
 
+      async function updateBypassCache(bypass) {
+        const userId = userSelect.value;
+        if (!userId) return;
+        try {
+          await fetchJson("/api/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId, bypass_cache: bypass }),
+          });
+          logEvent("bypass_cache updated: " + bypass);
+        } catch (err) {
+          logEvent("update bypass_cache error: " + err.message);
+        }
+      }
+
       async function loadUsers() {
         const data = await fetchJson("/api/users");
         userSelect.innerHTML = "";
@@ -1532,6 +1552,9 @@
           } else {
             modelSelect.value = defaultModel;
           }
+
+          // Update bypass cache checkbox from profile
+          document.getElementById("bypassCacheCheckbox").checked = !!profile.bypass_cache;
         } catch (err) {
           logEvent("加载用户信息失败: " + err.message);
         }
@@ -1755,6 +1778,9 @@
       });
       modelSelect.addEventListener("change", async () => {
         await updateProfileModel(modelSelect.value);
+      });
+      document.getElementById("bypassCacheCheckbox").addEventListener("change", async (e) => {
+        await updateBypassCache(e.target.checked);
       });
 
       // Initialize

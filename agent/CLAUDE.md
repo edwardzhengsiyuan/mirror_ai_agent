@@ -75,11 +75,12 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 
 ## 4. Execution, Caching, and Concurrency (`execution.py`)
 
-- Input hash: `_hash_inputs` JSON-serializes inputs + sha256 for cache hit checking.
+- **Cache key**: `_cache_key_inputs` JSON-serializes inputs (excluding `model` field) + sha256 for model-agnostic cache lookup.
+- **Full input hash**: `_hash_inputs` JSON-serializes all inputs + sha256 for debugging/reference.
 - Failure detection: `_is_failure_output` checks `output.error` or `content` starting with `[LLM_ERROR:` → treated as failure, cache cleared and re-run; tool exceptions wrapped as `[NODE_ERROR:...]` output with `error=true`.
-- Cache structure: `profile["node_cache"][node] = {"created_at","inputs_hash","output","meta":{started_at,ended_at,duration_ms}}`.
+- Cache structure: `profile["node_cache"][node] = {"created_at","cache_key","inputs_hash","output","meta":{started_at,ended_at,duration_ms}}`.
 - **Failed outputs NOT cached**: When a node fails, its output is NOT stored in cache. This ensures automatic retry on the next request without requiring manual cache eviction.
-- In-flight deduplication: During concurrency, same node in same profile instance + same inputs hash executes only once, other threads wait for event completion then reuse result.
+- In-flight deduplication: During concurrency, same node in same profile instance + same cache_key executes only once, other threads wait for event completion then reuse result.
 - Concurrency: `run_nodes_parallel` uses thread pool (default `min(8,len(nodes))`, controllable via `LLM_PARALLEL_WORKERS`). Ready nodes (dependencies completed) batch-submitted; TIME_CONTEXT skipped.
 - **Workflow stops on failure**: When a node fails, all dependent nodes are automatically skipped (marked with `error=true, skipped=true`). This prevents wasted computation and avoids generating responses with incomplete data.
 - Single node execution:
@@ -89,20 +90,31 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 - Retry: LLM tool layer controlled by `LLM_MAX_RETRIES` (default 2 attempts); execution layer has no additional retry wrapper.
 - Logging: `LLM_DEBUG` prints node start/end/cache hit/wait; `meta.duration_ms` records duration.
 
-### Model Switch and Cache Behavior
+### Model-Agnostic Cache Behavior
 
-When user switches LLM model (via `profile.llm_model`), cache behavior differs by node type:
+Cache lookup is **model-agnostic** by default. The `cache_key` is computed excluding the `model` field, so switching LLM models will still use cached outputs if the `prompt_config` remains the same.
 
-| Node | Inputs | Cache on Model Switch |
-|------|--------|----------------------|
-| PAIPAN | `{birth, gender, birth_time_unknown}` | **Cache hit** (no model in inputs) |
-| LLM nodes (OVERALL, SHISHEN, etc.) | `{prompt_config, model}` | **Cache miss** (model changes hash) |
+| Node | Inputs | Cache Key | Behavior on Model Switch |
+|------|--------|-----------|-------------------------|
+| PAIPAN | `{birth, gender, birth_time_unknown}` | Same (no model) | **Cache hit** |
+| LLM nodes (OVERALL, SHISHEN, etc.) | `{prompt_config, model}` | Excludes model | **Cache hit** (reuses previous model's output) |
 
-This is the intended behavior:
-- PAIPAN is pure calculation, model-independent → no need to recalculate
-- LLM analysis depends on model → should regenerate with new model
+**Rationale**: In most cases, users want fast responses and don't need to regenerate all analysis when switching models. The cache persists previous outputs regardless of which model generated them.
 
-**Note**: Cached LLM outputs from previous models are overwritten when the new model generates output.
+**Backward compatibility**: Old cache entries with only `inputs_hash` (no `cache_key`) will still work. The system falls back to checking `inputs_hash` if `cache_key` is not present, and cache entries are upgraded to the new format when overwritten.
+
+### Bypass Cache Setting
+
+To force re-running all nodes and ignore cached outputs, use either:
+
+1. **Environment variable**: `LLM_BYPASS_CACHE=1`
+2. **Profile field**: `profile.bypass_cache = true` (settable via UI toggle)
+
+When bypass is enabled:
+- All cache lookups are skipped
+- Nodes always execute fresh
+- Results are still saved to cache (for next time when bypass is off)
+- `LLM_DEBUG` logs will show "bypass_cache enabled, skipping cache lookup for {node}"
 
 ### Error Handling in `run_turn`
 - After DAG execution, orchestrator checks for failed nodes (nodes with `error=true` but not `skipped`)

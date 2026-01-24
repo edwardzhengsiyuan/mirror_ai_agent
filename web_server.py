@@ -157,6 +157,8 @@ def create_app(
             profile["llm_model"] = llm_model or DEFAULT_MODEL
         if "prompt_config" in data:
             profile["prompt_config"] = data["prompt_config"]
+        if "bypass_cache" in data:
+            profile["bypass_cache"] = bool(data["bypass_cache"])
         save_profile(path, profile)
         return jsonify({"success": True, "profile": profile})
 
