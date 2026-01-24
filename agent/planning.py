@@ -102,6 +102,7 @@ def _build_planner_prompt(
     question: str,
     now: dt.datetime,
     dayun_list: Optional[List[Dict[str, Any]]] = None,
+    history_rounds: Optional[List[Dict[str, str]]] = None,
 ) -> tuple[str, str]:
     system_prompt = (
         "你是一个规划助手，需要根据用户问题返回结构化的规划结果。"
@@ -111,6 +112,7 @@ def _build_planner_prompt(
         "times 为列表，每项包含 year(int) 表示要查询的年份。"
         "如出现多个年份，请输出多条 times。若无法判断时间则 times 为空。"
         "对于时间范围表达，如未来两年或接下来3年，请生成多个 times 条目，每个对应一个具体年份。"
+        "注意结合历史对话上下文理解用户意图。"
     )
     dayun_hint = ""
     if dayun_list:
@@ -123,8 +125,24 @@ def _build_planner_prompt(
                 lines.append(f"- {name} {start}-{end}")
         if lines:
             dayun_hint = "\n大运范围(起止年):\n" + "\n".join(lines)
+    history_hint = ""
+    if history_rounds:
+        history_lines = []
+        for round_item in history_rounds:
+            user_msg = round_item.get("user", "")
+            assistant_msg = round_item.get("assistant", "")
+            if user_msg:
+                history_lines.append(f"用户: {user_msg}")
+            if assistant_msg:
+                # Truncate long responses
+                if len(assistant_msg) > 200:
+                    assistant_msg = assistant_msg[:200] + "..."
+                history_lines.append(f"助手: {assistant_msg}")
+        if history_lines:
+            history_hint = "\n历史对话:\n" + "\n".join(history_lines)
     user_prompt = (
-        f"现在时间: {now.date().isoformat()}\n"
+        f"现在时间: {now.date().isoformat()}"
+        f"{history_hint}\n"
         f"用户问题: {question}"
         f"{dayun_hint}\n"
         "返回 planning_tool 调用。"
@@ -148,11 +166,20 @@ def plan_with_llm(
     question: str,
     now: dt.datetime | None = None,
     dayun_list: Optional[List[Dict[str, Any]]] = None,
+    history_rounds: Optional[List[Dict[str, str]]] = None,
     event_sink: EventSink | None = None,
     stream: bool = False,
-) -> Dict:
+) -> tuple[Dict, Optional[Dict[str, str]]]:
+    """Run LLM-based planning.
+
+    Returns:
+        Tuple of (plan_result, llm_prompt) where llm_prompt is {"system_prompt", "user_prompt"}
+    """
     now = now or dt.datetime.now()
-    system_prompt, user_prompt = _build_planner_prompt(question, now, dayun_list=dayun_list)
+    system_prompt, user_prompt = _build_planner_prompt(
+        question, now, dayun_list=dayun_list, history_rounds=history_rounds
+    )
+    llm_prompt = {"system_prompt": system_prompt, "user_prompt": user_prompt}
     emit_event(
         event_sink,
         {
@@ -186,25 +213,40 @@ def plan_with_llm(
     emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "PLANNER"})
     args = _parse_tool_call(response.get("content", ""))
     if not args:
-        return plan_with_rules(question, now=now)
+        result = plan_with_rules(question, now=now)
+        return result, llm_prompt
     plan = planning_tool(args.get("aspects"), args.get("time"), args.get("times"))
     plan["source"] = "llm"
-    return plan
+    return plan, llm_prompt
 
 
 def plan(
     question: str,
     now: dt.datetime | None = None,
     dayun_list: Optional[List[Dict[str, Any]]] = None,
+    history_rounds: Optional[List[Dict[str, str]]] = None,
     event_sink: EventSink | None = None,
     stream: bool = False,
-) -> Dict:
+) -> tuple[Dict, Optional[Dict[str, str]]]:
+    """Run planning (rules or LLM based on config).
+
+    Returns:
+        Tuple of (plan_result, llm_prompt) where llm_prompt is {"system_prompt", "user_prompt"} or None for rules mode
+    """
     mode = os.environ.get("LLM_PLANNER_MODE", "llm").lower()
     if mode == "rule" or os.environ.get("LLM_MODE", "").lower() == "stub":
         result = plan_with_rules(question, now=now)
+        llm_prompt = None
     else:
-        result = plan_with_llm(question, now=now, dayun_list=dayun_list, event_sink=event_sink, stream=stream)
-    return _merge_times_from_question(result, question, now=now)
+        result, llm_prompt = plan_with_llm(
+            question,
+            now=now,
+            dayun_list=dayun_list,
+            history_rounds=history_rounds,
+            event_sink=event_sink,
+            stream=stream,
+        )
+    return _merge_times_from_question(result, question, now=now), llm_prompt
 
 
 def _merge_times_from_question(

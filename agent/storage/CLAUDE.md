@@ -19,9 +19,20 @@ Session logs: `storage/users/<user_id>/conversations/<session>.jsonl`
   "gender": "male",
   "birth_time_unknown": false,
   "prompt_config": "lingyun_cat",
+  "llm_model": "gpt-5-mini",
   "node_cache": {}
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | string | User identifier |
+| `birth` | object | Birth date/time |
+| `gender` | string | "male" or "female" |
+| `birth_time_unknown` | bool | Whether birth time is unknown |
+| `prompt_config` | string | Prompt configuration name |
+| `llm_model` | string | User-selected LLM model (defaults to `DEFAULT_MODEL` from `agent/models.py`) |
+| `node_cache` | object | Cached node outputs |
 
 ## Cache Entry Structure
 

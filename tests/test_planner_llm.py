@@ -22,8 +22,12 @@ def test_planner_llm_tool_call(monkeypatch) -> None:
 
     monkeypatch.setattr(planning, "llm_report_tool", fake_llm)
     now = dt.datetime(2025, 1, 1, 12, 0, 0)
-    result = planning.plan_with_llm("今年事业怎么样", now=now)
+    result, llm_prompt = planning.plan_with_llm("今年事业怎么样", now=now)
     assert result["aspects"] == ["CAREER"]
     assert result["time"]["need_tool"] is True
     assert result["time"]["year"] == 2025
     assert len(result.get("times", [])) == 1
+    # Verify llm_prompt is returned
+    assert llm_prompt is not None
+    assert "system_prompt" in llm_prompt
+    assert "user_prompt" in llm_prompt

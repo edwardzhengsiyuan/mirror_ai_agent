@@ -82,7 +82,7 @@ LLM call tool for generating reports.
 |-----------|------|-------------|
 | `system_prompt` | str | System prompt for the LLM |
 | `user_prompt` | str | User prompt for the LLM |
-| `model` | str \| None | Model name override (default: LLM_MODEL_FAST) |
+| `model` | str \| None | Model name override (default: `LLM_MODEL` env var or `DEFAULT_MODEL` from `agent/models.py`) |
 | `node` | str \| None | Node label for logging/tracing |
 | `sleep_ms` | int \| None | Optional delay before call |
 | `stream` | bool | Enable streaming response |
@@ -97,8 +97,10 @@ Automatically reads `.env` from repo root (ignored if missing).
 - Otherwise calls `/chat/completions` HTTP POST
 
 **Model Selection**
-- `model="reasoning"` → `LLM_MODEL_REASONING`
-- Otherwise uses `LLM_MODEL_FAST` (default gpt-5-nano)
+- Uses the passed `model` parameter directly
+- Falls back to `LLM_MODEL` environment variable
+- Falls back to `DEFAULT_MODEL` from `agent/models.py` (gpt-5-mini)
+- Profile-level model stored in `profile.llm_model`, passed by orchestrator
 
 **Retry and Timeout**
 - Retry count: `LLM_MAX_RETRIES` (default 2)

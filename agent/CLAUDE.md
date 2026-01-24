@@ -50,8 +50,9 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 
 ## 3. Planning Logic (`planning.py`)
 
-- Planning defaults to LLM: `LLM_PLANNER_MODE=llm` (default), LLM outputs `planning_tool` JSON call result, prompt includes dayun range hint.
+- Planning defaults to LLM: `LLM_PLANNER_MODE=llm` (default), LLM outputs `planning_tool` JSON call result, prompt includes dayun range hint and conversation history.
 - Rule fallback: `LLM_MODE=stub` or `LLM_PLANNER_MODE=rule` uses keyword/regex rules.
+- **History context**: PLANNER receives `history_rounds` from orchestrator and includes truncated conversation history in the prompt for better context understanding.
 - Aspect classification (rules): `ASPECT_KEYWORDS` keyword matching; no match defaults to `["OTHER"]`.
 - Time recognition (rules): Scans multiple time expressions and generates `times` list (year-level only).
   - Relative year: `今年/明年/去年` (this year/next year/last year) → `{need_tool: true, ref_text: "今年", year: now.year+offset}`
@@ -87,6 +88,21 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
   - Others → build prompt → `llm_report_tool`
 - Retry: LLM tool layer controlled by `LLM_MAX_RETRIES` (default 2 attempts); execution layer has no additional retry wrapper.
 - Logging: `LLM_DEBUG` prints node start/end/cache hit/wait; `meta.duration_ms` records duration.
+
+### Model Switch and Cache Behavior
+
+When user switches LLM model (via `profile.llm_model`), cache behavior differs by node type:
+
+| Node | Inputs | Cache on Model Switch |
+|------|--------|----------------------|
+| PAIPAN | `{birth, gender, birth_time_unknown}` | **Cache hit** (no model in inputs) |
+| LLM nodes (OVERALL, SHISHEN, etc.) | `{prompt_config, model}` | **Cache miss** (model changes hash) |
+
+This is the intended behavior:
+- PAIPAN is pure calculation, model-independent → no need to recalculate
+- LLM analysis depends on model → should regenerate with new model
+
+**Note**: Cached LLM outputs from previous models are overwritten when the new model generates output.
 
 ### Error Handling in `run_turn`
 - After DAG execution, orchestrator checks for failed nodes (nodes with `error=true` but not `skipped`)

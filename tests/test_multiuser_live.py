@@ -14,6 +14,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
+from agent.models import DEFAULT_MODEL
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, log_event_to_conversation
 from agent.storage.paths import session_paths
@@ -244,8 +245,7 @@ def main() -> None:
 
     print(
         f"Multi-user live test starting "
-        f"(base={api_base}, model_reasoning={os.environ.get('LLM_MODEL_REASONING', 'gpt-5')}, "
-        f"model_fast={os.environ.get('LLM_MODEL_FAST', 'gpt-5-nano')})"
+        f"(base={api_base}, model={os.environ.get('LLM_MODEL', DEFAULT_MODEL)})"
     )
 
     question = "今年事业运势如何？"

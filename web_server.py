@@ -11,6 +11,7 @@ from typing import Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from agent.models import AVAILABLE_MODELS, DEFAULT_MODEL
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
@@ -113,12 +114,16 @@ def create_app(
         if birth_error:
             return jsonify({"error": birth_error}), 400
         ensure_user_dirs(user_id)
+        llm_model = data.get("llm_model", DEFAULT_MODEL)
+        if llm_model and llm_model not in AVAILABLE_MODELS:
+            llm_model = DEFAULT_MODEL
         profile = {
             "user_id": user_id,
             "birth": birth,
             "gender": data.get("gender", "male"),
             "birth_time_unknown": bool(data.get("birth_time_unknown", False)),
             "prompt_config": data.get("prompt_config", "lingyun_cat"),
+            "llm_model": llm_model,
             "node_cache": {},
         }
         save_profile(profile_path(user_id), profile)
@@ -133,6 +138,34 @@ def create_app(
         if not os.path.exists(path):
             return jsonify({"error": "profile not found"}), 404
         return jsonify(load_profile(path))
+
+    @app.route("/api/profile", methods=["PUT"])
+    def update_profile() -> Response:
+        data = request.get_json(force=True) or {}
+        user_id = (data.get("user_id") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id required"}), 400
+        path = profile_path(user_id)
+        if not os.path.exists(path):
+            return jsonify({"error": "profile not found"}), 404
+        profile = load_profile(path)
+        # Update allowed fields
+        if "llm_model" in data:
+            llm_model = data["llm_model"]
+            if llm_model and llm_model not in AVAILABLE_MODELS:
+                return jsonify({"error": f"invalid model: {llm_model}"}), 400
+            profile["llm_model"] = llm_model or DEFAULT_MODEL
+        if "prompt_config" in data:
+            profile["prompt_config"] = data["prompt_config"]
+        save_profile(path, profile)
+        return jsonify({"success": True, "profile": profile})
+
+    @app.route("/api/models", methods=["GET"])
+    def get_models() -> Response:
+        return jsonify({
+            "models": AVAILABLE_MODELS,
+            "default": DEFAULT_MODEL,
+        })
 
     @app.route("/api/sessions", methods=["GET"])
     def list_sessions() -> Response:

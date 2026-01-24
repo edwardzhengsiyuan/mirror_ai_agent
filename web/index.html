@@ -192,6 +192,27 @@
         font-size: 15px;
       }
 
+      .model-selector {
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 13px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+        min-width: 180px;
+        max-width: 220px;
+      }
+
+      .model-selector:hover {
+        border-color: var(--accent);
+      }
+
+      .model-selector:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
       .icon-btn {
         width: 32px;
         height: 32px;
@@ -753,6 +774,7 @@
       <!-- Main chat area -->
       <main class="chat-area">
         <div class="chat-header">
+          <select id="modelSelect" class="model-selector" title="选择模型"></select>
           <div class="chat-title">对话</div>
           <button id="refreshBtn" class="icon-btn" title="刷新">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -927,8 +949,11 @@
       const eventLogEl = document.getElementById("eventLog");
       const nodesEl = document.getElementById("nodes");
       const userSelect = document.getElementById("userSelect");
+      const modelSelect = document.getElementById("modelSelect");
       const conversationListEl = document.getElementById("conversationList");
       let currentSessionId = null;
+      let availableModels = [];
+      let defaultModel = "gpt-5-mini";
 
       function logEvent(text) {
         const line = document.createElement("div");
@@ -1403,6 +1428,39 @@
         await loadHistory();
       }
 
+      async function loadModels() {
+        try {
+          const data = await fetchJson("/api/models");
+          availableModels = data.models || [];
+          defaultModel = data.default || "gpt-5-mini";
+          modelSelect.innerHTML = "";
+          availableModels.forEach((model) => {
+            const opt = document.createElement("option");
+            opt.value = model;
+            opt.textContent = model;
+            modelSelect.appendChild(opt);
+          });
+          modelSelect.value = defaultModel;
+        } catch (err) {
+          logEvent("load models error: " + err.message);
+        }
+      }
+
+      async function updateProfileModel(model) {
+        const userId = userSelect.value;
+        if (!userId) return;
+        try {
+          await fetchJson("/api/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId, llm_model: model }),
+          });
+          logEvent("model updated: " + model);
+        } catch (err) {
+          logEvent("update model error: " + err.message);
+        }
+      }
+
       async function loadUsers() {
         const data = await fetchJson("/api/users");
         userSelect.innerHTML = "";
@@ -1466,6 +1524,14 @@
             <div class="profile-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日 ${birth.hour || 0}时${birth.minute || 0}分</div>
             <div class="profile-gender">性别: ${genderText}${profile.birth_time_unknown ? " (时辰未知)" : ""}</div>
           `;
+
+          // Update model selector from profile
+          const profileModel = profile.llm_model || defaultModel;
+          if (availableModels.includes(profileModel)) {
+            modelSelect.value = profileModel;
+          } else {
+            modelSelect.value = defaultModel;
+          }
         } catch (err) {
           logEvent("加载用户信息失败: " + err.message);
         }
@@ -1687,10 +1753,15 @@
         await loadConversationList();
         await loadHistory();
       });
+      modelSelect.addEventListener("change", async () => {
+        await updateProfileModel(modelSelect.value);
+      });
 
       // Initialize
       createNodeCards();
-      loadUsers().catch((err) => logEvent("init error: " + err.message));
+      loadModels().then(() => {
+        loadUsers().catch((err) => logEvent("init error: " + err.message));
+      }).catch((err) => logEvent("init error: " + err.message));
     </script>
   </body>
 </html>

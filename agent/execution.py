@@ -303,10 +303,11 @@ def run_tool(
     try:
         if tool_name == "PLANNER":
             emit_event(event_sink, {"type": "tool_call", "tool": "planner", "invocation_id": invocation_id})
-            output = plan(
+            output, llm_prompt = plan(
                 question=inputs.get("question", ""),
                 now=inputs.get("now"),
                 dayun_list=inputs.get("dayun_list", []),
+                history_rounds=inputs.get("history_rounds"),
                 event_sink=event_sink,
                 stream=stream,
             )

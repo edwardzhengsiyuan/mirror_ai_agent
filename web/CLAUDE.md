@@ -26,6 +26,7 @@ Three-column layout (ChatGPT/Claude style):
 
 | Feature | Description |
 |---------|-------------|
+| Model selector | Dropdown in chat header to select LLM model, persists to user profile |
 | Streaming response display | Listens to `response_delta` events for real-time LLM output rendering |
 | Instant tool call display | `tool_call` event triggers placeholder card creation, updates on `tool_invocation` completion |
 | Markdown rendering | Uses marked.js to render assistant messages (headings, lists, code blocks, quotes) |
@@ -37,12 +38,33 @@ Three-column layout (ChatGPT/Claude style):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/api/models` | GET | Returns available models and default model |
 | `/api/session_metadata` | GET | Returns session list with first message preview |
 | `/api/sessions` | GET/POST | List sessions / Create new session |
-| `/api/users` | GET/POST | List users / Create user |
+| `/api/users` | GET/POST | List users / Create user (accepts `llm_model`) |
 | `/api/profile` | GET | Get user profile |
+| `/api/profile` | PUT | Update user profile (supports `llm_model`, `prompt_config`) |
 | `/api/history` | GET | Get session message history |
 | `/api/ask_stream` | POST | Streaming Q&A (SSE) |
+
+### Model API
+
+**GET /api/models**
+```json
+{
+  "models": ["claude-sonnet-4-5-20250929", "gpt-5-mini", ...],
+  "default": "gpt-5-mini"
+}
+```
+
+**PUT /api/profile**
+```json
+// Request
+{"user_id": "u_demo", "llm_model": "gpt-5.2"}
+
+// Response
+{"success": true, "profile": {...}}
+```
 
 ## Files
 

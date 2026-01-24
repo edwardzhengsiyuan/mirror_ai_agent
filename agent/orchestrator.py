@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from .deps import COMMON_PREREQS
 from .events import EventSink, emit_event
 from .execution import ensure_node, run_nodes_parallel, run_tool, run_response
+from .models import DEFAULT_MODEL
 from .response import compose_response
 
 
@@ -45,6 +46,7 @@ def run_turn(
         "question": question,
         "now": now,
         "dayun_list": dayun_list,
+        "history_rounds": history_rounds or [],
     }
     plan_result, planner_invocation_id, planner_duration_ms, planner_llm_prompt = run_tool(
         "PLANNER",
@@ -62,6 +64,7 @@ def run_turn(
             "question": question,
             "now": now.isoformat() if now else None,
             "dayun_list": dayun_list,
+            "history_rounds": history_rounds or [],
         },
         "output": plan_result,
         "duration_ms": planner_duration_ms,
@@ -78,22 +81,23 @@ def run_turn(
     nodes = set(COMMON_PREREQS)
     nodes.update(aspects)
     prompt_config = profile.get("prompt_config", "lingyun_cat")
+    llm_model = profile.get("llm_model", DEFAULT_MODEL)
     outputs = run_nodes_parallel(
         profile,
         list(nodes),
         {
             "PAIPAN": paipan_inputs,
-            "OVERALL": {"prompt_config": prompt_config, "model": "reasoning"},
-            "SHISHEN": {"prompt_config": prompt_config, "model": "reasoning"},
-            "GEJU": {"prompt_config": prompt_config, "model": "reasoning"},
-            "WUXING_PREFS": {"prompt_config": prompt_config, "model": "reasoning"},
-            "CAREER": {"prompt_config": prompt_config},
-            "RELATIONSHIP": {"prompt_config": prompt_config},
-            "HEALTH": {"prompt_config": prompt_config},
-            "GUIREN": {"prompt_config": prompt_config},
-            "LIUQIN": {"prompt_config": prompt_config},
-            "XINGGE": {"prompt_config": prompt_config},
-            "OTHER": {"prompt_config": prompt_config},
+            "OVERALL": {"prompt_config": prompt_config, "model": llm_model},
+            "SHISHEN": {"prompt_config": prompt_config, "model": llm_model},
+            "GEJU": {"prompt_config": prompt_config, "model": llm_model},
+            "WUXING_PREFS": {"prompt_config": prompt_config, "model": llm_model},
+            "CAREER": {"prompt_config": prompt_config, "model": llm_model},
+            "RELATIONSHIP": {"prompt_config": prompt_config, "model": llm_model},
+            "HEALTH": {"prompt_config": prompt_config, "model": llm_model},
+            "GUIREN": {"prompt_config": prompt_config, "model": llm_model},
+            "LIUQIN": {"prompt_config": prompt_config, "model": llm_model},
+            "XINGGE": {"prompt_config": prompt_config, "model": llm_model},
+            "OTHER": {"prompt_config": prompt_config, "model": llm_model},
         },
         event_sink=event_sink,
         stream=stream,
@@ -170,7 +174,7 @@ def run_turn(
     # 5. Generate Response (conversation-level, not cached)
     response_inputs = {
         "prompt_config": prompt_config,
-        "model": "reasoning",
+        "model": llm_model,
         "question": question,
         "history_rounds": history_rounds or [],
         "time_context": time_context,

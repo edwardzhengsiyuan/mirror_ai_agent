@@ -126,7 +126,7 @@ def llm_report_tool(
     Args:
         system_prompt: System prompt for the LLM
         user_prompt: User prompt for the LLM
-        model: Model name override (default: LLM_MODEL_FAST)
+        model: Model name override (default: LLM_MODEL or DEFAULT_MODEL)
         node: Node label for logging/tracing
         sleep_ms: Optional delay before call
         stream: Enable streaming response
@@ -144,11 +144,8 @@ def llm_report_tool(
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     _load_env_file(os.path.join(repo_root, ".env"))
 
-    model_reasoning = _env("LLM_MODEL_REASONING", "gpt-5")
-    model_fast = _env("LLM_MODEL_FAST", "gpt-5-nano")
-    model_name = model or model_fast
-    if model == "reasoning":
-        model_name = model_reasoning
+    from ..models import DEFAULT_MODEL
+    model_name = model or _env("LLM_MODEL", DEFAULT_MODEL)
 
     force_error = _env("LLM_FORCE_ERROR", "")
     force_error_set = {n.strip().upper() for n in force_error.split(",") if n.strip()}

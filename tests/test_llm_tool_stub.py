@@ -8,6 +8,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
+from agent.models import DEFAULT_MODEL
 from agent.tools.llm_tool import llm_report_tool
 
 
@@ -19,7 +20,7 @@ def main() -> None:
     assert res["reasoning_content"] is None
 
     os.environ["LLM_MODE"] = "stub"
-    res2 = llm_report_tool("sys", "user", model="reasoning", node="OVERALL")
+    res2 = llm_report_tool("sys", "user", model=DEFAULT_MODEL, node="OVERALL")
     assert "LLM_PLACEHOLDER:OVERALL" in res2["content"]
     print("llm stub ok")
 

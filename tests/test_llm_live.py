@@ -13,6 +13,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
+from agent.models import DEFAULT_MODEL
 from agent.orchestrator import run_turn
 from agent.execution import ensure_node
 from agent.storage.conversation_store import append_event, load_recent_rounds, log_event_to_conversation
@@ -63,7 +64,7 @@ def _run_llm_ping() -> None:
     ping = llm_report_tool(
         "You are a helpful assistant.",
         "Reply with a short OK.",
-        model="reasoning",
+        model=DEFAULT_MODEL,
         node="LLM_PING",
     )
     assert ping.get("type") == "report"
@@ -97,7 +98,7 @@ def _run_llm_single_node() -> None:
     overall_output = ensure_node(
         profile_single,
         "OVERALL",
-        {"prompt_config": "lingyun_cat", "model": "reasoning"},
+        {"prompt_config": "lingyun_cat", "model": DEFAULT_MODEL},
     )
     assert overall_output.get("content"), "empty OVERALL content"
     assert "reasoning_content" in overall_output, "missing reasoning_content for OVERALL"
@@ -194,8 +195,7 @@ def main() -> None:
         return
     print(
         "llm live test starting "
-        f"(base={api_base}, model_reasoning={os.environ.get('LLM_MODEL_REASONING', 'gpt-5')}, "
-        f"model_fast={os.environ.get('LLM_MODEL_FAST', 'gpt-5-nano')})"
+        f"(base={api_base}, model={os.environ.get('LLM_MODEL', DEFAULT_MODEL)})"
     )
     _run_llm_ping()
     _run_llm_single_node()

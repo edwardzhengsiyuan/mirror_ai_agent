@@ -69,14 +69,25 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `LLM_API_BASE` / `OPENAI_API_BASE` | - | API endpoint URL |
 | `LLM_API_KEY` / `OPENAI_API_KEY` | - | API key |
 | `LLM_MODE` | - | `stub` for placeholder output |
-| `LLM_MODEL_REASONING` | gpt-5 | Reasoning model |
-| `LLM_MODEL_FAST` | gpt-5-nano | Fast model |
+| `LLM_MODEL` | gpt-5-mini | Model name (user-selectable via UI or env var) |
 | `LLM_TIMEOUT_SECONDS` | 120 | Timeout in seconds |
 | `LLM_MAX_RETRIES` | 2 | Retry count |
 | `LLM_PARALLEL_WORKERS` | min(8, nodes) | Concurrent thread count |
 | `LLM_DEBUG` | - | Print debug logs |
 | `LLM_TRACE_RAW` | false | Include raw API response in llm_response events |
 | `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
+
+**Available Models** (via `agent/models.py`):
+- `claude-sonnet-4-5-20250929`
+- `claude-sonnet-4-5-20250929-thinking`
+- `gemini-3-pro-preview`
+- `gpt-5.2`
+- `gpt-5-mini` (default)
+- `gpt-5-nano`
+
+**Note**: `LLM_MODEL_REASONING` and `LLM_MODEL_FAST` are deprecated. Use `LLM_MODEL` or the per-profile `llm_model` field instead.
+
+**Cache behavior on model switch**: When user changes model, PAIPAN cache is preserved (model-independent), but all LLM node caches are invalidated and regenerated. See `agent/CLAUDE.md` §4 for details.
 
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
