@@ -150,10 +150,11 @@ def _run_llm_full_pipeline() -> None:
     append_event(convo_path, {"ts": now.isoformat(), "type": "events", "count": len(events)})
     append_event(convo_path, {"ts": now.isoformat(), "type": "assistant_final", "text": result["response"]})
     # Verify core nodes executed and reasoning content exists for reasoning nodes
+    # GEJU has been split into GEJU_ROUTER, GEJU_ANALYSIS, GEJU_LEVEL
     cache = profile.get("node_cache", {})
-    for node in ["PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"]:
+    for node in ["PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS"]:
         assert node in cache, f"missing cache node {node}"
-    for node in ["OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"]:
+    for node in ["OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS"]:
         assert "reasoning_content" in cache[node]["output"], f"missing reasoning_content for {node}"
     assert any(e.get("type") == "llm_prompt" for e in events), "missing llm_prompt events"
     assert any(e.get("type") == "tool_call" and e.get("tool") == "paipan_tool" for e in events), "missing paipan tool_call"

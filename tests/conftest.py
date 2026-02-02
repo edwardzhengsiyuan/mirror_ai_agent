@@ -77,11 +77,29 @@ def sample_cache():
                 "error": False,
             }
         },
-        "GEJU": {
+        "GEJU_ROUTER": {
             "output": {
                 "type": "report",
-                "content": "Test geju content",
-                "structured": {"node": "GEJU"},
+                "content": '{"category": "NORMAL", "patterns": [{"type": "NORMAL", "name": "正官格", "reasoning": "Test router reasoning"}]}',
+                "structured": {"node": "GEJU_ROUTER"},
+                "reasoning_content": "",
+                "error": False,
+            }
+        },
+        "GEJU_ANALYSIS": {
+            "output": {
+                "type": "report",
+                "content": "Test geju analysis content",
+                "structured": {"node": "GEJU_ANALYSIS"},
+                "reasoning_content": "",
+                "error": False,
+            }
+        },
+        "GEJU_LEVEL": {
+            "output": {
+                "type": "report",
+                "content": "Test geju level content",
+                "structured": {"node": "GEJU_LEVEL"},
                 "reasoning_content": "",
                 "error": False,
             }

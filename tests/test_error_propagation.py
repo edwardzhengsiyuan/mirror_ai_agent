@@ -49,14 +49,17 @@ def test_workflow_stops_on_prerequisite_failure(monkeypatch) -> None:
     profile = {"node_cache": {}}
 
     # Run nodes including OVERALL (which will fail) and CAREER (depends on COMMON_PREREQS)
+    # GEJU has been split into GEJU_ROUTER, GEJU_ANALYSIS, GEJU_LEVEL
     outputs = run_nodes_parallel(
         profile,
-        ["PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS", "CAREER"],
+        ["PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS", "CAREER"],
         {
             "PAIPAN": {},
             "OVERALL": {"prompt_config": "lingyun_cat"},
             "SHISHEN": {"prompt_config": "lingyun_cat"},
-            "GEJU": {"prompt_config": "lingyun_cat"},
+            "GEJU_ROUTER": {"prompt_config": "lingyun_cat"},
+            "GEJU_ANALYSIS": {"prompt_config": "lingyun_cat"},
+            "GEJU_LEVEL": {"prompt_config": "lingyun_cat"},
             "WUXING_PREFS": {"prompt_config": "lingyun_cat"},
             "CAREER": {"prompt_config": "lingyun_cat"},
         },
@@ -66,11 +69,19 @@ def test_workflow_stops_on_prerequisite_failure(monkeypatch) -> None:
     assert outputs["OVERALL"].get("error"), "OVERALL should be marked as error"
     assert not outputs["OVERALL"].get("skipped"), "OVERALL should not be marked as skipped"
 
-    # GEJU depends on OVERALL, should be skipped
-    assert outputs["GEJU"].get("error"), "GEJU should be marked as error"
-    assert outputs["GEJU"].get("skipped"), "GEJU should be marked as skipped"
+    # GEJU_ROUTER depends on OVERALL, should be skipped
+    assert outputs["GEJU_ROUTER"].get("error"), "GEJU_ROUTER should be marked as error"
+    assert outputs["GEJU_ROUTER"].get("skipped"), "GEJU_ROUTER should be marked as skipped"
 
-    # WUXING_PREFS depends on OVERALL and GEJU, should be skipped
+    # GEJU_ANALYSIS depends on GEJU_ROUTER, should be skipped
+    assert outputs["GEJU_ANALYSIS"].get("error"), "GEJU_ANALYSIS should be marked as error"
+    assert outputs["GEJU_ANALYSIS"].get("skipped"), "GEJU_ANALYSIS should be marked as skipped"
+
+    # GEJU_LEVEL depends on GEJU_ANALYSIS, should be skipped
+    assert outputs["GEJU_LEVEL"].get("error"), "GEJU_LEVEL should be marked as error"
+    assert outputs["GEJU_LEVEL"].get("skipped"), "GEJU_LEVEL should be marked as skipped"
+
+    # WUXING_PREFS depends on OVERALL and GEJU_LEVEL, should be skipped
     assert outputs["WUXING_PREFS"].get("error"), "WUXING_PREFS should be marked as error"
     assert outputs["WUXING_PREFS"].get("skipped"), "WUXING_PREFS should be marked as skipped"
 

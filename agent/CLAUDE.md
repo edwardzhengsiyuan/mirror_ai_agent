@@ -25,16 +25,36 @@ For maintainers: Covers execution flow, node DAG, planning logic, caching/concur
 ## 2. Nodes and Dependencies (DAG)
 
 ### Persistent Nodes (cached in profile.node_cache)
-- Constant `PERSISTENT_NODES = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS","CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER"]`
-- Constant `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU","WUXING_PREFS"]`
+- Constant `PERSISTENT_NODES = ["PAIPAN","OVERALL","SHISHEN","GEJU_ROUTER","GEJU_ANALYSIS","GEJU_LEVEL","WUXING_PREFS","CAREER","RELATIONSHIP","HEALTH","GUIREN","LIUQIN","XINGGE","OTHER"]`
+- Constant `COMMON_PREREQS = ["PAIPAN","OVERALL","SHISHEN","GEJU_ROUTER","GEJU_ANALYSIS","GEJU_LEVEL","WUXING_PREFS"]`
 - `DEPS`:
   - `PAIPAN`: [] (chart calculation tool)
   - `OVERALL`: [PAIPAN] (overall analysis)
   - `SHISHEN`: [PAIPAN]
-  - `GEJU`: [PAIPAN, OVERALL]
-  - `WUXING_PREFS`: [PAIPAN, OVERALL, SHISHEN, GEJU]
+  - `GEJU_ROUTER`: [PAIPAN, OVERALL] (格局识别 - pattern classification)
+  - `GEJU_ANALYSIS`: [PAIPAN, OVERALL, GEJU_ROUTER] (格局分析 - detailed analysis based on router output)
+  - `GEJU_LEVEL`: [PAIPAN, OVERALL, GEJU_ROUTER, GEJU_ANALYSIS] (格局层次 - level evaluation)
+  - `WUXING_PREFS`: [PAIPAN, OVERALL, SHISHEN, GEJU_LEVEL]
 - Domain nodes `CAREER/RELATIONSHIP/HEALTH/GUIREN/LIUQIN/XINGGE/OTHER`: depend on `COMMON_PREREQS`
 - Topological sort: `deps.toposort(nodes)` ensures dependencies come first.
+
+### GEJU Multi-Stage Workflow
+
+The GEJU (格局) analysis has been split into 3 sequential nodes:
+
+```
+GEJU_ROUTER → GEJU_ANALYSIS → GEJU_LEVEL
+     ↓              ↓              ↓
+  格局分类      格局详细分析     格局层次评估
+```
+
+1. **GEJU_ROUTER**: Classifies the chart pattern (正格/特殊格局/杂格/无格) and outputs JSON with `category` and `patterns` array.
+2. **GEJU_ANALYSIS**: Dynamically selects prompt based on router output (e.g., `正官格` uses `# 正格_正官格.md`).
+3. **GEJU_LEVEL**: Evaluates pattern quality using "有情/有力" (harmony/strength) principles.
+
+Prompt files are located in `agent/prompts/geju/`. Router output is parsed to select the appropriate analysis prompt.
+
+**GEJU_ROUTER Output Validation**: The router output is validated to ensure correct JSON format with required fields (`category`, `patterns`). If validation fails, the LLM is retried with error feedback (up to 2 retries). See `NODE_VALIDATORS` in `prompt_builder.py`.
 
 ### Conversation-level Tools (not cached, stored in conversation JSONL)
 - `CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"]`
@@ -161,6 +181,7 @@ When bypass is enabled:
 | `llm_request` | Always-on tracing: emitted before each LLM API call, contains `{node, model, attempt, url, timeout_seconds, system_prompt, user_prompt, stub}` |
 | `llm_response` | Always-on tracing: emitted on successful LLM response, contains `{node, model, content, reasoning_content, duration_ms, raw?, stub}` |
 | `llm_error` | Always-on tracing: emitted on LLM API error, contains `{node, model, attempt, error, error_type}` |
+| `llm_validation_retry` | Emitted when output validation fails and retry is attempted, contains `{node, attempt, error, invalid_output_preview}` |
 | `time_context` | Time context result (legacy event) |
 | `assistant_final` | **Deprecated**, new conversations use `response` event |
 

@@ -7,7 +7,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from ..events import EventSink, emit_event
 
@@ -111,6 +111,116 @@ def _stream_sse_response(
     return "".join(content_parts), "".join(reasoning_parts)
 
 
+def _do_llm_api_call(
+    url: str,
+    api_key: str,
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    timeout_seconds: int,
+    max_retries: int,
+    stream: bool,
+    on_delta: Optional[Callable[[Dict[str, str]], None]],
+    event_sink: EventSink | None,
+    node_label: str,
+) -> Tuple[Optional[str], Optional[str], Optional[Exception]]:
+    """Execute LLM API call with network error retry.
+
+    Returns:
+        Tuple of (content, reasoning_content, last_error)
+        - On success: (content, reasoning_content, None)
+        - On failure: (None, None, last_error)
+    """
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if stream:
+        payload["stream"] = True
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    last_err = None
+    body = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            _debug(f"POST {url} attempt={attempt}/{max_retries} model={model_name} node={node_label}")
+            emit_event(
+                event_sink,
+                {
+                    "type": "llm_request",
+                    "node": node_label,
+                    "model": model_name,
+                    "attempt": attempt,
+                    "url": url,
+                    "timeout_seconds": timeout_seconds,
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                if stream:
+                    content, reasoning_content = _stream_sse_response(resp, on_delta)
+                    body = json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": content,
+                                        "reasoning": reasoning_content,
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                else:
+                    body = resp.read().decode("utf-8")
+            last_err = None
+            break
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            last_err = e
+            _debug(f"error attempt={attempt} node={node_label} err={e}")
+            emit_event(
+                event_sink,
+                {
+                    "type": "llm_error",
+                    "node": node_label,
+                    "model": model_name,
+                    "attempt": attempt,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            time.sleep(min(2 * attempt, 5))
+            continue
+
+    if last_err is not None:
+        return None, None, last_err
+
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as e:
+        return None, None, e
+
+    choice = (parsed.get("choices") or [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "")
+    reasoning_content = message.get("reasoning") or message.get("reasoning_content") or ""
+
+    return content, reasoning_content, None
+
+
 def llm_report_tool(
     system_prompt: str,
     user_prompt: str,
@@ -120,6 +230,8 @@ def llm_report_tool(
     stream: bool = False,
     on_delta: Callable[[Dict[str, str]], None] | None = None,
     event_sink: EventSink | None = None,
+    output_validator: Callable[[str], tuple[bool, str]] | None = None,
+    validation_retries: int = 2,
 ) -> Dict[str, Any]:
     """LLM call with stub fallback for local testing.
 
@@ -132,6 +244,10 @@ def llm_report_tool(
         stream: Enable streaming response
         on_delta: Callback for streaming chunks
         event_sink: Event sink for LLM tracing (llm_request/response/error events)
+        output_validator: Optional function to validate output format.
+            Takes content string, returns (is_valid, error_message).
+            If validation fails, LLM is called again with the error feedback.
+        validation_retries: Max retries for validation failures (default 2)
 
     Returns:
         Dict with content, structured, reasoning_content, error fields
@@ -178,7 +294,6 @@ def llm_report_tool(
             f"stub response for {node_label} mode={mode} api_base={api_base} "
             f"api_key={'set' if api_key else 'missing'}"
         )
-        # Emit llm_request event for stub mode
         emit_event(
             event_sink,
             {
@@ -197,7 +312,6 @@ def llm_report_tool(
         if stream and on_delta:
             _emit_stub_stream(resp.get("content", ""), on_delta)
         duration_ms = int((time.perf_counter() - call_started_ts) * 1000)
-        # Emit llm_response event for stub mode
         emit_event(
             event_sink,
             {
@@ -224,121 +338,112 @@ def llm_report_tool(
         url = base + "/chat/completions"
     timeout_seconds = int(_env("LLM_TIMEOUT_SECONDS", "120"))
     max_retries = int(_env("LLM_MAX_RETRIES", "2"))
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-    if stream:
-        payload["stream"] = True
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    last_err = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            _debug(f"POST {url} attempt={attempt}/{max_retries} model={model_name} node={node_label}")
-            # Emit llm_request event before API call
-            emit_event(
-                event_sink,
-                {
-                    "type": "llm_request",
-                    "node": node_label,
-                    "model": model_name,
-                    "attempt": attempt,
-                    "url": url,
-                    "timeout_seconds": timeout_seconds,
-                    "system_prompt": system_prompt,
-                    "user_prompt": user_prompt,
-                },
-            )
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-                if stream:
-                    content, reasoning_content = _stream_sse_response(resp, on_delta)
-                    body = json.dumps(
-                        {
-                            "choices": [
-                                {
-                                    "message": {
-                                        "content": content,
-                                        "reasoning": reasoning_content,
-                                    }
-                                }
-                            ]
-                        }
-                    )
-                else:
-                    body = resp.read().decode("utf-8")
-            last_err = None
+
+    # Main loop with validation retry
+    current_user_prompt = user_prompt
+    validation_attempt = 0
+    last_content = ""
+    last_reasoning_content = ""
+
+    while validation_attempt <= validation_retries:
+        content, reasoning_content, api_error = _do_llm_api_call(
+            url=url,
+            api_key=api_key,
+            model_name=model_name,
+            system_prompt=system_prompt,
+            user_prompt=current_user_prompt,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            stream=stream if validation_attempt == 0 else False,  # Only stream on first attempt
+            on_delta=on_delta if validation_attempt == 0 else None,
+            event_sink=event_sink,
+            node_label=node_label,
+        )
+
+        if api_error is not None:
+            return {
+                "type": "report",
+                "content": f"[LLM_ERROR:{node_label}] {api_error}",
+                "structured": {"node": node_label, "summary": "LLM error"},
+                "reasoning_content": "",
+                "error": True,
+            }
+
+        last_content = content
+        last_reasoning_content = reasoning_content
+
+        # If no validator, return immediately
+        if output_validator is None:
             break
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-            last_err = e
-            _debug(f"error attempt={attempt} node={node_label} err={e}")
-            # Emit llm_error event for this attempt
+
+        # Validate output
+        is_valid, error_message = output_validator(content)
+        if is_valid:
+            _debug(f"validation passed for {node_label}")
+            break
+
+        validation_attempt += 1
+        if validation_attempt > validation_retries:
+            # Validation failed after all retries - return error
+            _debug(f"validation failed after {validation_retries} retries for {node_label}: {error_message}")
             emit_event(
                 event_sink,
                 {
                     "type": "llm_error",
                     "node": node_label,
                     "model": model_name,
-                    "attempt": attempt,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
+                    "attempt": validation_attempt,
+                    "error": f"Output validation failed: {error_message}",
+                    "error_type": "ValidationError",
+                    "invalid_output": content[:500],  # Include truncated output for debugging
                 },
             )
-            time.sleep(min(2 * attempt, 5))
-            continue
-    if last_err is not None:
-        return {
-            "type": "report",
-            "content": f"[LLM_ERROR:{node_label}] {last_err}",
-            "structured": {"node": node_label, "summary": "LLM error"},
-            "reasoning_content": "",
-            "error": True,
-        }
+            return {
+                "type": "report",
+                "content": f"[LLM_VALIDATION_ERROR:{node_label}] {error_message}",
+                "structured": {"node": node_label, "summary": "LLM validation error"},
+                "reasoning_content": reasoning_content or "",
+                "error": True,
+            }
 
-    try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError:
-        return {
-            "type": "report",
-            "content": f"[LLM_ERROR:{node_label}] invalid JSON",
-            "structured": {"node": node_label, "summary": "LLM error"},
-            "reasoning_content": None,
-            "error": True,
-        }
+        # Build retry prompt with error feedback
+        _debug(f"validation failed for {node_label} (attempt {validation_attempt}/{validation_retries}): {error_message}")
+        emit_event(
+            event_sink,
+            {
+                "type": "llm_validation_retry",
+                "node": node_label,
+                "attempt": validation_attempt,
+                "error": error_message,
+                "invalid_output_preview": content[:200],
+            },
+        )
+        current_user_prompt = (
+            f"{user_prompt}\n\n"
+            f"---\n"
+            f"## 重要：你上次的输出格式不正确，请修正\n\n"
+            f"### 你的错误输出：\n```\n{content}\n```\n\n"
+            f"### 错误原因：\n{error_message}\n\n"
+            f"### 请严格按照要求的格式重新输出，不要包含任何额外的解释文字。"
+        )
 
-    choice = (parsed.get("choices") or [{}])[0]
-    message = choice.get("message", {})
-    content = message.get("content", "")
-    reasoning_content = message.get("reasoning") or message.get("reasoning_content")
-    if reasoning_content is None:
-        reasoning_content = ""
     duration_ms = int((time.perf_counter() - call_started_ts) * 1000)
     _debug(
         f"success node={node_label} model={model_name} "
-        f"content_preview={content[:120].replace(chr(10), ' ')}"
+        f"content_preview={last_content[:120].replace(chr(10), ' ')}"
     )
+
     # Emit llm_response event
     response_event: Dict[str, Any] = {
         "type": "llm_response",
         "node": node_label,
         "model": model_name,
-        "content": content,
-        "reasoning_content": reasoning_content,
+        "content": last_content,
+        "reasoning_content": last_reasoning_content,
         "duration_ms": duration_ms,
     }
     if _trace_raw_enabled():
-        response_event["raw"] = parsed
+        response_event["raw"] = {"content": last_content, "reasoning_content": last_reasoning_content}
     emit_event(event_sink, response_event)
 
     structured = {
@@ -348,8 +453,8 @@ def llm_report_tool(
     }
     return {
         "type": "report",
-        "content": content,
+        "content": last_content,
         "structured": structured,
-        "reasoning_content": reasoning_content,
+        "reasoning_content": last_reasoning_content,
         "error": False,
     }

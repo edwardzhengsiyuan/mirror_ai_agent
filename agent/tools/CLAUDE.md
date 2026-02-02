@@ -103,8 +103,15 @@ Automatically reads `.env` from repo root (ignored if missing).
 - Profile-level model stored in `profile.llm_model`, passed by orchestrator
 
 **Retry and Timeout**
-- Retry count: `LLM_MAX_RETRIES` (default 2)
+- Network error retry count: `LLM_MAX_RETRIES` (default 2)
 - Timeout: `LLM_TIMEOUT_SECONDS` (default 120)
+
+**Output Validation and Retry**
+- `output_validator`: Optional callable `(content: str) -> (bool, str)` to validate output format
+- `validation_retries`: Max retries for validation failures (default 2)
+- When validation fails, the LLM is called again with error feedback appended to the prompt
+- If validation still fails after all retries, returns error with `[LLM_VALIDATION_ERROR:...]`
+- Emits `llm_validation_retry` event on each validation retry attempt
 
 **Failure Injection**
 `LLM_FORCE_ERROR=NODE1,NODE2|ALL` returns `{"error":True,"content":"[LLM_ERROR:...]"}`

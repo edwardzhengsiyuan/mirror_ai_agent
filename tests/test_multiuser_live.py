@@ -38,7 +38,9 @@ def load_env_file(path: str) -> None:
 
 def _configure_live_env() -> tuple[bool, str, str]:
     load_env_file(os.path.join(ROOT, ".env"))
-    os.environ.setdefault("LLM_PARALLEL_WORKERS", "4")
+    # Use 1 worker per user to minimize concurrent API calls (3 users × 1 = 3 calls max)
+    # This prevents 504 Gateway Timeout errors from API overload
+    os.environ.setdefault("LLM_PARALLEL_WORKERS", "1")
     os.environ.setdefault("LLM_DEBUG", "1")
     os.environ.setdefault("LLM_MAX_RETRIES", "3")
     os.environ.setdefault("LLM_TIMEOUT_SECONDS", "400")
@@ -178,17 +180,18 @@ def test_multiuser_concurrent_live() -> None:
         # Check response exists
         assert result.get("response"), f"{user_name}: empty response"
 
-        # Check core nodes were executed
+        # Check COMMON_PREREQS nodes were executed (these always run)
         cache = profile.get("node_cache", {})
-        for node in ["PAIPAN", "OVERALL", "CAREER"]:
-            assert node in cache, f"{user_name}: missing cache node {node}"
+        common_prereqs = ["PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS"]
+        cached_nodes = list(cache.keys())
+        print(f"  {user_name}: cached {len(cached_nodes)} nodes: {cached_nodes}")
+        for node in common_prereqs:
+            assert node in cache, f"{user_name}: missing cache node {node} (cached: {cached_nodes})"
 
         # Check LLM events were recorded
         events = r["events"]
         assert any(e.get("type") == "llm_request" for e in events), f"{user_name}: missing llm_request events"
         assert any(e.get("type") == "llm_response" for e in events), f"{user_name}: missing llm_response events"
-
-        print(f"  {user_name}: verified OK (birth={profile['birth']['year']}, cached nodes={list(cache.keys())})")
 
     # Verify profiles are isolated (different birth years should produce different PAIPAN results)
     paipan_results = {}

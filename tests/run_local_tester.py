@@ -117,10 +117,11 @@ def main() -> None:
 
     # Note: TIME_CONTEXT and FINAL/RESPONSE are no longer cached in profile.node_cache
     # They are now conversation-level tools/response stored in conversation JSONL
+    # GEJU has been split into 3 nodes: GEJU_ROUTER, GEJU_ANALYSIS, GEJU_LEVEL
     questions = [
         (
             "今年事业怎么样",
-            {"PAIPAN", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS", "CAREER"},
+            {"PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS", "CAREER"},
             set(),
         ),
         ("2026年3月感情如何", {"RELATIONSHIP"}, set()),

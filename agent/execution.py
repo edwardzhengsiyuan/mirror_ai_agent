@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .deps import DEPS, CONVERSATION_TOOLS, toposort
 from .events import EventSink, emit_event, emit_text_chunks
-from .nodes.prompt_builder import build_prompt, build_response_prompt
+from .nodes.prompt_builder import build_prompt, build_response_prompt, NODE_VALIDATORS
 from .planning import plan
 from .tools.llm_tool import llm_report_tool
 from .tools.paipan_tool import paipan_tool
@@ -217,6 +217,8 @@ def ensure_node(
                 },
             )
             emit_event(event_sink, {"type": "tool_call", "tool": "llm_report_tool", "node": node})
+            # Get output validator for this node if available
+            output_validator = NODE_VALIDATORS.get(node)
             output = llm_report_tool(
                 system_prompt,
                 user_prompt,
@@ -238,6 +240,7 @@ def ensure_node(
                 if event_sink
                 else None,
                 event_sink=event_sink,
+                output_validator=output_validator,
             )
             emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": node})
     except Exception as exc:
@@ -278,12 +281,20 @@ def ensure_node(
         },
     }
     with _LOCK:
-        cache[node] = entry
+        # Get fresh reference to ensure we're updating the right dict
+        profile_cache = profile.get("node_cache")
+        if profile_cache is None:
+            profile["node_cache"] = {}
+            profile_cache = profile["node_cache"]
+        profile_cache[node] = entry
         inflight = _IN_FLIGHT.pop(inflight_key, None)
         if inflight:
             inflight.set()
+        # Verify the write succeeded
+        if node not in profile.get("node_cache", {}):
+            _debug(f"ERROR: cache write failed for {node}!")
     summary = list(output.keys()) if isinstance(output, dict) else type(output).__name__
-    _debug(f"completed node {node} duration={duration_ms}ms output_keys={summary}")
+    _debug(f"completed node {node} duration={duration_ms}ms output_keys={summary} cache_nodes={list(profile.get('node_cache', {}).keys())}")
     emit_event(
         event_sink,
         {
