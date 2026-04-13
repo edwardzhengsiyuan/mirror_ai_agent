@@ -317,51 +317,60 @@ def build_response_prompt(
             formatted.append(f"Round {idx}:\nUser: {user_text}\nAssistant: {assistant_text}")
         history_block = f"Recent conversation (last {len(history_rounds)} rounds):\n" + "\n".join(formatted) + "\n"
 
-    # Build user prompt
+    # Build user prompt with instructions FIRST for better LLM attention
     prompt_parts = []
-    
-    # History and question
-    if history_block:
-        prompt_parts.append(history_block.rstrip())
+
+    # 1. Instructions (template) - placed first for LLM attention priority
+    prompt_parts.append(f"## 任务说明\n{prompt_text}")
+
+    # 2. User question - immediately after instructions
     if question_line:
-        prompt_parts.append(question_line.rstrip())
+        prompt_parts.append(f"## 用户问题\n{question_line.rstrip()}")
+
+    # 3. Conversation history (if any)
+    if history_block:
+        prompt_parts.append(f"## 对话历史\n{history_block.rstrip()}")
+
+    # 4. Analysis context sections
+    context_parts = []
 
     # Basic paipan info
     if paipan_results:
-        prompt_parts.append(f"## 排盘:\n{paipan_results}")
+        context_parts.append(f"### 排盘:\n{paipan_results}")
     if guji_results:
-        prompt_parts.append(f"## 古籍:\n{guji_results}")
+        context_parts.append(f"### 古籍:\n{guji_results}")
 
     # Year data (from time_context parameter)
     if year_data_text:
-        prompt_parts.append(f"## 目标年份详情:\n{year_data_text}")
+        context_parts.append(f"### 目标年份详情:\n{year_data_text}")
 
     # Dependent node outputs
     if overall:
-        prompt_parts.append(f"## 整体分析:\n{overall}")
+        context_parts.append(f"### 整体分析:\n{overall}")
     if shishen:
-        prompt_parts.append(f"## 十神:\n{shishen}")
+        context_parts.append(f"### 十神:\n{shishen}")
 
     # GEJU multi-stage outputs - combine for response
     if geju_router or geju_analysis or geju_level:
         geju_parts = []
         if geju_router:
-            geju_parts.append(f"### 格局判断:\n{geju_router}")
+            geju_parts.append(f"#### 格局判断:\n{geju_router}")
         if geju_analysis:
-            geju_parts.append(f"### 格局详细分析:\n{geju_analysis}")
+            geju_parts.append(f"#### 格局详细分析:\n{geju_analysis}")
         if geju_level:
-            geju_parts.append(f"### 格局层次:\n{geju_level}")
-        prompt_parts.append(f"## 格局:\n" + "\n".join(geju_parts))
+            geju_parts.append(f"#### 格局层次:\n{geju_level}")
+        context_parts.append(f"### 格局:\n" + "\n".join(geju_parts))
 
     if wuxing:
-        prompt_parts.append(f"## 五行喜忌:\n{wuxing}")
+        context_parts.append(f"### 五行喜忌:\n{wuxing}")
 
     # Aspect blocks
     if aspect_blocks:
-        prompt_parts.append(aspect_blocks.rstrip())
+        context_parts.append(aspect_blocks.rstrip())
 
-    # Prompt template
-    prompt_parts.append(prompt_text)
+    # Add context section if there's any content
+    if context_parts:
+        prompt_parts.append(f"## 分析上下文\n" + "\n".join(context_parts))
 
     user_prompt = "\n".join(prompt_parts)
     return {"system_prompt": SYSTEM_PROMPT, "user_prompt": user_prompt}

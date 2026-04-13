@@ -66,6 +66,33 @@ Prompt files are located in `agent/prompts/geju/`. Router output is parsed to se
 - No longer appears in DEPS
 - Uses `run_response()` function to execute
 
+### RESPONSE Prompt Structure
+
+The RESPONSE prompt in `build_response_prompt()` places **instructions first** for better LLM attention priority:
+
+```
+## 任务说明           ← Template instructions (FIRST for attention priority)
+[final_answer.md content]
+
+## 用户问题           ← User question (immediate context)
+[question text]
+
+## 对话历史           ← Conversation history (if any)
+[recent rounds]
+
+## 分析上下文         ← All context sections (~35KB)
+### 排盘: [paipan_results]
+### 古籍: [guji_results]
+### 目标年份详情: [year_data]
+### 整体分析: [OVERALL output]
+### 十神: [SHISHEN output]
+### 格局: [GEJU outputs]
+### 五行喜忌: [WUXING_PREFS output]
+[aspect blocks: CAREER, RELATIONSHIP, etc.]
+```
+
+**Rationale**: LLMs process prompts sequentially. Placing instructions at the end (after 35KB of context) may cause them to be deprioritized. Moving instructions to the front ensures the model sees task requirements first before processing the analysis context.
+
 ---
 
 ## 3. Planning Logic (`planning.py`)

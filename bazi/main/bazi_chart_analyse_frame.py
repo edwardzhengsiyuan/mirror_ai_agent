@@ -34,6 +34,7 @@ from ..analysis.shishen.shishen_analyser import ShishenAnalyser
 from ..analysis.xinghai.xinghai_analyser import XinghaiAnalyser
 from ..analysis.compatibility.zodiac_compatibility_analyser import ZodiacCompatibilityAnalyser
 from ..analysis.compatibility.wuxing_vector_compatibility_analyser import WuxingVectorCompatibilityAnalyser
+from ..analysis.scoring.daily_fortune_analyser import DailyFortuneAnalyser
 from ..core.bazi_chart import BaziChart, BaziChartGan, BaziChartZhi
 from ..core.property import (
     Gan,
@@ -64,9 +65,17 @@ from ..utils.log_helper import LogHelper
 
 
 class BaziChartAnalyseFrame:
-    def __init__(self, lunar, gender, without_time=False, enable_terminal_output=True):
+    def __init__(
+        self,
+        lunar,
+        gender,
+        without_time: bool = False,
+        enable_terminal_output: bool = True,
+        compute_dayun: bool = True,
+        only_compatibility: bool = False,
+    ):
         self.res = dict()
-        self.bazi_chart = BaziChart(lunar, gender, without_time)
+        self.bazi_chart = BaziChart(lunar, gender, without_time, compute_dayun=compute_dayun)
         self.without_time = without_time
         self.analysis_results = {}
         self.log_helper = LogHelper(enable_terminal_output=enable_terminal_output)
@@ -75,13 +84,35 @@ class BaziChartAnalyseFrame:
         self.guji = ""
         self.shensha_instances = []
         self.liunian_shensha = []
-        # 记录八字原命盘
-        self.log_bazi_chart()
 
-        self.run_analysis()
-        self.generate_basic_res()
+        # 性能优化：仅做合盘时跳过整盘分析与大运流年等结果构建
+        # - get_compatibility_analysis() 只依赖 bazi_chart 与 log_helper，不依赖 analysis_results / res
+        if not only_compatibility:
+            # 记录八字原命盘
+            self.log_bazi_chart()
+
+            self.run_analysis()
+            self.generate_basic_res()
 
     def generate_basic_res(self):
+        def shensha_to_chinese(value: str) -> str:
+            """
+            将神煞枚举码（如 'SHENSHA:TIANYI' 或 'TIANYI'）转换为中文名（如 '天乙贵人'）。
+            若无法映射则回退为去命名空间后的 code。
+            """
+            code = strip_ns(value) or value
+            if not hasattr(self, "_shensha_cn_cache") or self._shensha_cn_cache is None:
+                cache = {}
+                # 只有完整原盘分析 run_analysis() 后才会有实例可映射中文名
+                for inst in (self.shensha_instances or []):
+                    try:
+                        enum_code = ShenshaEnum[inst.__class__.__name__.upper()].value
+                        cache[enum_code] = inst.chinese_name
+                    except Exception:
+                        continue
+                self._shensha_cn_cache = cache
+            return self._shensha_cn_cache.get(code, code)
+
         zhu_list = self.bazi_chart._zhu_list
         tai_ming_shen_zhu_list = self.bazi_chart._tai_ming_shen_zhu_list
         if self.without_time:
@@ -133,12 +164,19 @@ class BaziChartAnalyseFrame:
                 gan = Gan[yun["gan"]]
                 zhi = Zhi[yun["zhi"]]
                 yun["shensha"] = self.search_shensha_enum_in_zhu(gan, zhi, self.bazi_chart)
-                word = f'第{yun_idx}步运{yun["gan"]}{yun["zhi"]}【{yun["gan_shishen"]}{yun["zhi_shishen"]}】'
-                self.log_helper.info(f'{yun["gan"]}{yun["zhi"]}{yun["year"]}')
+                word = (
+                    f'第{yun_idx}步运'
+                    f'{Gan[yun["gan"]].chinese_name}{Zhi[yun["zhi"]].chinese_name}'
+                    f'【{Shishen[yun["gan_shishen"]].chinese_name}{Shishen[yun["zhi_shishen"]].chinese_name}】'
+                )
+                self.log_helper.info(
+                    f'{Gan[yun["gan"]].chinese_name}{Zhi[yun["zhi"]].chinese_name}{yun["year"]}'
+                )
                 if len(yun["shensha"]) > 0 or (len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", [])) > 0):
                     word += '('
                     if len(yun["shensha"]) > 0:
-                        word += f'神煞【{yun["shensha"]}】'
+                        cn = ",".join([shensha_to_chinese(x) for x in yun["shensha"]])
+                        word += f'神煞【{cn}】'
                     if len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", [])) > 0:
                         # 关系已改为结构化枚举对象，这里日志仅展示数量，避免影响输出
                         word += f'关系【{len(yun.get("gan_relation", [])) + len(yun.get("zhi_relation", []))}项】'
@@ -152,11 +190,17 @@ class BaziChartAnalyseFrame:
                 gan = Gan[nian["gan"]]
                 zhi = Zhi[nian["zhi"]]
                 nian["shensha"] = self.search_shensha_enum_in_zhu(gan, zhi, self.bazi_chart)
-                word = f'{nian["year"]}{nian["gan"]}{nian["zhi"]}【{nian["gan_shishen"]}{nian["zhi_shishen"]}】{nian["age"]}岁'
+                word = (
+                    f'{nian["year"]}'
+                    f'{Gan[nian["gan"]].chinese_name}{Zhi[nian["zhi"]].chinese_name}'
+                    f'【{Shishen[nian["gan_shishen"]].chinese_name}{Shishen[nian["zhi_shishen"]].chinese_name}】'
+                    f'{nian["age"]}岁'
+                )
                 if len(nian["shensha"]) > 0 or (len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", [])) > 0):
                     word += '('
                     if len(nian["shensha"]) > 0:
-                        word += f'神煞【{nian["shensha"]}】'
+                        cn = ",".join([shensha_to_chinese(x) for x in nian["shensha"]])
+                        word += f'神煞【{cn}】'
                     if len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", [])) > 0:
                         word += f'关系【{len(nian.get("gan_relation", [])) + len(nian.get("zhi_relation", []))}项】'
                     word += ')'
@@ -725,15 +769,76 @@ class BaziChartAnalyseFrame:
         shengxiao_hehun = ZodiacCompatibilityAnalyser(self.bazi_chart, other_chart).analyse()
         wuxing_vector = WuxingVectorCompatibilityAnalyser(self.bazi_chart, other_chart).analyse()
 
+        wuxing_score = self._score_wuxing_vector(wuxing_vector)
+        shensha_score = self._score_shensha(raw_results)
+        shengxiao_score = self._score_shengxiao(shengxiao_hehun)
+        overall_score = round((wuxing_score + shensha_score + shengxiao_score) / 3.0, 2)
+
         res = {
             "a_wang_b": a_wang_b_names,
             "b_wang_a": b_wang_a_names,
             "shengxiao_hehun": shengxiao_hehun,
             "wuxing_vector": wuxing_vector,
+            "score": {
+                "overall": overall_score,
+                "components": {
+                    "wuxing": wuxing_score,
+                    "shensha": shensha_score,
+                    "shengxiao": shengxiao_score,
+                },
+            },
         }
 
         self._namespace_compatibility_res(res)
         return res
+
+    @staticmethod
+    def _clamp_score(score: float) -> float:
+        return max(0.0, min(100.0, score))
+
+    def _score_wuxing_vector(self, wuxing_vector: dict) -> float:
+        xiangsi = float(wuxing_vector.get("xiangsi_du", 0.0))
+        hubu = float(wuxing_vector.get("hubu_du", 0.0))
+        return round(self._clamp_score((xiangsi + hubu) / 2.0), 2)
+
+    def _score_shengxiao(self, shengxiao_hehun: dict) -> float:
+        relation = shengxiao_hehun.get("relation")
+        if relation in {"LIUHE", "SANHE"}:
+            return 80.0
+        if relation in {"LIUCHONG", "LIUHAI"}:
+            return 20.0
+        return 50.0
+
+    def _score_shensha(self, shensha: dict) -> float:
+        positive = {
+            "TIANYI",        # 天乙贵人
+            "TIANYII",       # 天乙贵人（兼容历史命名）
+            "TAIJIGUIREN",   # 太极贵人
+            "TIANDEGUIREN",  # 天德贵人
+            "YUEDE",         # 月德贵人
+            "HONGLUAN",      # 红鸾
+            "TIANXI",        # 天喜
+            "TAOHUA",        # 桃花
+        }
+        negative = {
+            "HONGYAN",   # 红艳煞
+            "JIESHA",    # 劫煞
+            "WANGSHEN",  # 亡神
+            "GUCHEN",    # 孤辰
+            "GUASU",     # 寡宿
+        }
+        items = shensha.get("a_has_b_shensha", []) + shensha.get("b_has_a_shensha", [])
+        pos_count = 0
+        neg_count = 0
+        for item in items:
+            name = str(item.get("name", "")).upper()
+            if name in positive:
+                pos_count += 1
+            if name in negative:
+                neg_count += 1
+
+        score = 50.0 + 20.0 * pos_count - 20.0 * neg_count
+        return round(self._clamp_score(score), 2)
 
     def _namespace_compatibility_res(self, res: dict) -> None:
         """对外合盘 JSON：把枚举字段统一转为 `NAMESPACE:CODE` 形式（原地修改）。"""
@@ -860,10 +965,72 @@ class BaziChartAnalyseFrame:
             output += f"{pillar_name}：\n"
             if result['impact'][pillar]:
                 for shensha in result['impact'][pillar]:
-                    output += f"  神煞：{shensha['name']}\n"
+                    code = strip_ns(shensha.get("name"))
+                    cn = None
+                    if code:
+                        try:
+                            # 优先用已初始化的实例缓存
+                            if hasattr(self, "_shensha_cn_cache") and self._shensha_cn_cache:
+                                cn = self._shensha_cn_cache.get(code)
+                        except Exception:
+                            cn = None
+                    output += f"  神煞：{cn or code or shensha.get('name')}\n"
                     for k, v in shensha['impact'].items():
                         output += f"    {impact_names[k]}：{v:+d}\n"
             else:
                 output += "  无神煞\n"
             output += "\n"
         return output
+
+    def get_daily_fortune_score(self, year: int, month: int, day: int, weights: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+        """
+        计算指定日期的运势得分。
+
+        Args:
+            year, month, day: 目标日期
+            weights: 喜忌权重字典，支持标准枚举键名（如 "WUXING:MU"）或中文键名。
+                     格式示例：
+                     {
+                       "xi": {"WUXING:MU": 30, "WUXING:HUO": 20},
+                       "ji": {"WUXING:JIN": 40}
+                     }
+
+        Returns:
+            Dict: {
+                "date": "YYYY-MM-DD",
+                "score": 75.5
+            }
+        """
+        # 1. 转换权重 Key 为内部使用的中文 Key
+        # WUXING:MU -> "木"
+        processed_weights = {"喜": {}, "忌": {}}
+        
+        # 映射表: Wuxing Enum Name -> Chinese Name
+        wuxing_map = {
+            "MU": "木", "HUO": "火", "TU": "土", "JIN": "金", "SHUI": "水"
+        }
+
+        def _process_weight_dict(input_dict):
+            res = {}
+            if not isinstance(input_dict, dict):
+                return res
+            for k, v in input_dict.items():
+                # 处理键名，支持 "WUXING:MU", "MU", "木" 三种形式
+                clean_key = strip_ns(k) # 去除 WUXING: 前缀
+                chinese_key = wuxing_map.get(clean_key, clean_key) # 尝试转中文，如果转不了保留原样
+                res[chinese_key] = v
+            return res
+
+        if "xi" in weights:
+            processed_weights["喜"] = _process_weight_dict(weights.get("xi", {}))
+        if "ji" in weights:
+            processed_weights["忌"] = _process_weight_dict(weights.get("ji", {}))
+
+        # 2. 调用分析器
+        analyser = DailyFortuneAnalyser(self.bazi_chart, self.log_helper)
+        score = analyser.analyse_daily_score(year, month, day, processed_weights)
+
+        return {
+            "date": f"{year:04d}-{month:02d}-{day:02d}",
+            "score": score
+        }

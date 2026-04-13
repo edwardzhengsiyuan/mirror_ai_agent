@@ -234,15 +234,35 @@ class ShenShaAnalyser(BaseAnalyser):
                 return names[index]
             return f"柱{index}"
 
+        # 德秀贵人合盘：用 is_present(己方, 对方) 去对方盘里找贵人，返回对方盘中带德/秀的柱
+        dexiu_positions_a_has_b = []
+        dexiu_positions_b_has_a = []
+        for s in self._shensha_instances:
+            if isinstance(s, DexiuGuiren):
+                dexiu_positions_a_has_b, _ = s.is_present(other_chart, self._bazi_chart)   # B 的规则，在 A 里找
+                dexiu_positions_b_has_a, _ = s.is_present(self._bazi_chart, other_chart)   # A 的规则，在 B 里找
+                break
+
         # 1. 检查 A 中有哪些 B 的神煞 (Context: B, Target: A)
         # "命盘A中有哪些命盘B中的神煞" -> A 旺 B
         for i, zhu in enumerate(self._bazi_chart.zhu_list):
             gan = zhu.gan._gan
             zhi = zhu.zhi._zhi
             pillar_name = get_pillar_name(i)
-            
             for shensha in self._shensha_instances:
-                if shensha.is_present_in_zhu(gan, zhi, other_chart):
+                if isinstance(shensha, DexiuGuiren):
+                    if zhu in dexiu_positions_a_has_b:
+                        info = {
+                            'name': shensha.__class__.__name__,
+                            'chinese_name': shensha.chinese_name,
+                            'type': shensha.shensha_type,
+                            'gan': gan.chinese_name,
+                            'zhi': zhi.chinese_name,
+                            'pillar': pillar_name,
+                            'description': f"命盘A的{pillar_name}({gan.chinese_name}{zhi.chinese_name})是命盘B的{shensha.chinese_name}"
+                        }
+                        result['a_has_b_shensha'].append(info)
+                elif shensha.is_present_in_zhu(gan, zhi, other_chart):
                     info = {
                         'name': shensha.__class__.__name__,
                         'chinese_name': shensha.chinese_name,
@@ -253,16 +273,27 @@ class ShenShaAnalyser(BaseAnalyser):
                         'description': f"命盘A的{pillar_name}({gan.chinese_name}{zhi.chinese_name})是命盘B的{shensha.chinese_name}"
                     }
                     result['a_has_b_shensha'].append(info)
-        
+
         # 2. 检查 B 中有哪些 A 的神煞 (Context: A, Target: B)
         # "命盘B中有哪些盘A中的神煞" -> B 旺 A
         for i, zhu in enumerate(other_chart.zhu_list):
             gan = zhu.gan._gan
             zhi = zhu.zhi._zhi
             pillar_name = get_pillar_name(i)
-            
             for shensha in self._shensha_instances:
-                if shensha.is_present_in_zhu(gan, zhi, self._bazi_chart):
+                if isinstance(shensha, DexiuGuiren):
+                    if zhu in dexiu_positions_b_has_a:
+                        info = {
+                            'name': shensha.__class__.__name__,
+                            'chinese_name': shensha.chinese_name,
+                            'type': shensha.shensha_type,
+                            'gan': gan.chinese_name,
+                            'zhi': zhi.chinese_name,
+                            'pillar': pillar_name,
+                            'description': f"命盘B的{pillar_name}({gan.chinese_name}{zhi.chinese_name})是命盘A的{shensha.chinese_name}"
+                        }
+                        result['b_has_a_shensha'].append(info)
+                elif shensha.is_present_in_zhu(gan, zhi, self._bazi_chart):
                     info = {
                         'name': shensha.__class__.__name__,
                         'chinese_name': shensha.chinese_name,

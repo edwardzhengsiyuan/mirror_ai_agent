@@ -154,15 +154,26 @@ class DailyFortuneAnalyser(BaseAnalyser):
                 score_ji += proportions.get(wx_enum, 0) * weight
                 
         # Raw Score = Xi - Ji.
-        # Range Analysis:
-        # If 100% power is in Xi and Sum(Xi Weights)=100 => Raw = 100
-        # If 100% power is in Ji and Sum(Ji Weights)=100 => Raw = -100
         raw_score = score_xi - score_ji
         
-        # Map [-100, 100] to [0, 100]
-        # Linear mapping: Y = (X + 100) / 2
-        final_score = (raw_score + 100) / 2
+        # Calculate theoretical bounds to normalize the score
+        total_xi = sum(xi_weights.values())
+        total_ji = sum(ji_weights.values())
         
-        # Clamp just in case weights don't sum to exactly 100 or float errors
-        return max(0.0, min(100.0, final_score))
+        # Theoretical Max (100% power in Xi) = total_xi
+        # Theoretical Min (100% power in Ji) = -total_ji
+        max_raw = total_xi
+        min_raw = -total_ji
+        raw_range = max_raw - min_raw
+        
+        if raw_range == 0:
+            return 75.0  # Default to middle of 50-100 if no weights provided
+            
+        # Normalize raw_score to [0, 1] relative to the range [min_raw, max_raw]
+        normalized_ratio = (raw_score - min_raw) / raw_range
+        
+        # Map [0, 1] to [50, 100]
+        final_score = 50.0 + normalized_ratio * 50.0
+        
+        return max(50.0, min(100.0, final_score))
 

@@ -77,6 +77,14 @@ class BaziChartGan(BaziChartElement):
         self._shishen_chinese_name = self._shishen.chinese_name
         self._pos = pos
     
+    @property
+    def value(self):
+        return self._gan.value
+
+    @property
+    def yinyang(self):
+        return self._gan.yinyang
+
     def get(self):
         return self._gan
     
@@ -114,7 +122,9 @@ class BaziChartZhi(BaziChartElement):
         return (f'{self.zhu_name[self._pos]}支：{self._chinese_name}；阴阳：{self._yinyang}；五行：{self._wuxing_chinese_name}；藏干：{"，".join(self._hidden_gans_chinese_name)}；十神：【{"，".join(self._hidden_gans_shishen_chinese_name)}】\n')
 
 class BaziChart:
-    def __init__(self, lunar, gender, without_time = False):
+    _liunian_liuyue_cache = None
+    
+    def __init__(self, lunar, gender, without_time = False, compute_dayun=True):
         self._gender = gender  # 私有变量，使用只读属性访问
         self._lunar = lunar  # 私有变量
         self.without_time = without_time
@@ -237,7 +247,14 @@ class BaziChart:
         # 创建基于当前日干的十神缓存，用于大运流年流月计算加速
         self.create_shishen_cache_for_current_day_gan()
         
-        self.calculate_dayun_liunian()
+        if compute_dayun:
+            self.calculate_dayun_liunian()
+        else:
+            self.dayun_liunian_liuyue_frontend_res = []
+            self.start_yun = []
+            self.yun = None
+            self.dayun = []
+
         self.calculate_peiou_fangwei_by_swh()
 
     def calculate_shishen(self, day_gan, other_gan):
@@ -462,23 +479,23 @@ class BaziChart:
             use_cache (bool): 是否使用缓存，默认True
         """
         # 加载流年流月缓存（只在第一次调用时加载）
-        if not hasattr(self, '_liunian_liuyue_cache') and use_cache:
+        if BaziChart._liunian_liuyue_cache is None and use_cache:
             try:
                 import os
                 if os.path.exists("efficient_liunian_liuyue_cache.json"):
                     import json
                     with open("efficient_liunian_liuyue_cache.json", 'r', encoding='utf-8') as f:
-                        self._liunian_liuyue_cache = json.load(f)
+                        BaziChart._liunian_liuyue_cache = json.load(f)
                     # print("已加载流年流月缓存")
                 else:
                     # print("流年流月缓存文件不存在")
-                    self._liunian_liuyue_cache = None
+                    BaziChart._liunian_liuyue_cache = {} # Empty dict to avoid retrying
             except Exception as e:
                 # print(f"流年流月缓存加载失败: {e}")
-                self._liunian_liuyue_cache = None
+                BaziChart._liunian_liuyue_cache = {} # Empty dict to avoid retrying
         
         # 使用已加载的流年流月缓存
-        liunian_liuyue_cache = getattr(self, '_liunian_liuyue_cache', None) if use_cache else None
+        liunian_liuyue_cache = BaziChart._liunian_liuyue_cache if use_cache else None
         
         self.yun = self._lunar_eightchar.getYun(1 if self._gender == "male" else 0, 2)
         self.start_yun = [self.yun.getStartYear(), self.yun.getStartMonth(), self.yun.getStartDay(), self.yun.getStartHour()]

@@ -1137,7 +1137,7 @@ class DexiuGuiren(Shensha):
     @property
     def chinese_name(self):
         return "德秀贵人"
-    def is_present(self, chart):
+    def is_present(self, chart, other_chart=None):
         """
         德秀贵人查法：
         寅午戌月, 丙丁为德, 戊癸为秀
@@ -1145,53 +1145,50 @@ class DexiuGuiren(Shensha):
         巳酉丑月, 庚辛为德, 乙庚为秀
         亥卯未月, 甲乙为德, 丁壬为秀
         以生月为主, 看四柱天干中有否
+
+        chart: 己方盘，用于取月支定德秀规则。
+        other_chart: 可选。若不为空则表示合盘——去对方盘里找贵人，用 chart 的月支定规则，在 other_chart 的四柱中查是否同时有德、有秀；返回的 positions 为对方盘中带德/秀的柱。
         """
-        found = []
         positions = []
         month_zhi = chart.month_zhi._zhi
-        
-        # 获取四柱天干
-        all_gans = [chart.year_gan._gan, chart.month_gan._gan, chart.day_gan._gan]
-        if hasattr(chart, 'hour_gan') and chart.hour_gan:
-            all_gans.append(chart.hour_gan._gan)
-        
+
+        # 合盘时：规则用己方(chart)月支，四柱用对方(other_chart)
+        check_chart = other_chart if other_chart is not None else chart
+        all_gans = [check_chart.year_gan._gan, check_chart.month_gan._gan, check_chart.day_gan._gan]
+        if hasattr(check_chart, 'hour_gan') and check_chart.hour_gan:
+            all_gans.append(check_chart.hour_gan._gan)
+
         # 根据月支确定德秀天干
-        de_gans = []  # 德的天干
-        xiu_gans = []  # 秀的天干
-        
-        if month_zhi in [Zhi.YIN, Zhi.WU, Zhi.XU]:  # 寅午戌月
-            de_gans = [Gan.BING, Gan.DING]  # 丙丁为德
-            xiu_gans = [Gan.WU, Gan.GUI]    # 戊癸为秀
-        elif month_zhi in [Zhi.SHEN, Zhi.ZI, Zhi.CHEN]:  # 申子辰月
-            de_gans = [Gan.REN, Gan.GUI, Gan.WU, Gan.JI]  # 壬癸戊己为德
-            xiu_gans = [Gan.BING, Gan.XIN, Gan.JIA, Gan.JI]  # 丙辛甲己为秀
-        elif month_zhi in [Zhi.SI, Zhi.YOU, Zhi.CHOU]:  # 巳酉丑月
-            de_gans = [Gan.GENG, Gan.XIN]  # 庚辛为德
-            xiu_gans = [Gan.YI, Gan.GENG]  # 乙庚为秀
-        elif month_zhi in [Zhi.HAI, Zhi.MAO, Zhi.WEI]:  # 亥卯未月
-            de_gans = [Gan.JIA, Gan.YI]    # 甲乙为德
-            xiu_gans = [Gan.DING, Gan.REN] # 丁壬为秀
-        
-        # 检查是否有德秀贵人
+        de_gans = []
+        xiu_gans = []
+        if month_zhi in [Zhi.YIN, Zhi.WU, Zhi.XU]:
+            de_gans = [Gan.BING, Gan.DING]
+            xiu_gans = [Gan.WU, Gan.GUI]
+        elif month_zhi in [Zhi.SHEN, Zhi.ZI, Zhi.CHEN]:
+            de_gans = [Gan.REN, Gan.GUI, Gan.WU, Gan.JI]
+            xiu_gans = [Gan.BING, Gan.XIN, Gan.JIA, Gan.JI]
+        elif month_zhi in [Zhi.SI, Zhi.YOU, Zhi.CHOU]:
+            de_gans = [Gan.GENG, Gan.XIN]
+            xiu_gans = [Gan.YI, Gan.GENG]
+        elif month_zhi in [Zhi.HAI, Zhi.MAO, Zhi.WEI]:
+            de_gans = [Gan.JIA, Gan.YI]
+            xiu_gans = [Gan.DING, Gan.REN]
+
         has_de = any(gan in all_gans for gan in de_gans)
         has_xiu = any(gan in all_gans for gan in xiu_gans)
-        
+
         if has_de and has_xiu:
-            # 找到具体的德秀天干
             found_de = [gan for gan in de_gans if gan in all_gans]
             found_xiu = [gan for gan in xiu_gans if gan in all_gans]
-            
-            # 构建结果 - 返回包含德秀天干的柱对象
-            for zhu in chart.zhu_list:
+            for zhu in check_chart.zhu_list:
                 if zhu.gan._gan in found_de or zhu.gan._gan in found_xiu:
                     positions.append(zhu)
-            
             word = f"德秀贵人：德{','.join([g.chinese_name for g in found_de])}，秀{','.join([g.chinese_name for g in found_xiu])}"
         else:
             word = "无德秀贵人"
-        
+
         return positions, word
-    
+
     def is_present_in_zhu(self, gan_in, zhi_in, chart):
         """
         检查单个柱是否包含德秀贵人

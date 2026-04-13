@@ -150,7 +150,7 @@ class GejuAnalyser(BaseAnalyser):
             if isinstance(force, DiZhiSanHe) or isinstance(force, DiZhiSanHui):
                 center_zhi = self.get_center_zhi(force.element_index)
                 if center_zhi:
-                    shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, center_zhi)
+                    shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, center_zhi.get_hidden_gans()[0])
                     if shishen not in [Shishen.BIJIAN, Shishen.JIECAI]:
                         geju_name = self.resolve_hehui_geju(shishen.chinese_name)
                         # hehui 格局映射回对应十神格

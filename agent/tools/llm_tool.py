@@ -147,6 +147,7 @@ def _do_llm_api_call(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "User-Agent": "bazi-agent/1.0",
         },
         method="POST",
     )
