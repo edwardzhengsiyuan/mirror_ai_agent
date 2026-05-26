@@ -1854,14 +1854,51 @@
         ].join("_");
       }
 
-      async function ensureUserForQuestion(question) {
-        if (userSelect.value) return userSelect.value;
+      function isSameProfile(a, b) {
+        if (!a || !b) return false;
+        const ab = a.birth || {};
+        const bb = b.birth || {};
+        return (
+          Number(ab.year) === Number(bb.year) &&
+          Number(ab.month) === Number(bb.month) &&
+          Number(ab.day) === Number(bb.day) &&
+          Number(ab.hour || 0) === Number(bb.hour || 0) &&
+          Number(ab.minute || 0) === Number(bb.minute || 0) &&
+          (a.gender || "male") === (b.gender || "male")
+        );
+      }
 
-        const inferred = inferProfileFromQuestion(question);
-        if (!inferred) {
-          appendMessage("assistant", "请先在设置里创建用户档案，或在问题中写明出生年月日、时辰和性别。");
-          openSettingsModal();
-          return "";
+      async function findUserByProfile(target) {
+        const data = await fetchJson("/api/users");
+        for (const uid of data.users || []) {
+          try {
+            const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(uid)}`);
+            if (isSameProfile(profile, target)) {
+              return uid;
+            }
+          } catch (err) {
+            logEvent("skip profile lookup: " + uid);
+          }
+        }
+        return "";
+      }
+
+      async function currentSelectedProfile() {
+        const userId = userSelect.value;
+        if (!userId) return null;
+        try {
+          return await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+        } catch (err) {
+          return null;
+        }
+      }
+
+      async function createProfileFromQuestion(inferred) {
+        const existingUserId = await findUserByProfile(inferred);
+        if (existingUserId) {
+          await loadUsers(existingUserId);
+          logEvent("switched user: " + existingUserId);
+          return existingUserId;
         }
 
         const userId = buildAutoUserId(inferred);
@@ -1881,6 +1918,23 @@
         await loadUsers(userId);
         logEvent("auto-created user: " + userId);
         return userId;
+      }
+
+      async function ensureUserForQuestion(question) {
+        const inferred = inferProfileFromQuestion(question);
+        if (inferred) {
+          const selectedProfile = await currentSelectedProfile();
+          if (!selectedProfile || !isSameProfile(selectedProfile, inferred)) {
+            return createProfileFromQuestion(inferred);
+          }
+          return userSelect.value;
+        }
+
+        if (userSelect.value) return userSelect.value;
+
+        appendMessage("assistant", "请先在设置里创建用户档案，或在问题中写明出生年月日、时辰和性别。");
+        openSettingsModal();
+        return "";
       }
 
       async function askStream() {
