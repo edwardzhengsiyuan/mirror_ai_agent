@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from agent.models import AVAILABLE_MODELS, DEFAULT_MODEL
+from agent.llm_config import available_models, configurable_nodes, default_model, validate_model
 from agent.orchestrator_cezi import run_cezi_turn
 from agent.orchestrator_hepan import run_hepan_turn
 from agent.orchestrator_najia import run_najia_turn
@@ -126,6 +126,48 @@ def create_app(
             return f"{field}.gender invalid"
         return None
 
+    def current_default_model() -> str:
+        return default_model()
+
+    def node_model_overrides_schema() -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string",
+                "enum": available_models(),
+            },
+            "description": "Optional per-node model overrides. Node override takes priority over node defaults and the global llm_model.",
+            "example": {"SHISHEN": "qwen3-max", "RESPONSE": current_default_model()},
+        }
+
+    def normalize_node_model_overrides(value: object):
+        if value is None:
+            return {}, None
+        if not isinstance(value, dict):
+            return None, "node_model_overrides must be an object"
+        allowed_nodes = set(configurable_nodes())
+        normalized: Dict[str, str] = {}
+        for node, model in value.items():
+            node_name = str(node).strip().upper()
+            model_name = str(model).strip()
+            if not node_name or not model_name:
+                continue
+            if allowed_nodes and node_name not in allowed_nodes:
+                return None, f"invalid node: {node_name}"
+            if not validate_model(model_name):
+                return None, f"invalid model for {node_name}: {model_name}"
+            normalized[node_name] = model_name
+        return normalized, None
+
+    def normalize_model_options(data: Dict[str, Any]):
+        model = data.get("llm_model")
+        if model and not validate_model(model):
+            return None, api_error(400, "invalid_model", f"invalid model: {model}")
+        node_overrides, node_overrides_error = normalize_node_model_overrides(data.get("node_model_overrides"))
+        if node_overrides_error:
+            return None, api_error(400, "invalid_node_model_overrides", node_overrides_error)
+        return {"model": model, "node_model_overrides": node_overrides or None}, None
+
     def validate_safe_id(value: str, field: str) -> Optional[str]:
         if not value:
             return f"{field} required"
@@ -169,7 +211,8 @@ def create_app(
             "gender": profile.get("gender", "male"),
             "birth_time_unknown": bool(profile.get("birth_time_unknown", False)),
             "prompt_config": profile.get("prompt_config", "lingyun_cat"),
-            "llm_model": profile.get("llm_model", DEFAULT_MODEL),
+            "llm_model": profile.get("llm_model", current_default_model()),
+            "node_model_overrides": profile.get("node_model_overrides", {}),
             "bypass_cache": bool(profile.get("bypass_cache", False)),
             "cached_nodes": sorted((profile.get("node_cache") or {}).keys()),
         }
@@ -195,16 +238,20 @@ def create_app(
             birth_error = validate_birth(birth)
             if birth_error:
                 return None, api_error(400, "invalid_birth", birth_error)
-            llm_model = data.get("llm_model", DEFAULT_MODEL)
-            if llm_model and llm_model not in AVAILABLE_MODELS:
+            llm_model = data.get("llm_model", current_default_model())
+            if not validate_model(llm_model):
                 return None, api_error(400, "invalid_model", f"invalid model: {llm_model}")
+            node_overrides, node_overrides_error = normalize_node_model_overrides(data.get("node_model_overrides"))
+            if node_overrides_error:
+                return None, api_error(400, "invalid_node_model_overrides", node_overrides_error)
             profile = {
                 "user_id": user_id,
                 "birth": birth,
                 "gender": data.get("gender", "male"),
                 "birth_time_unknown": bool(data.get("birth_time_unknown", False)),
                 "prompt_config": data.get("prompt_config", "lingyun_cat"),
-                "llm_model": llm_model or DEFAULT_MODEL,
+                "llm_model": llm_model or current_default_model(),
+                "node_model_overrides": node_overrides or {},
                 "bypass_cache": bool(data.get("bypass_cache", False)),
                 "node_cache": {},
             }
@@ -233,9 +280,14 @@ def create_app(
             profile["prompt_config"] = data["prompt_config"]
         if "llm_model" in data:
             llm_model = data["llm_model"]
-            if llm_model and llm_model not in AVAILABLE_MODELS:
+            if not validate_model(llm_model):
                 return None, api_error(400, "invalid_model", f"invalid model: {llm_model}")
-            profile["llm_model"] = llm_model or DEFAULT_MODEL
+            profile["llm_model"] = llm_model or current_default_model()
+        if "node_model_overrides" in data:
+            node_overrides, node_overrides_error = normalize_node_model_overrides(data.get("node_model_overrides"))
+            if node_overrides_error:
+                return None, api_error(400, "invalid_node_model_overrides", node_overrides_error)
+            profile["node_model_overrides"] = node_overrides or {}
         if "bypass_cache" in data:
             profile["bypass_cache"] = bool(data["bypass_cache"])
 
@@ -412,7 +464,8 @@ def create_app(
                             "birth_time_unknown": {"type": "boolean", "default": False},
                             "session_id": {"type": "string", "example": "demo_session"},
                             "history_n": {"type": "integer", "default": 5},
-                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                            "llm_model": {"type": "string", "enum": available_models(), "example": current_default_model()},
+                            "node_model_overrides": node_model_overrides_schema(),
                             "bypass_cache": {"type": "boolean", "default": False},
                         },
                     },
@@ -450,7 +503,8 @@ def create_app(
                             "question": {"type": "string", "example": "我们适合长期发展吗？"},
                             "person_a": {"$ref": "#/components/schemas/Person"},
                             "person_b": {"$ref": "#/components/schemas/Person"},
-                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                            "llm_model": {"type": "string", "enum": available_models(), "example": current_default_model()},
+                            "node_model_overrides": node_model_overrides_schema(),
                         },
                     },
                     "HepanResponse": {
@@ -473,7 +527,8 @@ def create_app(
                             "history_n": {"type": "integer", "default": 5},
                             "question": {"type": "string", "example": "这个项目合作能不能成？"},
                             "character": {"type": "string", "example": "合"},
-                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                            "llm_model": {"type": "string", "enum": available_models(), "example": current_default_model()},
+                            "node_model_overrides": node_model_overrides_schema(),
                         },
                     },
                     "CeziResponse": {
@@ -502,7 +557,8 @@ def create_app(
                                 "maxItems": 6,
                                 "example": [0, 1, 2, 3, 4, 5],
                             },
-                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                            "llm_model": {"type": "string", "enum": available_models(), "example": current_default_model()},
+                            "node_model_overrides": node_model_overrides_schema(),
                         },
                     },
                     "NajiaResponse": {
@@ -847,6 +903,10 @@ def create_app(
         if error_response:
             return error_response
         assert context is not None
+        model_options, error_response = normalize_model_options(data)
+        if error_response:
+            return error_response
+        assert model_options is not None
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -874,7 +934,8 @@ def create_app(
                 now=now,
                 event_sink=sink,
                 history_rounds=context["history_rounds"],
-                model=data.get("llm_model"),
+                model=model_options["model"],
+                node_model_overrides=model_options["node_model_overrides"],
             )
         except ValueError as exc:
             return api_error(400, "invalid_hepan_request", str(exc))
@@ -907,6 +968,10 @@ def create_app(
         if error_response:
             return error_response
         assert context is not None
+        model_options, error_response = normalize_model_options(data)
+        if error_response:
+            return error_response
+        assert model_options is not None
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -934,7 +999,8 @@ def create_app(
                 now=now,
                 event_sink=sink,
                 history_rounds=context["history_rounds"],
-                model=data.get("llm_model"),
+                model=model_options["model"],
+                node_model_overrides=model_options["node_model_overrides"],
             )
         except ValueError as exc:
             return api_error(400, "invalid_cezi_request", str(exc))
@@ -964,6 +1030,10 @@ def create_app(
         if error_response:
             return error_response
         assert context is not None
+        model_options, error_response = normalize_model_options(data)
+        if error_response:
+            return error_response
+        assert model_options is not None
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -990,7 +1060,8 @@ def create_app(
                 now=now,
                 event_sink=sink,
                 history_rounds=context["history_rounds"],
-                model=data.get("llm_model"),
+                model=model_options["model"],
+                node_model_overrides=model_options["node_model_overrides"],
             )
         except ValueError as exc:
             return api_error(400, "invalid_najia_request", str(exc))
@@ -1034,9 +1105,12 @@ def create_app(
         if birth_error:
             return jsonify({"error": birth_error}), 400
         ensure_user_dirs(user_id)
-        llm_model = data.get("llm_model", DEFAULT_MODEL)
-        if llm_model and llm_model not in AVAILABLE_MODELS:
-            llm_model = DEFAULT_MODEL
+        llm_model = data.get("llm_model", current_default_model())
+        if not validate_model(llm_model):
+            return jsonify({"error": f"invalid model: {llm_model}"}), 400
+        node_overrides, node_overrides_error = normalize_node_model_overrides(data.get("node_model_overrides"))
+        if node_overrides_error:
+            return jsonify({"error": node_overrides_error}), 400
         profile = {
             "user_id": user_id,
             "birth": birth,
@@ -1044,6 +1118,7 @@ def create_app(
             "birth_time_unknown": bool(data.get("birth_time_unknown", False)),
             "prompt_config": data.get("prompt_config", "lingyun_cat"),
             "llm_model": llm_model,
+            "node_model_overrides": node_overrides or {},
             "node_cache": {},
         }
         save_profile(profile_path(user_id), profile)
@@ -1072,9 +1147,14 @@ def create_app(
         # Update allowed fields
         if "llm_model" in data:
             llm_model = data["llm_model"]
-            if llm_model and llm_model not in AVAILABLE_MODELS:
+            if not validate_model(llm_model):
                 return jsonify({"error": f"invalid model: {llm_model}"}), 400
-            profile["llm_model"] = llm_model or DEFAULT_MODEL
+            profile["llm_model"] = llm_model or current_default_model()
+        if "node_model_overrides" in data:
+            node_overrides, node_overrides_error = normalize_node_model_overrides(data.get("node_model_overrides"))
+            if node_overrides_error:
+                return jsonify({"error": node_overrides_error}), 400
+            profile["node_model_overrides"] = node_overrides or {}
         if "prompt_config" in data:
             profile["prompt_config"] = data["prompt_config"]
         if "bypass_cache" in data:
@@ -1085,8 +1165,9 @@ def create_app(
     @app.route("/api/models", methods=["GET"])
     def get_models() -> Response:
         return jsonify({
-            "models": AVAILABLE_MODELS,
-            "default": DEFAULT_MODEL,
+            "models": available_models(),
+            "default": current_default_model(),
+            "configurable_nodes": configurable_nodes(),
         })
 
     @app.route("/api/sessions", methods=["GET"])

@@ -34,6 +34,7 @@ def _fake_hepan_turn(
     stream=False,
     history_rounds=None,
     model=None,
+    node_model_overrides=None,
 ):
     if event_sink:
         event_sink({
@@ -66,6 +67,7 @@ def _fake_cezi_turn(
     stream=False,
     history_rounds=None,
     model=None,
+    node_model_overrides=None,
 ):
     if event_sink:
         event_sink({
@@ -91,6 +93,7 @@ def _fake_najia_turn(
     stream=False,
     history_rounds=None,
     model=None,
+    node_model_overrides=None,
 ):
     values = yao_values or [0, 1, 2, 3, 4, 5]
     if event_sink:
@@ -178,6 +181,59 @@ def test_web_api_flow(tmp_path) -> None:
     data = resp.get_json()
     assert "llm_prompts" in data
     assert "OVERALL" in data["llm_prompts"]
+
+
+def test_models_api_uses_route_config(tmp_path) -> None:
+    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    resp = client.get("/api/models")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["models"] == ["gemini-3-pro-preview", "gpt-5.5", "qwen3-max"]
+    assert data["default"] == "gemini-3-pro-preview"
+    assert "SHISHEN" in data["configurable_nodes"]
+    assert "RESPONSE" in data["configurable_nodes"]
+    assert "gpt-5-mini" not in data["models"]
+    assert "claude-sonnet-4-6" not in data["models"]
+
+
+def test_profile_node_model_overrides(tmp_path) -> None:
+    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/users",
+        json={
+            "user_id": "bad_model",
+            "birth": {"year": 1990, "month": 1, "day": 1},
+            "llm_model": "gpt-5-mini",
+        },
+    )
+    assert resp.status_code == 400
+
+    resp = client.post(
+        "/api/users",
+        json={
+            "user_id": "u_test",
+            "birth": {"year": 1990, "month": 1, "day": 1},
+            "node_model_overrides": {"shishen": "qwen3-max", "response": "gemini-3-pro-preview"},
+        },
+    )
+    assert resp.status_code == 200
+
+    profile = client.get("/api/profile?user_id=u_test").get_json()
+    assert profile["node_model_overrides"] == {
+        "SHISHEN": "qwen3-max",
+        "RESPONSE": "gemini-3-pro-preview",
+    }
+
+    resp = client.put(
+        "/api/profile",
+        json={"user_id": "u_test", "node_model_overrides": {"CAREER": "gpt-5-mini"}},
+    )
+    assert resp.status_code == 400
+    assert "invalid model" in resp.get_json()["error"]
 
 
 def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:

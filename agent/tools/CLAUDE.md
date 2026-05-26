@@ -82,7 +82,7 @@ LLM call tool for generating reports.
 |-----------|------|-------------|
 | `system_prompt` | str | System prompt for the LLM |
 | `user_prompt` | str | User prompt for the LLM |
-| `model` | str \| None | Model name override (default: `LLM_MODEL` env var or `DEFAULT_MODEL` from `agent/models.py`) |
+| `model` | str \| None | Model name override (default: route config) |
 | `node` | str \| None | Node label for logging/tracing |
 | `sleep_ms` | int \| None | Optional delay before call |
 | `stream` | bool | Enable streaming response |
@@ -99,7 +99,7 @@ Automatically reads `.env` from repo root (ignored if missing).
 **Model Selection**
 - Uses the passed `model` parameter directly
 - Falls back to `LLM_MODEL` environment variable
-- Falls back to `DEFAULT_MODEL` from `agent/models.py` (gpt-5-mini)
+- Falls back to the route default from `config/llm_routes.json` (`gemini-3-pro-preview` by default)
 - Profile-level model stored in `profile.llm_model`, passed by orchestrator
 
 **Retry and Timeout**

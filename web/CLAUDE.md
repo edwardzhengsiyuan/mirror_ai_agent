@@ -53,15 +53,16 @@ Three-column layout (ChatGPT/Claude style):
 **GET /api/models**
 ```json
 {
-  "models": ["claude-sonnet-4-5-20250929", "gpt-5-mini", ...],
-  "default": "gpt-5-mini"
+  "models": ["gemini-3-pro-preview", "gpt-5.5", "qwen3-max"],
+  "default": "gemini-3-pro-preview",
+  "configurable_nodes": ["SHISHEN", "GEJU_ROUTER", "RESPONSE", "..."]
 }
 ```
 
 **PUT /api/profile**
 ```json
 // Request - update model
-{"user_id": "u_demo", "llm_model": "gpt-5.2"}
+{"user_id": "u_demo", "llm_model": "gemini-3-pro-preview", "node_model_overrides": {"SHISHEN": "qwen3-max"}}
 
 // Request - enable bypass cache
 {"user_id": "u_demo", "bypass_cache": true}

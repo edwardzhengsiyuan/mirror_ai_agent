@@ -19,7 +19,7 @@ Session logs: `storage/users/<user_id>/conversations/<session>.jsonl`
   "gender": "male",
   "birth_time_unknown": false,
   "prompt_config": "lingyun_cat",
-  "llm_model": "gpt-5-mini",
+  "llm_model": "gemini-3-pro-preview",
   "node_cache": {}
 }
 ```
@@ -31,7 +31,7 @@ Session logs: `storage/users/<user_id>/conversations/<session>.jsonl`
 | `gender` | string | "male" or "female" |
 | `birth_time_unknown` | bool | Whether birth time is unknown |
 | `prompt_config` | string | Prompt configuration name |
-| `llm_model` | string | User-selected LLM model (defaults to `DEFAULT_MODEL` from `agent/models.py`) |
+| `llm_model` | string | User-selected global LLM model (defaults to `config/llm_routes.json`) |
 | `node_cache` | object | Cached node outputs |
 
 ## Cache Entry Structure

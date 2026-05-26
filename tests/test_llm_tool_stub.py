@@ -33,6 +33,25 @@ def main() -> None:
     assert shishen_route["model"] == "qwen3-max"
     assert shishen_route["api_key"] == "qwen-key"
 
+    # Node route defaults take priority over the profile/global requested model.
+    shishen_default = resolve_llm_settings("SHISHEN", requested_model="gemini-3-pro-preview")
+    assert shishen_default["model"] == "qwen3-max"
+    assert shishen_default["provider"] == "qwen"
+
+    # Explicit per-node override wins over both node route defaults and global model.
+    shishen_override = resolve_llm_settings(
+        "SHISHEN",
+        requested_model="qwen3-max",
+        node_model_overrides={"SHISHEN": "gemini-3-pro-preview"},
+    )
+    assert shishen_override["model"] == "gemini-3-pro-preview"
+    assert shishen_override["provider"] == "gptproto"
+
+    # Nodes without a route default use the global/profile model.
+    career_global = resolve_llm_settings("CAREER", requested_model="qwen3-max")
+    assert career_global["model"] == "qwen3-max"
+    assert career_global["provider"] == "qwen"
+
     print("llm stub ok")
 
 

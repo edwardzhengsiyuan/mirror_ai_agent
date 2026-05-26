@@ -37,13 +37,13 @@ def _hash_inputs(inputs: Dict[str, Any]) -> str:
 
 
 def _cache_key_inputs(inputs: Dict[str, Any]) -> str:
-    """Compute cache key excluding model field (model-agnostic lookup).
+    """Compute cache key excluding model routing fields.
 
     This allows cache hits even when the LLM model changes, as long as other
     inputs (like prompt_config) remain the same. PAIPAN cache is unaffected
     since it never includes model in inputs.
     """
-    filtered = {k: v for k, v in inputs.items() if k != "model"}
+    filtered = {k: v for k, v in inputs.items() if k not in ("model", "node_model_overrides")}
     payload = json.dumps(filtered, ensure_ascii=True, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -224,6 +224,7 @@ def ensure_node(
                 user_prompt,
                 model=inputs.get("model"),
                 node=node,
+                node_model_overrides=inputs.get("node_model_overrides"),
                 sleep_ms=sleep_ms,
                 stream=stream,
                 on_delta=(
@@ -408,6 +409,7 @@ def run_response(
     history_rounds = inputs.get("history_rounds")
     time_context = inputs.get("time_context")
     model = inputs.get("model")
+    node_model_overrides = inputs.get("node_model_overrides")
 
     started_ts = time.perf_counter()
 
@@ -441,6 +443,7 @@ def run_response(
             user_prompt,
             model=model,
             node="RESPONSE",
+            node_model_overrides=node_model_overrides,
             stream=stream,
             on_delta=(
                 lambda chunk: emit_event(

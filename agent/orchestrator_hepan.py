@@ -8,7 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .events import EventSink, emit_event
-from .models import DEFAULT_MODEL
+from .llm_config import default_model
 from .tools.hepan_tool import hepan_tool
 from .tools.llm_tool import llm_report_tool
 
@@ -69,6 +69,7 @@ def run_hepan_turn(
     stream: bool = False,
     history_rounds: Optional[List[Dict[str, str]]] = None,
     model: str | None = None,
+    node_model_overrides: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Execute one HePan compatibility turn."""
     now = now or dt.datetime.now()
@@ -104,8 +105,9 @@ def run_hepan_turn(
     response_output = llm_report_tool(
         prompt["system_prompt"],
         prompt["user_prompt"],
-        model=model or DEFAULT_MODEL,
+        model=model or default_model(),
         node="HEPAN_RESPONSE",
+        node_model_overrides=node_model_overrides,
         stream=stream,
         on_delta=(
             lambda chunk: emit_event(

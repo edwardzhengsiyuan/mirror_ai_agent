@@ -13,10 +13,44 @@
       "authorization_scheme": "Bearer"
     }
   },
+  "models": [
+    {
+      "id": "gemini-3-pro-preview",
+      "provider": "gptproto"
+    },
+    {
+      "id": "gpt-5.5",
+      "provider": "gptproto"
+    },
+    {
+      "id": "qwen3-max",
+      "provider": "qwen"
+    }
+  ],
   "default": {
     "provider": "gptproto",
     "model": "gemini-3-pro-preview"
   },
+  "configurable_nodes": [
+    "PLANNER",
+    "OVERALL",
+    "SHISHEN",
+    "GEJU_ROUTER",
+    "GEJU_ANALYSIS",
+    "GEJU_LEVEL",
+    "WUXING_PREFS",
+    "CAREER",
+    "RELATIONSHIP",
+    "HEALTH",
+    "GUIREN",
+    "LIUQIN",
+    "XINGGE",
+    "OTHER",
+    "RESPONSE",
+    "HEPAN_RESPONSE",
+    "CEZI_RESPONSE",
+    "NAJIA_RESPONSE"
+  ],
   "nodes": {
     "SHISHEN": {
       "provider": "qwen",
@@ -41,6 +75,10 @@
     "NAJIA_RESPONSE": {
       "provider": "qwen",
       "model": "qwen3-max"
+    },
+    "HEPAN_RESPONSE": {
+      "provider": "gptproto",
+      "model": "gemini-3-pro-preview"
     }
   }
 }

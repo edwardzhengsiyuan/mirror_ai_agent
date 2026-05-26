@@ -230,6 +230,7 @@ def llm_report_tool(
     user_prompt: str,
     model: str | None = None,
     node: str | None = None,
+    node_model_overrides: Dict[str, str] | None = None,
     sleep_ms: int | None = None,
     stream: bool = False,
     on_delta: Callable[[Dict[str, str]], None] | None = None,
@@ -242,7 +243,7 @@ def llm_report_tool(
     Args:
         system_prompt: System prompt for the LLM
         user_prompt: User prompt for the LLM
-        model: Model name override (default: LLM_MODEL or DEFAULT_MODEL)
+        model: Model name override (default: route config)
         node: Node label for logging/tracing
         sleep_ms: Optional delay before call
         stream: Enable streaming response
@@ -264,8 +265,8 @@ def llm_report_tool(
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     _load_env_file(os.path.join(repo_root, ".env"))
 
-    route = resolve_llm_settings(node_label, requested_model=model)
-    model_name = route.get("model") or model or _env("LLM_MODEL", "gpt-5-mini")
+    route = resolve_llm_settings(node_label, requested_model=model, node_model_overrides=node_model_overrides)
+    model_name = route.get("model") or model or _env("LLM_MODEL", "gemini-3-pro-preview")
 
     force_error = _env("LLM_FORCE_ERROR", "")
     force_error_set = {n.strip().upper() for n in force_error.split(",") if n.strip()}

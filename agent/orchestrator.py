@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from .deps import COMMON_PREREQS
 from .events import EventSink, emit_event
 from .execution import ensure_node, run_nodes_parallel, run_tool, run_response
-from .models import DEFAULT_MODEL
+from .llm_config import default_model
 from .response import compose_response
 
 
@@ -81,25 +81,31 @@ def run_turn(
     nodes = set(COMMON_PREREQS)
     nodes.update(aspects)
     prompt_config = profile.get("prompt_config", "lingyun_cat")
-    llm_model = profile.get("llm_model", DEFAULT_MODEL)
+    llm_model = profile.get("llm_model", default_model())
+    node_model_overrides = profile.get("node_model_overrides", {})
+    llm_node_inputs = {
+        "prompt_config": prompt_config,
+        "model": llm_model,
+        "node_model_overrides": node_model_overrides,
+    }
     outputs = run_nodes_parallel(
         profile,
         list(nodes),
         {
             "PAIPAN": paipan_inputs,
-            "OVERALL": {"prompt_config": prompt_config, "model": llm_model},
-            "SHISHEN": {"prompt_config": prompt_config, "model": llm_model},
-            "GEJU_ROUTER": {"prompt_config": prompt_config, "model": llm_model},
-            "GEJU_ANALYSIS": {"prompt_config": prompt_config, "model": llm_model},
-            "GEJU_LEVEL": {"prompt_config": prompt_config, "model": llm_model},
-            "WUXING_PREFS": {"prompt_config": prompt_config, "model": llm_model},
-            "CAREER": {"prompt_config": prompt_config, "model": llm_model},
-            "RELATIONSHIP": {"prompt_config": prompt_config, "model": llm_model},
-            "HEALTH": {"prompt_config": prompt_config, "model": llm_model},
-            "GUIREN": {"prompt_config": prompt_config, "model": llm_model},
-            "LIUQIN": {"prompt_config": prompt_config, "model": llm_model},
-            "XINGGE": {"prompt_config": prompt_config, "model": llm_model},
-            "OTHER": {"prompt_config": prompt_config, "model": llm_model},
+            "OVERALL": dict(llm_node_inputs),
+            "SHISHEN": dict(llm_node_inputs),
+            "GEJU_ROUTER": dict(llm_node_inputs),
+            "GEJU_ANALYSIS": dict(llm_node_inputs),
+            "GEJU_LEVEL": dict(llm_node_inputs),
+            "WUXING_PREFS": dict(llm_node_inputs),
+            "CAREER": dict(llm_node_inputs),
+            "RELATIONSHIP": dict(llm_node_inputs),
+            "HEALTH": dict(llm_node_inputs),
+            "GUIREN": dict(llm_node_inputs),
+            "LIUQIN": dict(llm_node_inputs),
+            "XINGGE": dict(llm_node_inputs),
+            "OTHER": dict(llm_node_inputs),
         },
         event_sink=event_sink,
         stream=stream,
@@ -180,6 +186,7 @@ def run_turn(
         "question": question,
         "history_rounds": history_rounds or [],
         "time_context": time_context,
+        "node_model_overrides": node_model_overrides,
     }
     response_output, response_duration_ms, response_llm_prompt = run_response(
         profile,

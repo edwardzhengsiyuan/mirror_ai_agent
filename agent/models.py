@@ -1,15 +1,14 @@
-"""Model constants for LLM configuration."""
+"""Model constants for LLM configuration.
 
-AVAILABLE_MODELS = [
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-5-20250929-thinking",
-    "gemini-3-pro-preview",
-    "gpt-5.5",
-    "gpt-5.2",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "qwen3-max",
-]
+The authoritative model catalog lives in config/llm_routes.json. Keep this
+module as a compatibility shim for older imports.
+"""
 
-DEFAULT_MODEL = "gemini-3-pro-preview"
+try:
+    from .llm_config import available_models, default_model
+
+    DEFAULT_MODEL = default_model()
+    AVAILABLE_MODELS = available_models()
+except Exception:
+    DEFAULT_MODEL = "gemini-3-pro-preview"
+    AVAILABLE_MODELS = [DEFAULT_MODEL]
