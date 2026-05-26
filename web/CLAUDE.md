@@ -53,8 +53,8 @@ Three-column layout (ChatGPT/Claude style):
 **GET /api/models**
 ```json
 {
-  "models": ["gemini-3-pro-preview", "gpt-5.5", "qwen3-max"],
-  "default": "gemini-3-pro-preview",
+  "models": ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "qwen3-max"],
+  "default": "gemini-3.1-pro-preview",
   "configurable_nodes": ["SHISHEN", "GEJU_ROUTER", "RESPONSE", "..."]
 }
 ```
@@ -62,7 +62,7 @@ Three-column layout (ChatGPT/Claude style):
 **PUT /api/profile**
 ```json
 // Request - update model
-{"user_id": "u_demo", "llm_model": "gemini-3-pro-preview", "node_model_overrides": {"SHISHEN": "qwen3-max"}}
+{"user_id": "u_demo", "llm_model": "gemini-3.1-pro-preview", "node_model_overrides": {"SHISHEN": "qwen3-max"}}
 
 // Request - enable bypass cache
 {"user_id": "u_demo", "bypass_cache": true}

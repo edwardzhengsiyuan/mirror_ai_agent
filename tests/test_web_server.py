@@ -190,8 +190,8 @@ def test_models_api_uses_route_config(tmp_path) -> None:
     resp = client.get("/api/models")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["models"] == ["gemini-3-pro-preview", "gpt-5.5", "qwen3-max"]
-    assert data["default"] == "gemini-3-pro-preview"
+    assert data["models"] == ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "qwen3-max"]
+    assert data["default"] == "gemini-3.1-pro-preview"
     assert "SHISHEN" in data["configurable_nodes"]
     assert "RESPONSE" in data["configurable_nodes"]
     assert "gpt-5-mini" not in data["models"]
@@ -217,7 +217,7 @@ def test_profile_node_model_overrides(tmp_path) -> None:
         json={
             "user_id": "u_test",
             "birth": {"year": 1990, "month": 1, "day": 1},
-            "node_model_overrides": {"shishen": "qwen3-max", "response": "gemini-3-pro-preview"},
+            "node_model_overrides": {"shishen": "qwen3-max", "response": "gemini-3.1-pro-preview"},
         },
     )
     assert resp.status_code == 200
@@ -225,7 +225,7 @@ def test_profile_node_model_overrides(tmp_path) -> None:
     profile = client.get("/api/profile?user_id=u_test").get_json()
     assert profile["node_model_overrides"] == {
         "SHISHEN": "qwen3-max",
-        "RESPONSE": "gemini-3-pro-preview",
+        "RESPONSE": "gemini-3.1-pro-preview",
     }
 
     resp = client.put(

@@ -19,7 +19,7 @@ Session logs: `storage/users/<user_id>/conversations/<session>.jsonl`
   "gender": "male",
   "birth_time_unknown": false,
   "prompt_config": "lingyun_cat",
-  "llm_model": "gemini-3-pro-preview",
+  "llm_model": "gemini-3.1-pro-preview",
   "node_cache": {}
 }
 ```

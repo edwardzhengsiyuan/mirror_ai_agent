@@ -28,13 +28,15 @@ def main() -> None:
     os.environ["QWEN_API_KEY"] = "qwen-key"
     response_route = resolve_llm_settings("RESPONSE")
     shishen_route = resolve_llm_settings("SHISHEN")
-    assert response_route["model"] == "gemini-3-pro-preview"
+    assert response_route["model"] == "gemini-3.1-pro-preview"
     assert response_route["api_key"] == "gpt-key"
+    assert response_route["authorization_scheme"] == "Bearer"
     assert shishen_route["model"] == "qwen3-max"
     assert shishen_route["api_key"] == "qwen-key"
+    assert shishen_route["authorization_scheme"] == "Bearer"
 
     # Node route defaults take priority over the profile/global requested model.
-    shishen_default = resolve_llm_settings("SHISHEN", requested_model="gemini-3-pro-preview")
+    shishen_default = resolve_llm_settings("SHISHEN", requested_model="gemini-3.1-pro-preview")
     assert shishen_default["model"] == "qwen3-max"
     assert shishen_default["provider"] == "qwen"
 
@@ -42,9 +44,9 @@ def main() -> None:
     shishen_override = resolve_llm_settings(
         "SHISHEN",
         requested_model="qwen3-max",
-        node_model_overrides={"SHISHEN": "gemini-3-pro-preview"},
+        node_model_overrides={"SHISHEN": "gemini-3.1-pro-preview"},
     )
-    assert shishen_override["model"] == "gemini-3-pro-preview"
+    assert shishen_override["model"] == "gemini-3.1-pro-preview"
     assert shishen_override["provider"] == "gptproto"
 
     # Nodes without a route default use the global/profile model.

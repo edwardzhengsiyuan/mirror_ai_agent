@@ -10,5 +10,5 @@ try:
     DEFAULT_MODEL = default_model()
     AVAILABLE_MODELS = available_models()
 except Exception:
-    DEFAULT_MODEL = "gemini-3-pro-preview"
+    DEFAULT_MODEL = "gemini-3.1-pro-preview"
     AVAILABLE_MODELS = [DEFAULT_MODEL]

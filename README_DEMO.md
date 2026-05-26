@@ -34,9 +34,9 @@ For real LLM calls, edit `.env` and set `LLM_MODE` empty or `auto`, plus provide
 
 Per-node model routing is managed in `config/llm_routes.json`:
 
-- Default reports and final responses use `gptproto` + `gemini-3-pro-preview`.
+- Default reports and final responses use `gptproto` + `gemini-3.1-pro-preview`.
 - `SHISHEN`, `GEJU_ROUTER`, `GEJU_ANALYSIS`, and `GEJU_LEVEL` use `qwen` + `qwen3-max`.
-- Exposed model choices currently come only from the route config: `gemini-3-pro-preview`, `gpt-5.5`, and `qwen3-max`.
+- Exposed model choices currently come only from the route config: `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, and `qwen3-max`.
 - Requests can pass `node_model_overrides`, and profile settings can persist those overrides. Priority is node override, then route node default, then global `llm_model`, then route default.
 
 Provider secrets stay in `.env`:
@@ -44,9 +44,10 @@ Provider secrets stay in `.env`:
 ```env
 GPTPROTO_API_BASE=https://gptproto.com/v1
 GPTPROTO_API_KEY=...
-QWEN_API_BASE=https://gptproto.com/v1
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 QWEN_API_KEY=...
 ```
+The Qwen route uses DashScope's OpenAI-compatible endpoint by default: `https://dashscope.aliyuncs.com/compatible-mode/v1`.
 
 ## Remote Docker Deployment
 

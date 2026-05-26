@@ -9,17 +9,17 @@
     "qwen": {
       "api_base_env": "QWEN_API_BASE",
       "api_key_env": "QWEN_API_KEY",
-      "default_api_base": "https://gptproto.com/v1",
+      "default_api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "authorization_scheme": "Bearer"
     }
   },
   "models": [
     {
-      "id": "gemini-3-pro-preview",
+      "id": "gemini-3.1-pro-preview",
       "provider": "gptproto"
     },
     {
-      "id": "gpt-5.5",
+      "id": "gemini-3-flash-preview",
       "provider": "gptproto"
     },
     {
@@ -29,7 +29,7 @@
   ],
   "default": {
     "provider": "gptproto",
-    "model": "gemini-3-pro-preview"
+    "model": "gemini-3.1-pro-preview"
   },
   "configurable_nodes": [
     "PLANNER",
@@ -70,7 +70,7 @@
     },
     "CEZI_RESPONSE": {
       "provider": "gptproto",
-      "model": "gemini-3-pro-preview"
+      "model": "gemini-3.1-pro-preview"
     },
     "NAJIA_RESPONSE": {
       "provider": "qwen",
@@ -78,7 +78,7 @@
     },
     "HEPAN_RESPONSE": {
       "provider": "gptproto",
-      "model": "gemini-3-pro-preview"
+      "model": "gemini-3.1-pro-preview"
     }
   }
 }

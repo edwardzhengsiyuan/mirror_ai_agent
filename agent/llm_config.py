@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 DEFAULT_ROUTE_CONFIG = os.path.join(REPO_ROOT, "config", "llm_routes.json")
-FALLBACK_DEFAULT_MODEL = "gemini-3-pro-preview"
+FALLBACK_DEFAULT_MODEL = "gemini-3.1-pro-preview"
 
 
 def _load_json(path: str) -> Dict[str, Any]:
@@ -67,6 +67,12 @@ def configurable_nodes() -> list[str]:
 
 def validate_model(model: str | None) -> bool:
     return not model or model in available_models()
+
+
+def _authorization_scheme(provider: Dict[str, Any]) -> str:
+    if "authorization_scheme" in provider:
+        return str(provider.get("authorization_scheme") or "")
+    return "Bearer"
 
 
 def _provider_for_model(routes: Dict[str, Any], model: str) -> str | None:
@@ -143,5 +149,5 @@ def resolve_llm_settings(
         "model": str(model_name),
         "api_base": str(api_base) if api_base else None,
         "api_key": str(api_key) if api_key else None,
-        "authorization_scheme": str(provider.get("authorization_scheme") or "Bearer"),
+        "authorization_scheme": _authorization_scheme(provider),
     }

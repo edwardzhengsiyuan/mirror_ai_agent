@@ -266,7 +266,7 @@ def llm_report_tool(
     _load_env_file(os.path.join(repo_root, ".env"))
 
     route = resolve_llm_settings(node_label, requested_model=model, node_model_overrides=node_model_overrides)
-    model_name = route.get("model") or model or _env("LLM_MODEL", "gemini-3-pro-preview")
+    model_name = route.get("model") or model or _env("LLM_MODEL", "gemini-3.1-pro-preview")
 
     force_error = _env("LLM_FORCE_ERROR", "")
     force_error_set = {n.strip().upper() for n in force_error.split(",") if n.strip()}
@@ -364,7 +364,7 @@ def llm_report_tool(
             on_delta=on_delta if validation_attempt == 0 else None,
             event_sink=event_sink,
             node_label=node_label,
-            authorization_scheme=str(route.get("authorization_scheme") or "Bearer"),
+            authorization_scheme=str(route.get("authorization_scheme") if route.get("authorization_scheme") is not None else "Bearer"),
         )
 
         if api_error is not None:

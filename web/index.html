@@ -1003,7 +1003,7 @@
       const nodeModelOverridesEl = document.getElementById("nodeModelOverrides");
       let currentSessionId = null;
       let availableModels = [];
-      let defaultModel = "gemini-3-pro-preview";
+      let defaultModel = "gemini-3.1-pro-preview";
       let configurableModelNodes = [];
       let nodeModelOverrides = {};
 
@@ -1484,7 +1484,7 @@
         try {
           const data = await fetchJson("/api/models");
           availableModels = data.models || [];
-          defaultModel = data.default || "gemini-3-pro-preview";
+          defaultModel = data.default || "gemini-3.1-pro-preview";
           configurableModelNodes = data.configurable_nodes || [];
           modelSelect.innerHTML = "";
           availableModels.forEach((model) => {

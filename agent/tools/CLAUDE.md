@@ -99,7 +99,7 @@ Automatically reads `.env` from repo root (ignored if missing).
 **Model Selection**
 - Uses the passed `model` parameter directly
 - Falls back to `LLM_MODEL` environment variable
-- Falls back to the route default from `config/llm_routes.json` (`gemini-3-pro-preview` by default)
+- Falls back to the route default from `config/llm_routes.json` (`gemini-3.1-pro-preview` by default)
 - Profile-level model stored in `profile.llm_model`, passed by orchestrator
 
 **Retry and Timeout**
