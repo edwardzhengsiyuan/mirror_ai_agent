@@ -16,6 +16,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from agent.models import AVAILABLE_MODELS, DEFAULT_MODEL
 from agent.orchestrator_cezi import run_cezi_turn
 from agent.orchestrator_hepan import run_hepan_turn
+from agent.orchestrator_najia import run_najia_turn
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
@@ -42,6 +43,7 @@ def create_app(
     run_turn_func: Callable = run_turn,
     run_hepan_turn_func: Callable = run_hepan_turn,
     run_cezi_turn_func: Callable = run_cezi_turn,
+    run_najia_turn_func: Callable = run_najia_turn,
     storage_root: Optional[str] = None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
@@ -485,6 +487,35 @@ def create_app(
                             "character": {"type": "string"},
                         },
                     },
+                    "NajiaRequest": {
+                        "type": "object",
+                        "required": ["question"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_demo"},
+                            "session_id": {"type": "string", "example": "najia_demo"},
+                            "history_n": {"type": "integer", "default": 5},
+                            "question": {"type": "string", "example": "这个项目三个月内能不能推进成功？"},
+                            "yao_values": {
+                                "type": "array",
+                                "items": {"type": "integer", "minimum": 0, "maximum": 7},
+                                "minItems": 6,
+                                "maxItems": 6,
+                                "example": [0, 1, 2, 3, 4, 5],
+                            },
+                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                        },
+                    },
+                    "NajiaResponse": {
+                        "type": "object",
+                        "properties": {
+                            "request_id": {"type": "string"},
+                            "session_id": {"type": "string"},
+                            "user_id": {"type": "string"},
+                            "method": {"type": "string", "example": "najia"},
+                            "answer": {"type": "string"},
+                            "gua": {"type": "object"},
+                        },
+                    },
                     "ProfileRequest": {
                         "allOf": [
                             {"$ref": "#/components/schemas/AskRequest"},
@@ -600,6 +631,21 @@ def create_app(
                         },
                         "responses": {
                             "200": {"description": "CeZi answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/najia/ask": {
+                    "post": {
+                        "summary": "Run a synchronous Liuyao/Najia divination turn",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Najia answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaResponse"}}}},
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
                         },
@@ -901,6 +947,69 @@ def create_app(
                 "method": "cezi",
                 "answer": result["response"],
                 "character": result["character"],
+            }
+        )
+
+    @app.route("/v1/najia/ask", methods=["POST"])
+    def v1_najia_ask() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        question = (data.get("question") or "").strip()
+        if not question:
+            return api_error(400, "question_required", "question required")
+
+        context, error_response = optional_conversation_context(data)
+        if error_response:
+            return error_response
+        assert context is not None
+
+        now = dt.datetime.now()
+        request_id = f"req_{uuid.uuid4().hex[:16]}"
+        convo_path = context["convo_path"]
+        append_event(
+            convo_path,
+            {
+                "ts": now.isoformat(),
+                "type": "user_message",
+                "text": question,
+                "request_id": request_id,
+                "api_version": "v1",
+                "method": "najia",
+            },
+        )
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+
+        try:
+            result = run_najia_turn_func(
+                question,
+                yao_values=data.get("yao_values"),
+                now=now,
+                event_sink=sink,
+                history_rounds=context["history_rounds"],
+                model=data.get("llm_model"),
+            )
+        except ValueError as exc:
+            return api_error(400, "invalid_najia_request", str(exc))
+
+        najia_result = result["najia"]
+        return jsonify(
+            {
+                "request_id": request_id,
+                "session_id": os.path.basename(convo_path),
+                "user_id": context["user_id"],
+                "method": "najia",
+                "answer": result["response"],
+                "gua": {
+                    "yao_values": najia_result["yao_values"],
+                    "time_info": najia_result["time_info"],
+                    "bengua": najia_result["bengua"],
+                    "biangua": najia_result["biangua"],
+                    "raw_text": najia_result["raw_text"],
+                },
             }
         )
 

@@ -37,6 +37,10 @@
     "CEZI_RESPONSE": {
       "provider": "gptproto",
       "model": "gemini-3-pro-preview"
+    },
+    "NAJIA_RESPONSE": {
+      "provider": "qwen",
+      "model": "qwen3-max"
     }
   }
 }
