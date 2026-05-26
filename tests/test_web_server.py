@@ -58,6 +58,31 @@ def _fake_hepan_turn(
     }
 
 
+def _fake_cezi_turn(
+    question,
+    character,
+    now=None,
+    event_sink=None,
+    stream=False,
+    history_rounds=None,
+    model=None,
+):
+    if event_sink:
+        event_sink({
+            "type": "tool_invocation",
+            "tool": "CEZI",
+            "output": {"type": "cezi", "character": character},
+            "duration_ms": 1,
+        })
+        event_sink({"type": "response", "text": "cezi ok", "duration_ms": 1})
+    return {
+        "method": "cezi",
+        "response": "cezi ok",
+        "character": character,
+        "cezi": {"type": "cezi", "character": character, "question": question},
+    }
+
+
 def test_web_api_flow(tmp_path) -> None:
     def fake_run_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
         if event_sink:
@@ -125,7 +150,12 @@ def test_web_api_flow(tmp_path) -> None:
 
 def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", "secret")
-    app = create_app(run_turn_func=_fake_turn, run_hepan_turn_func=_fake_hepan_turn, storage_root=str(tmp_path))
+    app = create_app(
+        run_turn_func=_fake_turn,
+        run_hepan_turn_func=_fake_hepan_turn,
+        run_cezi_turn_func=_fake_cezi_turn,
+        storage_root=str(tmp_path),
+    )
     client = app.test_client()
 
     resp = client.get("/health")
@@ -138,6 +168,7 @@ def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
     assert "/v1/ask" in spec["paths"]
     assert "/v1/ask_stream" in spec["paths"]
     assert "/v1/hepan/ask" in spec["paths"]
+    assert "/v1/cezi/ask" in spec["paths"]
 
     resp = client.get("/docs")
     assert resp.status_code == 200
@@ -230,3 +261,26 @@ def test_v1_hepan_ask_returns_public_shape(tmp_path, monkeypatch) -> None:
     assert data["answer"] == "hepan ok"
     assert data["compatibility"]["score"]["overall"] == 66.0
     assert data["session_id"] == "hepan_session.jsonl"
+
+
+def test_v1_cezi_ask_returns_public_shape(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "secret")
+    app = create_app(run_turn_func=_fake_turn, run_cezi_turn_func=_fake_cezi_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    resp = client.post(
+        "/v1/cezi/ask",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "user_id": "u_demo",
+            "session_id": "cezi_session",
+            "question": "这个项目合作能不能成？",
+            "character": "合",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["method"] == "cezi"
+    assert data["answer"] == "cezi ok"
+    assert data["character"] == "合"
+    assert data["session_id"] == "cezi_session.jsonl"

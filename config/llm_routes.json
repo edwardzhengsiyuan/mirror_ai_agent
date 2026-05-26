@@ -33,6 +33,10 @@
     "GEJU_LEVEL": {
       "provider": "qwen",
       "model": "qwen3-max"
+    },
+    "CEZI_RESPONSE": {
+      "provider": "gptproto",
+      "model": "gemini-3-pro-preview"
     }
   }
 }

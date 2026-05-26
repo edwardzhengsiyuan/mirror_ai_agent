@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Optional
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from agent.models import AVAILABLE_MODELS, DEFAULT_MODEL
+from agent.orchestrator_cezi import run_cezi_turn
 from agent.orchestrator_hepan import run_hepan_turn
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
@@ -40,6 +41,7 @@ def load_env_file(path: str) -> None:
 def create_app(
     run_turn_func: Callable = run_turn,
     run_hepan_turn_func: Callable = run_hepan_turn,
+    run_cezi_turn_func: Callable = run_cezi_turn,
     storage_root: Optional[str] = None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
@@ -460,6 +462,29 @@ def create_app(
                             "compatibility": {"type": "object"},
                         },
                     },
+                    "CeziRequest": {
+                        "type": "object",
+                        "required": ["question", "character"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_demo"},
+                            "session_id": {"type": "string", "example": "cezi_demo"},
+                            "history_n": {"type": "integer", "default": 5},
+                            "question": {"type": "string", "example": "这个项目合作能不能成？"},
+                            "character": {"type": "string", "example": "合"},
+                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                        },
+                    },
+                    "CeziResponse": {
+                        "type": "object",
+                        "properties": {
+                            "request_id": {"type": "string"},
+                            "session_id": {"type": "string"},
+                            "user_id": {"type": "string"},
+                            "method": {"type": "string", "example": "cezi"},
+                            "answer": {"type": "string"},
+                            "character": {"type": "string"},
+                        },
+                    },
                     "ProfileRequest": {
                         "allOf": [
                             {"$ref": "#/components/schemas/AskRequest"},
@@ -560,6 +585,21 @@ def create_app(
                         },
                         "responses": {
                             "200": {"description": "HePan answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/cezi/ask": {
+                    "post": {
+                        "summary": "Run a synchronous CeZi character-divination turn",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "CeZi answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziResponse"}}}},
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
                         },
@@ -801,6 +841,66 @@ def create_app(
                 "method": "hepan",
                 "answer": result["response"],
                 "compatibility": result["hepan"]["compatibility"],
+            }
+        )
+
+    @app.route("/v1/cezi/ask", methods=["POST"])
+    def v1_cezi_ask() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        question = (data.get("question") or "").strip()
+        character = (data.get("character") or "").strip()
+        if not question:
+            return api_error(400, "question_required", "question required")
+        if not character:
+            return api_error(400, "character_required", "character required")
+
+        context, error_response = optional_conversation_context(data)
+        if error_response:
+            return error_response
+        assert context is not None
+
+        now = dt.datetime.now()
+        request_id = f"req_{uuid.uuid4().hex[:16]}"
+        convo_path = context["convo_path"]
+        append_event(
+            convo_path,
+            {
+                "ts": now.isoformat(),
+                "type": "user_message",
+                "text": question,
+                "request_id": request_id,
+                "api_version": "v1",
+                "method": "cezi",
+                "character": character,
+            },
+        )
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+
+        try:
+            result = run_cezi_turn_func(
+                question,
+                character,
+                now=now,
+                event_sink=sink,
+                history_rounds=context["history_rounds"],
+                model=data.get("llm_model"),
+            )
+        except ValueError as exc:
+            return api_error(400, "invalid_cezi_request", str(exc))
+
+        return jsonify(
+            {
+                "request_id": request_id,
+                "session_id": os.path.basename(convo_path),
+                "user_id": context["user_id"],
+                "method": "cezi",
+                "answer": result["response"],
+                "character": result["character"],
             }
         )
 
