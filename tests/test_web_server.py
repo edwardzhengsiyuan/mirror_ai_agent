@@ -10,6 +10,21 @@ sys.path.insert(0, ROOT)
 from web_server import create_app
 
 
+def _fake_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
+    if event_sink:
+        event_sink({"type": "plan", "plan": {"aspects": ["CAREER"], "time": {"need_tool": False}, "times": []}})
+        if stream:
+            event_sink({"type": "node_start", "node": "OVERALL"})
+            event_sink({"type": "response_delta", "delta": "o"})
+        event_sink({"type": "response", "text": "ok", "duration_ms": 1})
+    return {
+        "plan": {"aspects": ["CAREER"], "time": {"need_tool": False}, "times": []},
+        "time_context": None,
+        "response": "ok",
+        "outputs": {},
+    }
+
+
 def test_web_api_flow(tmp_path) -> None:
     def fake_run_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
         if event_sink:
@@ -73,3 +88,82 @@ def test_web_api_flow(tmp_path) -> None:
     data = resp.get_json()
     assert "llm_prompts" in data
     assert "OVERALL" in data["llm_prompts"]
+
+
+def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "secret")
+    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.get_json()["auth_configured"] is True
+
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    spec = resp.get_json()
+    assert "/v1/ask" in spec["paths"]
+    assert "/v1/ask_stream" in spec["paths"]
+
+    resp = client.get("/docs")
+    assert resp.status_code == 200
+    assert b"SwaggerUIBundle" in resp.data
+
+    resp = client.post("/v1/ask", json={"user_id": "u_demo", "question": "hi"})
+    assert resp.status_code == 401
+
+
+def test_v1_ask_creates_profile_and_returns_public_shape(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "secret")
+    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+    headers = {"Authorization": "Bearer secret"}
+
+    resp = client.post(
+        "/v1/ask",
+        headers=headers,
+        json={
+            "user_id": "u_demo",
+            "birth": {"year": 1990, "month": 1, "day": 1, "hour": 8, "minute": 0, "second": 0},
+            "gender": "male",
+            "session_id": "demo_session",
+            "question": "hi",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["answer"] == "ok"
+    assert data["session_id"] == "demo_session.jsonl"
+    assert data["user_id"] == "u_demo"
+    assert "outputs" not in data
+
+    profile_path = os.path.join(tmp_path, "users", "u_demo", "profile.json")
+    assert os.path.exists(profile_path)
+
+    resp = client.get("/v1/users/u_demo", headers=headers)
+    assert resp.status_code == 200
+    profile = resp.get_json()["profile"]
+    assert profile["user_id"] == "u_demo"
+    assert "node_cache" not in profile
+
+
+def test_v1_stream_filters_internal_events(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "secret")
+    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    resp = client.post(
+        "/v1/ask_stream",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "user_id": "u_demo",
+            "birth": {"year": 1990, "month": 1, "day": 1},
+            "question": "hi",
+        },
+        buffered=True,
+    )
+    assert resp.status_code == 200
+    body = b"".join(resp.response).decode("utf-8")
+    assert "answer_delta" in body
+    assert "node_status" in body
+    assert "system_prompt" not in body

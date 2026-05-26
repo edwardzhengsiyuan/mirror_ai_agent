@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.pytest_tmp/
 
 # Local config / secrets
 .env
@@ -11,6 +12,7 @@ storage/logs/
 storage/conversations/
 storage/profile_demo.json
 storage/users/
+*.log
 
 # Editor/OS noise
 .DS_Store

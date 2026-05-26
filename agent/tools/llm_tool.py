@@ -10,6 +10,7 @@ import urllib.request
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from ..events import EventSink, emit_event
+from ..llm_config import resolve_llm_settings
 
 _TRACE_NAMES = ("1", "true", "yes")
 
@@ -123,6 +124,7 @@ def _do_llm_api_call(
     on_delta: Optional[Callable[[Dict[str, str]], None]],
     event_sink: EventSink | None,
     node_label: str,
+    authorization_scheme: str = "Bearer",
 ) -> Tuple[Optional[str], Optional[str], Optional[Exception]]:
     """Execute LLM API call with network error retry.
 
@@ -141,12 +143,13 @@ def _do_llm_api_call(
     if stream:
         payload["stream"] = True
     data = json.dumps(payload).encode("utf-8")
+    auth_value = f"{authorization_scheme} {api_key}" if authorization_scheme else api_key
     req = urllib.request.Request(
         url,
         data=data,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": auth_value,
             "User-Agent": "bazi-agent/1.0",
         },
         method="POST",
@@ -261,8 +264,8 @@ def llm_report_tool(
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     _load_env_file(os.path.join(repo_root, ".env"))
 
-    from ..models import DEFAULT_MODEL
-    model_name = model or _env("LLM_MODEL", DEFAULT_MODEL)
+    route = resolve_llm_settings(node_label, requested_model=model)
+    model_name = route.get("model") or model or _env("LLM_MODEL", "gpt-5-mini")
 
     force_error = _env("LLM_FORCE_ERROR", "")
     force_error_set = {n.strip().upper() for n in force_error.split(",") if n.strip()}
@@ -288,8 +291,8 @@ def llm_report_tool(
         }
 
     mode = _env("LLM_MODE", "auto")
-    api_base = _env_any(["LLM_API_BASE", "OPENAI_API_BASE"])
-    api_key = _env_any(["LLM_API_KEY", "OPENAI_API_KEY"])
+    api_base = route.get("api_base") or _env_any(["LLM_API_BASE", "OPENAI_API_BASE"])
+    api_key = route.get("api_key") or _env_any(["LLM_API_KEY", "OPENAI_API_KEY"])
     if mode == "stub" or not api_base or not api_key:
         _debug(
             f"stub response for {node_label} mode={mode} api_base={api_base} "
@@ -301,6 +304,7 @@ def llm_report_tool(
                 "type": "llm_request",
                 "node": node_label,
                 "model": model_name,
+                "provider": route.get("provider"),
                 "attempt": 1,
                 "url": None,
                 "timeout_seconds": None,
@@ -328,7 +332,7 @@ def llm_report_tool(
         return resp
 
     _debug(
-        f"prepared call node={node_label} model={model_name} "
+        f"prepared call node={node_label} provider={route.get('provider')} model={model_name} "
         f"mode={mode} api_base={api_base}"
     )
 
@@ -359,6 +363,7 @@ def llm_report_tool(
             on_delta=on_delta if validation_attempt == 0 else None,
             event_sink=event_sink,
             node_label=node_label,
+            authorization_scheme=str(route.get("authorization_scheme") or "Bearer"),
         )
 
         if api_error is not None:

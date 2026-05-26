@@ -1,0 +1,22 @@
+{
+  servers {
+    timeouts {
+      read_body 5m
+      read_header 30s
+      write 10m
+      idle 10m
+    }
+  }
+}
+
+:80 {
+  encode gzip
+
+  reverse_proxy bazi-agent-api:8000 {
+    flush_interval -1
+    transport http {
+      read_timeout 10m
+      write_timeout 10m
+    }
+  }
+}

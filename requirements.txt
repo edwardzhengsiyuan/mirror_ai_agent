@@ -1,3 +1,6 @@
 lunar-python>=1.0.0
 flask>=3.0.0
 pytest>=7.4
+waitress>=3.0.0
+numpy>=1.26
+pydantic>=2.0

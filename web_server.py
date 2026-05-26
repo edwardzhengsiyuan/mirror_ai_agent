@@ -6,8 +6,10 @@ import datetime as dt
 import json
 import os
 import queue
+import re
 import threading
-from typing import Callable, Dict, Optional
+import uuid
+from typing import Any, Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
@@ -16,11 +18,29 @@ from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
 
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+
+
+def load_env_file(path: str) -> None:
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("\"").strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
 
 def create_app(
     run_turn_func: Callable = run_turn,
     storage_root: Optional[str] = None,
 ) -> Flask:
+    load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
     app = Flask(__name__, static_folder="web", static_url_path="")
 
     root = storage_root or os.path.join(os.path.dirname(__file__), "storage")
@@ -86,12 +106,559 @@ def create_app(
 
         return None
 
+    def validate_safe_id(value: str, field: str) -> Optional[str]:
+        if not value:
+            return f"{field} required"
+        if not SAFE_ID_RE.match(value):
+            return f"{field} may only contain letters, numbers, underscore, dash, and dot"
+        return None
+
+    def api_error(status: int, code: str, message: str, details: Optional[Dict[str, object]] = None):
+        payload: Dict[str, object] = {
+            "error": {
+                "code": code,
+                "message": message,
+            }
+        }
+        if details:
+            payload["error"]["details"] = details
+        return jsonify(payload), status
+
+    def bearer_token() -> str:
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return ""
+        return header.removeprefix("Bearer ").strip()
+
+    def require_demo_auth():
+        expected = os.environ.get("DEMO_API_TOKEN", "").strip()
+        if not expected:
+            return api_error(
+                503,
+                "auth_not_configured",
+                "DEMO_API_TOKEN is not configured on the server.",
+            )
+        if bearer_token() != expected:
+            return api_error(401, "unauthorized", "Valid Bearer token required.")
+        return None
+
+    def public_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "user_id": profile.get("user_id"),
+            "birth": profile.get("birth"),
+            "gender": profile.get("gender", "male"),
+            "birth_time_unknown": bool(profile.get("birth_time_unknown", False)),
+            "prompt_config": profile.get("prompt_config", "lingyun_cat"),
+            "llm_model": profile.get("llm_model", DEFAULT_MODEL),
+            "bypass_cache": bool(profile.get("bypass_cache", False)),
+            "cached_nodes": sorted((profile.get("node_cache") or {}).keys()),
+        }
+
+    def upsert_profile_from_payload(data: Dict[str, Any]):
+        user_id = (data.get("user_id") or "").strip()
+        id_error = validate_safe_id(user_id, "user_id")
+        if id_error:
+            return None, api_error(400, "invalid_user_id", id_error)
+
+        path = profile_path(user_id)
+        profile_exists = os.path.exists(path)
+        profile = load_profile(path) if profile_exists else None
+        birth = data.get("birth")
+
+        if profile is None:
+            if not isinstance(birth, dict):
+                return None, api_error(
+                    400,
+                    "birth_required",
+                    "birth is required when creating a new user profile.",
+                )
+            birth_error = validate_birth(birth)
+            if birth_error:
+                return None, api_error(400, "invalid_birth", birth_error)
+            llm_model = data.get("llm_model", DEFAULT_MODEL)
+            if llm_model and llm_model not in AVAILABLE_MODELS:
+                return None, api_error(400, "invalid_model", f"invalid model: {llm_model}")
+            profile = {
+                "user_id": user_id,
+                "birth": birth,
+                "gender": data.get("gender", "male"),
+                "birth_time_unknown": bool(data.get("birth_time_unknown", False)),
+                "prompt_config": data.get("prompt_config", "lingyun_cat"),
+                "llm_model": llm_model or DEFAULT_MODEL,
+                "bypass_cache": bool(data.get("bypass_cache", False)),
+                "node_cache": {},
+            }
+            ensure_user_dirs(user_id)
+            save_profile(path, profile)
+            return profile, None
+
+        chart_changed = False
+        if isinstance(birth, dict):
+            birth_error = validate_birth(birth)
+            if birth_error:
+                return None, api_error(400, "invalid_birth", birth_error)
+            if birth != profile.get("birth"):
+                profile["birth"] = birth
+                chart_changed = True
+
+        if "gender" in data and data["gender"] != profile.get("gender"):
+            profile["gender"] = data["gender"]
+            chart_changed = True
+        if "birth_time_unknown" in data:
+            time_unknown = bool(data["birth_time_unknown"])
+            if time_unknown != bool(profile.get("birth_time_unknown", False)):
+                profile["birth_time_unknown"] = time_unknown
+                chart_changed = True
+        if "prompt_config" in data:
+            profile["prompt_config"] = data["prompt_config"]
+        if "llm_model" in data:
+            llm_model = data["llm_model"]
+            if llm_model and llm_model not in AVAILABLE_MODELS:
+                return None, api_error(400, "invalid_model", f"invalid model: {llm_model}")
+            profile["llm_model"] = llm_model or DEFAULT_MODEL
+        if "bypass_cache" in data:
+            profile["bypass_cache"] = bool(data["bypass_cache"])
+
+        if chart_changed:
+            profile["node_cache"] = {}
+        profile.setdefault("node_cache", {})
+        ensure_user_dirs(user_id)
+        save_profile(path, profile)
+        return profile, None
+
+    def conversation_path_for_payload(user_id: str, session_id: Optional[str]) -> str:
+        if session_id:
+            session_id = normalize_session_id(session_id.strip())
+            base_session_id = session_id[:-6] if session_id.endswith(".jsonl") else session_id
+            id_error = validate_safe_id(base_session_id, "session_id")
+            if id_error:
+                raise ValueError(id_error)
+            return os.path.join(conversation_dir(user_id), session_id)
+        return new_session_path(user_id)
+
+    def run_v1_request(data: Dict[str, Any], *, stream: bool = False):
+        question = (data.get("question") or "").strip()
+        if not question:
+            return None, api_error(400, "question_required", "question required")
+
+        profile, error_response = upsert_profile_from_payload(data)
+        if error_response:
+            return None, error_response
+        assert profile is not None
+
+        birth_error = validate_birth(profile.get("birth", {}) or {})
+        if birth_error:
+            return None, api_error(400, "invalid_birth", birth_error)
+
+        try:
+            convo_path = conversation_path_for_payload(profile["user_id"], data.get("session_id"))
+        except ValueError as exc:
+            return None, api_error(400, "invalid_session_id", str(exc))
+
+        history_n = normalize_history_n(data.get("history_n"))
+        history_rounds = load_recent_rounds(convo_path, history_n)
+        now = dt.datetime.now()
+        request_id = f"req_{uuid.uuid4().hex[:16]}"
+        append_event(
+            convo_path,
+            {
+                "ts": now.isoformat(),
+                "type": "user_message",
+                "text": question,
+                "request_id": request_id,
+                "api_version": "v1",
+            },
+        )
+        return {
+            "profile": profile,
+            "question": question,
+            "convo_path": convo_path,
+            "history_rounds": history_rounds,
+            "now": now,
+            "request_id": request_id,
+            "stream": stream,
+        }, None
+
+    def public_stream_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        event_type = event.get("type")
+        if event_type == "response_delta":
+            return {
+                "type": "answer_delta",
+                "delta": event.get("delta", ""),
+                "reasoning_delta": event.get("reasoning_delta", ""),
+            }
+        if event_type == "response":
+            return {
+                "type": "answer",
+                "answer": event.get("text", ""),
+                "duration_ms": event.get("duration_ms"),
+            }
+        if event_type == "plan":
+            return {"type": "plan", "plan": event.get("plan")}
+        if event_type == "time_context":
+            return {"type": "time_context", "time_context": event.get("value")}
+        if event_type == "tool_invocation":
+            return {
+                "type": "tool_invocation",
+                "tool": event.get("tool"),
+                "output": event.get("output"),
+                "duration_ms": event.get("duration_ms"),
+            }
+        if event_type == "node_start":
+            return {"type": "node_status", "node": event.get("node"), "status": "running"}
+        if event_type == "node_end":
+            status = "error" if (event.get("output") or {}).get("error") else "done"
+            if event.get("cached"):
+                status = "cached"
+            return {
+                "type": "node_status",
+                "node": event.get("node"),
+                "status": status,
+                "duration_ms": event.get("duration_ms"),
+            }
+        if event_type == "node_failed":
+            return {"type": "node_status", "node": event.get("node"), "status": "error"}
+        if event_type == "node_skipped":
+            return {
+                "type": "node_status",
+                "node": event.get("node"),
+                "status": "skipped",
+                "reason": event.get("reason"),
+            }
+        if event_type in ("workflow_error", "server_error"):
+            return {
+                "type": "error",
+                "message": event.get("message") or event.get("error"),
+                "failed_nodes": event.get("failed_nodes"),
+                "skipped_nodes": event.get("skipped_nodes"),
+            }
+        return None
+
+    def openapi_spec() -> Dict[str, Any]:
+        server_url = request.host_url.rstrip("/")
+        return {
+            "openapi": "3.0.3",
+            "info": {
+                "title": "BaZi Agent Demo API",
+                "version": "1.0.0",
+                "description": "Packaged demo API for BaZi chart Q&A. Swagger is for customer evaluation and integration testing.",
+            },
+            "servers": [{"url": server_url}],
+            "components": {
+                "securitySchemes": {
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "demo-token",
+                    }
+                },
+                "schemas": {
+                    "Birth": {
+                        "type": "object",
+                        "required": ["year", "month", "day"],
+                        "properties": {
+                            "year": {"type": "integer", "example": 1990},
+                            "month": {"type": "integer", "minimum": 1, "maximum": 12, "example": 1},
+                            "day": {"type": "integer", "minimum": 1, "maximum": 31, "example": 1},
+                            "hour": {"type": "integer", "minimum": 0, "maximum": 23, "example": 8},
+                            "minute": {"type": "integer", "minimum": 0, "maximum": 59, "example": 0},
+                            "second": {"type": "integer", "minimum": 0, "maximum": 59, "example": 0},
+                        },
+                    },
+                    "AskRequest": {
+                        "type": "object",
+                        "required": ["user_id", "question"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_demo"},
+                            "question": {"type": "string", "example": "今年事业怎么样？"},
+                            "birth": {"$ref": "#/components/schemas/Birth"},
+                            "gender": {"type": "string", "enum": ["male", "female"], "example": "male"},
+                            "birth_time_unknown": {"type": "boolean", "default": False},
+                            "session_id": {"type": "string", "example": "demo_session"},
+                            "history_n": {"type": "integer", "default": 5},
+                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                            "bypass_cache": {"type": "boolean", "default": False},
+                        },
+                    },
+                    "AskResponse": {
+                        "type": "object",
+                        "properties": {
+                            "request_id": {"type": "string"},
+                            "session_id": {"type": "string"},
+                            "user_id": {"type": "string"},
+                            "answer": {"type": "string"},
+                            "plan": {"type": "object"},
+                            "time_context": {"type": "object", "nullable": True},
+                            "error": {"type": "boolean"},
+                            "failed_nodes": {"type": "array", "items": {"type": "string"}},
+                            "skipped_nodes": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                    "ProfileRequest": {
+                        "allOf": [
+                            {"$ref": "#/components/schemas/AskRequest"},
+                            {
+                                "type": "object",
+                                "required": ["birth"],
+                                "properties": {"question": {"readOnly": True}},
+                            },
+                        ]
+                    },
+                    "ErrorResponse": {
+                        "type": "object",
+                        "properties": {
+                            "error": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {"type": "string"},
+                                    "message": {"type": "string"},
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+            "paths": {
+                "/health": {
+                    "get": {
+                        "summary": "Health check",
+                        "responses": {"200": {"description": "Server status"}},
+                    }
+                },
+                "/v1/users": {
+                    "post": {
+                        "summary": "Create or update a demo user profile",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProfileRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Profile saved"},
+                            "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/users/{user_id}": {
+                    "get": {
+                        "summary": "Get a demo user profile summary",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [{"name": "user_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                        "responses": {
+                            "200": {"description": "Profile summary"},
+                            "404": {"description": "Profile not found"},
+                        },
+                    }
+                },
+                "/v1/ask": {
+                    "post": {
+                        "summary": "Run a synchronous BaZi Q&A turn",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/ask_stream": {
+                    "post": {
+                        "summary": "Run a streaming BaZi Q&A turn using Server-Sent Events",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskRequest"}}},
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "SSE stream. Events include session, node_status, plan, tool_invocation, answer_delta, answer, and error.",
+                                "content": {"text/event-stream": {"schema": {"type": "string"}}},
+                            },
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+            },
+        }
+
     # Event logging uses shared function from conversation_store
     # (log_event_to_conversation imported at module level)
+
+    @app.route("/health", methods=["GET"])
+    def health() -> Response:
+        return jsonify({
+            "status": "ok",
+            "service": "bazi-agent-api",
+            "auth_configured": bool(os.environ.get("DEMO_API_TOKEN", "").strip()),
+        })
+
+    @app.route("/openapi.json", methods=["GET"])
+    def openapi_json() -> Response:
+        return jsonify(openapi_spec())
+
+    @app.route("/docs", methods=["GET"])
+    def swagger_docs() -> Response:
+        html = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BaZi Agent Demo API Docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+      body { margin: 0; background: #f7f7f7; }
+      .topbar { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        persistAuthorization: true,
+      });
+    </script>
+  </body>
+</html>
+"""
+        return Response(html, mimetype="text/html")
 
     @app.route("/")
     def index() -> Response:
         return send_from_directory(app.static_folder, "index.html")
+
+    @app.route("/v1/users", methods=["POST"])
+    def v1_upsert_user() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        if "birth" not in data:
+            return api_error(400, "birth_required", "birth required")
+        profile, error_response = upsert_profile_from_payload(data)
+        if error_response:
+            return error_response
+        assert profile is not None
+        return jsonify({"profile": public_profile(profile)})
+
+    @app.route("/v1/users/<user_id>", methods=["GET"])
+    def v1_get_user(user_id: str) -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        id_error = validate_safe_id(user_id, "user_id")
+        if id_error:
+            return api_error(400, "invalid_user_id", id_error)
+        path = profile_path(user_id)
+        if not os.path.exists(path):
+            return api_error(404, "profile_not_found", "profile not found")
+        return jsonify({"profile": public_profile(load_profile(path))})
+
+    @app.route("/v1/ask", methods=["POST"])
+    def v1_ask() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        prepared, error_response = run_v1_request(data)
+        if error_response:
+            return error_response
+        assert prepared is not None
+
+        profile = prepared["profile"]
+        convo_path = prepared["convo_path"]
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+
+        result = run_turn_func(
+            profile,
+            prepared["question"],
+            now=prepared["now"],
+            event_sink=sink,
+            history_rounds=prepared["history_rounds"],
+        )
+        append_event(convo_path, {"ts": prepared["now"].isoformat(), "type": "plan", "plan": result["plan"]})
+        if result["time_context"]:
+            append_event(convo_path, {"ts": prepared["now"].isoformat(), "type": "time_context", "value": result["time_context"]})
+        save_profile(profile_path(profile["user_id"]), profile)
+        return jsonify(
+            {
+                "request_id": prepared["request_id"],
+                "session_id": os.path.basename(convo_path),
+                "user_id": profile["user_id"],
+                "answer": result["response"],
+                "plan": result["plan"],
+                "time_context": result["time_context"],
+                "error": bool(result.get("error", False)),
+                "failed_nodes": result.get("failed_nodes", []),
+                "skipped_nodes": result.get("skipped_nodes", []),
+            }
+        )
+
+    @app.route("/v1/ask_stream", methods=["POST"])
+    def v1_ask_stream() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        prepared, error_response = run_v1_request(data, stream=True)
+        if error_response:
+            return error_response
+        assert prepared is not None
+
+        profile = prepared["profile"]
+        convo_path = prepared["convo_path"]
+        event_q: queue.Queue = queue.Queue()
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+            public_event = public_stream_event(event)
+            if public_event:
+                event_q.put(public_event)
+
+        def worker() -> None:
+            try:
+                result = run_turn_func(
+                    profile,
+                    prepared["question"],
+                    now=prepared["now"],
+                    event_sink=sink,
+                    stream=True,
+                    history_rounds=prepared["history_rounds"],
+                )
+                append_event(convo_path, {"ts": prepared["now"].isoformat(), "type": "plan", "plan": result["plan"]})
+                if result["time_context"]:
+                    append_event(
+                        convo_path,
+                        {"ts": prepared["now"].isoformat(), "type": "time_context", "value": result["time_context"]},
+                    )
+                save_profile(profile_path(profile["user_id"]), profile)
+            except Exception as exc:
+                event_q.put({"type": "error", "message": str(exc)})
+            finally:
+                event_q.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def gen():
+            yield f"data: {json.dumps({'type': 'session', 'request_id': prepared['request_id'], 'session_id': os.path.basename(convo_path)}, ensure_ascii=False)}\n\n"
+            while True:
+                event = event_q.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        return Response(gen(), mimetype="text/event-stream")
 
     @app.route("/api/users", methods=["GET"])
     def list_users() -> Response:

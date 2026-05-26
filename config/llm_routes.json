@@ -1,0 +1,38 @@
+{
+  "providers": {
+    "gptproto": {
+      "api_base_env": "GPTPROTO_API_BASE",
+      "api_key_env": "GPTPROTO_API_KEY",
+      "default_api_base": "https://gptproto.com/v1",
+      "authorization_scheme": "Bearer"
+    },
+    "qwen": {
+      "api_base_env": "QWEN_API_BASE",
+      "api_key_env": "QWEN_API_KEY",
+      "default_api_base": "https://gptproto.com/v1",
+      "authorization_scheme": "Bearer"
+    }
+  },
+  "default": {
+    "provider": "gptproto",
+    "model": "gemini-3-pro-preview"
+  },
+  "nodes": {
+    "SHISHEN": {
+      "provider": "qwen",
+      "model": "qwen3-max"
+    },
+    "GEJU_ROUTER": {
+      "provider": "qwen",
+      "model": "qwen3-max"
+    },
+    "GEJU_ANALYSIS": {
+      "provider": "qwen",
+      "model": "qwen3-max"
+    },
+    "GEJU_LEVEL": {
+      "provider": "qwen",
+      "model": "qwen3-max"
+    }
+  }
+}
