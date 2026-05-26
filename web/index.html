@@ -1592,7 +1592,7 @@
         }
       }
 
-      async function loadUsers() {
+      async function loadUsers(preferredUserId = null) {
         const data = await fetchJson("/api/users");
         userSelect.innerHTML = "";
         data.users.forEach((uid) => {
@@ -1602,7 +1602,7 @@
           userSelect.appendChild(opt);
         });
         if (data.users.length) {
-          userSelect.value = data.users[0];
+          userSelect.value = preferredUserId && data.users.includes(preferredUserId) ? preferredUserId : data.users[0];
         }
         await loadSessions();
         await loadProfileCache();
@@ -1807,52 +1807,151 @@
         await loadHistory();
       }
 
-      async function askStream() {
-        const userId = userSelect.value;
-        const question = document.getElementById("question").value.trim();
-        const historyValue = Number(document.getElementById("historyN").value || 5);
-        const historyN = Number.isFinite(historyValue) ? Math.max(0, Math.floor(historyValue)) : 5;
-        if (!userId || !question) return;
+      function inferProfileFromQuestion(text) {
+        const normalized = (text || "").replace(/\s+/g, "");
+        const dateMatch = normalized.match(/(\d{4})年(\d{1,2})月(\d{1,2})[日号]?/);
+        if (!dateMatch) return null;
 
-        document.getElementById("question").value = "";
-        document.getElementById("sendBtn").disabled = true;
-        appendMessage("user", question);
+        const timeMatch = normalized.match(/(\d{1,2})(?:点|时)(?:(\d{1,2})分?)?/);
+        const gender = /女/.test(normalized) && !/男女/.test(normalized) ? "female" : "male";
+        const birth = {
+          year: Number(dateMatch[1]),
+          month: Number(dateMatch[2]),
+          day: Number(dateMatch[3]),
+          hour: timeMatch ? Number(timeMatch[1]) : 0,
+          minute: timeMatch && timeMatch[2] ? Number(timeMatch[2]) : 0,
+          second: 0,
+        };
 
-        const resp = await fetch("/api/ask_stream", {
+        if (
+          birth.year < 1900 ||
+          birth.month < 1 ||
+          birth.month > 12 ||
+          birth.day < 1 ||
+          birth.day > 31 ||
+          birth.hour < 0 ||
+          birth.hour > 23 ||
+          birth.minute < 0 ||
+          birth.minute > 59
+        ) {
+          return null;
+        }
+        return { birth, gender };
+      }
+
+      function buildAutoUserId(profile) {
+        const pad2 = (value) => String(value).padStart(2, "0");
+        const birth = profile.birth;
+        return [
+          "auto",
+          birth.year,
+          pad2(birth.month),
+          pad2(birth.day),
+          pad2(birth.hour),
+          pad2(birth.minute),
+          profile.gender,
+          Date.now().toString(36),
+        ].join("_");
+      }
+
+      async function ensureUserForQuestion(question) {
+        if (userSelect.value) return userSelect.value;
+
+        const inferred = inferProfileFromQuestion(question);
+        if (!inferred) {
+          appendMessage("assistant", "请先在设置里创建用户档案，或在问题中写明出生年月日、时辰和性别。");
+          openSettingsModal();
+          return "";
+        }
+
+        const userId = buildAutoUserId(inferred);
+        await fetchJson("/api/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             user_id: userId,
-            question,
-            session_id: currentSessionId,
-            history_n: historyN
+            birth: inferred.birth,
+            gender: inferred.gender,
+            birth_time_unknown: false,
+            prompt_config: "lingyun_cat",
+            llm_model: modelSelect.value || defaultModel,
+            node_model_overrides: nodeModelOverrides,
           }),
         });
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop();
-          parts.forEach((chunk) => {
-            const lines = chunk.split("\n");
-            lines.forEach((line) => {
-              if (line.startsWith("data:")) {
-                const payload = line.replace("data:", "").trim();
-                if (!payload) return;
-                try {
-                  handleEvent(JSON.parse(payload));
-                } catch (err) {
-                  logEvent("parse error: " + err.message);
-                }
-              }
-            });
-          });
+        await loadUsers(userId);
+        logEvent("auto-created user: " + userId);
+        return userId;
+      }
+
+      async function askStream() {
+        const question = document.getElementById("question").value.trim();
+        const historyValue = Number(document.getElementById("historyN").value || 5);
+        const historyN = Number.isFinite(historyValue) ? Math.max(0, Math.floor(historyValue)) : 5;
+        if (!question) return;
+
+        let userId = "";
+        try {
+          userId = await ensureUserForQuestion(question);
+        } catch (err) {
+          appendMessage("assistant", "创建用户档案失败：" + err.message);
+          logEvent("create profile error: " + err.message);
+          return;
         }
-        document.getElementById("sendBtn").disabled = false;
+        if (!userId) return;
+
+        document.getElementById("question").value = "";
+        const sendBtn = document.getElementById("sendBtn");
+        sendBtn.disabled = true;
+        appendMessage("user", question);
+
+        try {
+          const resp = await fetch("/api/ask_stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: userId,
+              question,
+              session_id: currentSessionId,
+              history_n: historyN
+            }),
+          });
+          if (!resp.ok) {
+            throw new Error(await resp.text());
+          }
+          if (!resp.body) {
+            throw new Error("stream response body missing");
+          }
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            parts.forEach((chunk) => {
+              const lines = chunk.split("\n");
+              lines.forEach((line) => {
+                if (line.startsWith("data:")) {
+                  const payload = line.replace("data:", "").trim();
+                  if (!payload) return;
+                  try {
+                    handleEvent(JSON.parse(payload));
+                  } catch (err) {
+                    logEvent("parse error: " + err.message);
+                  }
+                }
+              });
+            });
+          }
+        } catch (err) {
+          appendMessage("assistant", "发送失败：" + err.message);
+          logEvent("send error: " + err.message);
+        } finally {
+          sendBtn.disabled = false;
+        }
       }
 
       // Settings modal functions
