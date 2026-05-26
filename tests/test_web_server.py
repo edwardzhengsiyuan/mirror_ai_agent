@@ -25,6 +25,39 @@ def _fake_turn(profile, question, now=None, event_sink=None, stream=False, histo
     }
 
 
+def _fake_hepan_turn(
+    question,
+    person_a,
+    person_b,
+    now=None,
+    event_sink=None,
+    stream=False,
+    history_rounds=None,
+    model=None,
+):
+    if event_sink:
+        event_sink({
+            "type": "tool_invocation",
+            "tool": "HEPAN",
+            "output": {"type": "hepan"},
+            "duration_ms": 1,
+        })
+        event_sink({"type": "response", "text": "hepan ok", "duration_ms": 1})
+    return {
+        "method": "hepan",
+        "response": "hepan ok",
+        "hepan": {
+            "compatibility": {
+                "score": {"overall": 66.0},
+                "shengxiao_hehun": {},
+                "wuxing_vector": {},
+                "a_wang_b": [],
+                "b_wang_a": [],
+            }
+        },
+    }
+
+
 def test_web_api_flow(tmp_path) -> None:
     def fake_run_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
         if event_sink:
@@ -92,7 +125,7 @@ def test_web_api_flow(tmp_path) -> None:
 
 def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", "secret")
-    app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
+    app = create_app(run_turn_func=_fake_turn, run_hepan_turn_func=_fake_hepan_turn, storage_root=str(tmp_path))
     client = app.test_client()
 
     resp = client.get("/health")
@@ -104,6 +137,7 @@ def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
     spec = resp.get_json()
     assert "/v1/ask" in spec["paths"]
     assert "/v1/ask_stream" in spec["paths"]
+    assert "/v1/hepan/ask" in spec["paths"]
 
     resp = client.get("/docs")
     assert resp.status_code == 200
@@ -167,3 +201,32 @@ def test_v1_stream_filters_internal_events(tmp_path, monkeypatch) -> None:
     assert "answer_delta" in body
     assert "node_status" in body
     assert "system_prompt" not in body
+
+
+def test_v1_hepan_ask_returns_public_shape(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "secret")
+    app = create_app(run_turn_func=_fake_turn, run_hepan_turn_func=_fake_hepan_turn, storage_root=str(tmp_path))
+    client = app.test_client()
+
+    payload = {
+        "user_id": "u_demo",
+        "session_id": "hepan_session",
+        "question": "我们适合长期发展吗？",
+        "person_a": {
+            "name": "A",
+            "gender": "female",
+            "birth": {"year": 1990, "month": 1, "day": 1, "hour": 8},
+        },
+        "person_b": {
+            "name": "B",
+            "gender": "male",
+            "birth": {"year": 1991, "month": 2, "day": 2, "hour": 9},
+        },
+    }
+    resp = client.post("/v1/hepan/ask", headers={"Authorization": "Bearer secret"}, json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["method"] == "hepan"
+    assert data["answer"] == "hepan ok"
+    assert data["compatibility"]["score"]["overall"] == 66.0
+    assert data["session_id"] == "hepan_session.jsonl"

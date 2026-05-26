@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Optional
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from agent.models import AVAILABLE_MODELS, DEFAULT_MODEL
+from agent.orchestrator_hepan import run_hepan_turn
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
@@ -38,6 +39,7 @@ def load_env_file(path: str) -> None:
 
 def create_app(
     run_turn_func: Callable = run_turn,
+    run_hepan_turn_func: Callable = run_hepan_turn,
     storage_root: Optional[str] = None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
@@ -104,6 +106,20 @@ def create_app(
             if value < min_value or value > max_value:
                 return f"birth.{field} out of range"
 
+        return None
+
+    def validate_person_payload(person: object, field: str) -> Optional[str]:
+        if not isinstance(person, dict):
+            return f"{field} required"
+        birth = person.get("birth")
+        if not isinstance(birth, dict):
+            return f"{field}.birth required"
+        birth_error = validate_birth(birth)
+        if birth_error:
+            return f"{field}.{birth_error}"
+        gender = person.get("gender", "male")
+        if gender not in ("male", "female"):
+            return f"{field}.gender invalid"
         return None
 
     def validate_safe_id(value: str, field: str) -> Optional[str]:
@@ -235,6 +251,22 @@ def create_app(
                 raise ValueError(id_error)
             return os.path.join(conversation_dir(user_id), session_id)
         return new_session_path(user_id)
+
+    def optional_conversation_context(data: Dict[str, Any]):
+        user_id = (data.get("user_id") or "demo_guest").strip()
+        id_error = validate_safe_id(user_id, "user_id")
+        if id_error:
+            return None, api_error(400, "invalid_user_id", id_error)
+        try:
+            convo_path = conversation_path_for_payload(user_id, data.get("session_id"))
+        except ValueError as exc:
+            return None, api_error(400, "invalid_session_id", str(exc))
+        history_n = normalize_history_n(data.get("history_n"))
+        return {
+            "user_id": user_id,
+            "convo_path": convo_path,
+            "history_rounds": load_recent_rounds(convo_path, history_n),
+        }, None
 
     def run_v1_request(data: Dict[str, Any], *, stream: bool = False):
         question = (data.get("question") or "").strip()
@@ -394,6 +426,40 @@ def create_app(
                             "skipped_nodes": {"type": "array", "items": {"type": "string"}},
                         },
                     },
+                    "Person": {
+                        "type": "object",
+                        "required": ["birth"],
+                        "properties": {
+                            "name": {"type": "string", "example": "A"},
+                            "gender": {"type": "string", "enum": ["male", "female"], "example": "female"},
+                            "birth": {"$ref": "#/components/schemas/Birth"},
+                            "birth_time_unknown": {"type": "boolean", "default": False},
+                        },
+                    },
+                    "HepanRequest": {
+                        "type": "object",
+                        "required": ["question", "person_a", "person_b"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_demo"},
+                            "session_id": {"type": "string", "example": "hepan_demo"},
+                            "history_n": {"type": "integer", "default": 5},
+                            "question": {"type": "string", "example": "我们适合长期发展吗？"},
+                            "person_a": {"$ref": "#/components/schemas/Person"},
+                            "person_b": {"$ref": "#/components/schemas/Person"},
+                            "llm_model": {"type": "string", "example": DEFAULT_MODEL},
+                        },
+                    },
+                    "HepanResponse": {
+                        "type": "object",
+                        "properties": {
+                            "request_id": {"type": "string"},
+                            "session_id": {"type": "string"},
+                            "user_id": {"type": "string"},
+                            "method": {"type": "string", "example": "hepan"},
+                            "answer": {"type": "string"},
+                            "compatibility": {"type": "object"},
+                        },
+                    },
                     "ProfileRequest": {
                         "allOf": [
                             {"$ref": "#/components/schemas/AskRequest"},
@@ -479,6 +545,21 @@ def create_app(
                                 "description": "SSE stream. Events include session, node_status, plan, tool_invocation, answer_delta, answer, and error.",
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}},
                             },
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/hepan/ask": {
+                    "post": {
+                        "summary": "Run a synchronous BaZi HePan compatibility turn",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "HePan answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanResponse"}}}},
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
                         },
@@ -659,6 +740,69 @@ def create_app(
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         return Response(gen(), mimetype="text/event-stream")
+
+    @app.route("/v1/hepan/ask", methods=["POST"])
+    def v1_hepan_ask() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        question = (data.get("question") or "").strip()
+        if not question:
+            return api_error(400, "question_required", "question required")
+        person_a_error = validate_person_payload(data.get("person_a"), "person_a")
+        if person_a_error:
+            return api_error(400, "invalid_person_a", person_a_error)
+        person_b_error = validate_person_payload(data.get("person_b"), "person_b")
+        if person_b_error:
+            return api_error(400, "invalid_person_b", person_b_error)
+
+        context, error_response = optional_conversation_context(data)
+        if error_response:
+            return error_response
+        assert context is not None
+
+        now = dt.datetime.now()
+        request_id = f"req_{uuid.uuid4().hex[:16]}"
+        convo_path = context["convo_path"]
+        append_event(
+            convo_path,
+            {
+                "ts": now.isoformat(),
+                "type": "user_message",
+                "text": question,
+                "request_id": request_id,
+                "api_version": "v1",
+                "method": "hepan",
+            },
+        )
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+
+        try:
+            result = run_hepan_turn_func(
+                question,
+                data["person_a"],
+                data["person_b"],
+                now=now,
+                event_sink=sink,
+                history_rounds=context["history_rounds"],
+                model=data.get("llm_model"),
+            )
+        except ValueError as exc:
+            return api_error(400, "invalid_hepan_request", str(exc))
+
+        return jsonify(
+            {
+                "request_id": request_id,
+                "session_id": os.path.basename(convo_path),
+                "user_id": context["user_id"],
+                "method": "hepan",
+                "answer": result["response"],
+                "compatibility": result["hepan"]["compatibility"],
+            }
+        )
 
     @app.route("/api/users", methods=["GET"])
     def list_users() -> Response:
