@@ -34,8 +34,8 @@ For real LLM calls, edit `.env` and set `LLM_MODE` empty or `auto`, plus provide
 
 Per-node model routing is managed in `config/llm_routes.json`:
 
-- Default reports and final responses use `gptproto` + `gemini-3.1-pro-preview`.
-- `SHISHEN`, `GEJU_ROUTER`, `GEJU_ANALYSIS`, and `GEJU_LEVEL` use `qwen` + `qwen3-max`.
+- Default for unrouted nodes (`PLANNER`, `OVERALL`, `WUXING_PREFS`, `CAREER`, `RELATIONSHIP`, `HEALTH`, `GUIREN`, `LIUQIN`, `XINGGE`, `OTHER`, `RESPONSE`, `CEZI_RESPONSE`, `HEPAN_RESPONSE`) is `gptproto` + `gemini-3.1-pro-preview`.
+- `SHISHEN`, `GEJU_ROUTER`, `GEJU_ANALYSIS`, `GEJU_LEVEL`, `NAJIA_RESPONSE` are pinned to `qwen` + `qwen3-max`.
 - Exposed model choices currently come only from the route config: `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, and `qwen3-max`.
 - Requests can pass `node_model_overrides`, and profile settings can persist those overrides. Priority is node override, then route node default, then global `llm_model`, then route default.
 
@@ -51,15 +51,29 @@ The Qwen route uses DashScope's OpenAI-compatible endpoint by default: `https://
 
 ## Remote Docker Deployment
 
-On the server:
+### Pre-flight checklist
+
+- Server with Docker Engine + Docker Compose v2 installed (`docker compose version` works).
+- DNS A/AAAA record for the public domain pointing at the server's public IP (only if you want HTTPS).
+- Inbound TCP `80` and `443` allowed in the host firewall and the cloud security group.
+- Provider keys ready: `GPTPROTO_API_KEY` and `QWEN_API_KEY`.
+- A long, random `DEMO_API_TOKEN` for `/v1/*` Bearer auth (rotate periodically).
+
+### Deploy steps
 
 ```bash
 cp .env.example .env
-# edit .env: set DEMO_API_TOKEN, GPTPROTO_API_KEY, QWEN_API_KEY
+# edit .env: set DEMO_API_TOKEN to a strong token,
+# fill GPTPROTO_API_KEY + QWEN_API_KEY, and set LLM_MODE empty (not "stub").
 docker compose up -d --build
+docker compose logs -f bazi-agent-api   # watch startup
 ```
 
-If deploying behind a real domain, update `Caddyfile` from `:80` to your domain, for example:
+The compose file ships two services: `bazi-agent-api` (Flask + waitress on internal port `8000`) and `bazi-agent-caddy` (Caddy fronting `:80`/`:443`). Storage is persisted via the host bind-mount `./storage:/app/storage`, so cache and conversation logs survive container restarts.
+
+### HTTPS / custom domain
+
+By default `Caddyfile` listens on plain `:80` for quick verification. Once DNS is ready, replace the `:80` block with your domain and Caddy will obtain Let's Encrypt certificates automatically:
 
 ```caddyfile
 demo.example.com {
@@ -74,7 +88,32 @@ demo.example.com {
 }
 ```
 
-Caddy will then manage HTTPS certificates automatically if the domain resolves to the server and ports `80` and `443` are open.
+Reload Caddy after editing: `docker compose restart caddy`.
+
+### Post-deploy verification
+
+```bash
+curl http://demo.example.com/health
+# {"auth_configured":true,"service":"bazi-agent-api","status":"ok"}
+
+curl -X POST http://demo.example.com/v1/users \
+  -H "Authorization: Bearer $DEMO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u_demo","birth":{"year":1990,"month":1,"day":1,"hour":8,"minute":0},"gender":"male"}'
+
+curl -X POST http://demo.example.com/v1/ask \
+  -H "Authorization: Bearer $DEMO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u_demo","question":"今年事业怎么样？","session_id":"verify"}'
+```
+
+If any of those return non-200, inspect `docker compose logs bazi-agent-api` and `docker compose logs caddy`. The full smoke suite (BaZi stream + HePan + CeZi + Najia) is also runnable from the repo with `python scripts/smoke_e2e.py --port 80 --token $DEMO_API_TOKEN`.
+
+### Operations notes
+
+- `auth_configured: false` from `/health` means the container did not pick up `DEMO_API_TOKEN`; check `.env` and that `env_file: .env` is being loaded by compose.
+- The waitress entrypoint is `waitress-serve --call web_server:create_app` (Python WSGI factory). To switch to gunicorn, swap the Dockerfile `CMD` to `gunicorn -w 2 -k gthread -t 600 -b 0.0.0.0:8000 'wsgi:app'` and add `gunicorn` to `requirements.txt`.
+- LLM token usage and prompt traces live in `storage/users/<user>/conversations/*.jsonl` — sensitive, do not expose publicly.
 
 ## Authentication
 

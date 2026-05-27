@@ -1,6 +1,7 @@
 services:
   bazi-agent-api:
     build: .
+    container_name: bazi-agent-api
     env_file:
       - .env
     volumes:
@@ -11,6 +12,7 @@ services:
 
   caddy:
     image: caddy:2
+    container_name: bazi-agent-caddy
     depends_on:
       - bazi-agent-api
     ports:

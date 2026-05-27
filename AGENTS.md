@@ -80,16 +80,16 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
 | `LLM_BYPASS_CACHE` | false | Skip all cache lookups and re-run nodes |
 
-**Available Models** (canonical list in `config/llm_routes.json`):
+**Available Models** (canonical list lives in `config/llm_routes.json`):
 - `gemini-3.1-pro-preview` (default, gptproto provider)
 - `gemini-3-flash-preview` (gptproto provider)
 - `qwen3-max` (qwen provider, used by GEJU/SHISHEN node overrides)
 
-`agent/models.py` is a compatibility shim around `agent/llm_config.py`, which reads `config/llm_routes.json` at runtime. Per-node routing/overrides live under the `nodes` block of that file.
+`agent/models.py` is a backwards-compatibility shim — the live source of truth is `agent/llm_config.py` reading `config/llm_routes.json`. Per-node routing/overrides are configured under `nodes` in the same JSON file.
 
-**Note**: `LLM_MODEL_REASONING` and `LLM_MODEL_FAST` are deprecated. Use `LLM_MODEL` (global default) or the per-profile `llm_model` / `node_model_overrides` fields instead. Node-level overrides take priority over the profile global, which takes priority over `LLM_MODEL`.
+**Note**: `LLM_MODEL_REASONING` and `LLM_MODEL_FAST` are deprecated. Use `LLM_MODEL` (global default) or the per-profile `llm_model` / `node_model_overrides` fields instead. Node-level overrides win over the global default.
 
-**Cache behavior**: Cache lookup is model-agnostic by default - changing models will still use cached outputs if prompt_config matches. Use `LLM_BYPASS_CACHE=1` or `profile.bypass_cache=true` to force re-run all nodes. See `agent/CLAUDE.md` §4 for details.
+**Cache behavior**: Cache lookup is model-agnostic by default - changing models will still use cached outputs if prompt_config matches. Use `LLM_BYPASS_CACHE=1` or `profile.bypass_cache=true` to force re-run all nodes. See `agent/AGENTS.md` §4 for details.
 
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
@@ -179,12 +179,12 @@ Chinese terms preserved in code and documentation:
 
 | Documentation | Description |
 |---------------|-------------|
-| `CLAUDE.md` | Project entry (this file) |
-| `agent/CLAUDE.md` | Orchestration core (flow, DAG, caching, debugging, events) |
-| `agent/tools/CLAUDE.md` | Tool interface API |
-| `agent/prompts/CLAUDE.md` | Prompt template management |
-| `agent/storage/CLAUDE.md` | Storage API |
-| `bazi/CLAUDE.md` | Engine API reference |
-| `web/CLAUDE.md` | Web UI documentation |
-| `storage/CLAUDE.md` | Storage directory structure |
-| `tests/CLAUDE.md` | Test documentation |
+| `AGENTS.md` | Project entry (this file) |
+| `agent/AGENTS.md` | Orchestration core (flow, DAG, caching, debugging, events) |
+| `agent/tools/AGENTS.md` | Tool interface API |
+| `agent/prompts/AGENTS.md` | Prompt template management |
+| `agent/storage/AGENTS.md` | Storage API |
+| `bazi/AGENTS.md` | Engine API reference |
+| `web/AGENTS.md` | Web UI documentation |
+| `storage/AGENTS.md` | Storage directory structure |
+| `tests/AGENTS.md` | Test documentation |
