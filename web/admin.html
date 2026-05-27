@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Console · BaZi Agent</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --card-bg: #ffffff;
+  --border: #e2e3e5;
+  --muted: #6c6f73;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --danger: #c43d3d;
+  --warn: #b45309;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card-bg: #1f2024;
+    --border: #2c2d31;
+    --muted: #9aa0a6;
+    --accent: #60a5fa;
+    --accent-hover: #93c5fd;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: inherit;
+  line-height: 1.5;
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 24px 18px 48px; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+header h1 { margin: 0; font-size: 22px; }
+header .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(196,61,61,0.12); color: var(--danger); }
+.sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.card h2 { margin: 0 0 12px; font-size: 16px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row > input, .row > select { flex: 1; min-width: 160px; }
+input, button, select {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: inherit;
+}
+button {
+  background: var(--accent); color: white; border-color: var(--accent);
+  cursor: pointer; padding: 8px 14px;
+}
+button:hover { background: var(--accent-hover); }
+button.ghost { background: transparent; color: inherit; border-color: var(--border); }
+button.danger { background: var(--danger); border-color: var(--danger); }
+button.warn { background: var(--warn); border-color: var(--warn); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+tr.disabled td { opacity: 0.55; }
+.kind-charge { color: #b45309; }
+.kind-refund { color: #15803d; }
+.kind-topup { color: #2563eb; }
+.muted { color: var(--muted); }
+.kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: rgba(127,127,127,0.12); padding: 1px 5px; border-radius: 4px; }
+.status-msg { font-size: 13px; padding: 8px 10px; border-radius: 6px; margin-top: 10px; }
+.status-ok { background: rgba(34,197,94,0.12); color: #15803d; }
+.status-err { background: rgba(196,61,61,0.12); color: var(--danger); }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Admin Console</h1>
+    <span class="pill">DEMO_API_TOKEN required</span>
+  </header>
+  <div class="sub">所有动作均使用服务器配置的 <span class="kbd">DEMO_API_TOKEN</span>。Token 仅保存在浏览器 <span class="kbd">localStorage</span>，不会发往第三方。</div>
+
+  <div class="card">
+    <h2>Admin Token</h2>
+    <div class="row">
+      <input id="adminToken" type="password" placeholder="粘贴 DEMO_API_TOKEN"/>
+      <button id="btnSaveTok">保存</button>
+      <button id="btnReveal" class="ghost">显示</button>
+      <button id="btnClearTok" class="ghost">清除</button>
+    </div>
+    <div id="tokStatus" class="status-msg muted" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>新开账户</h2>
+    <div class="row">
+      <input id="newUserId" placeholder="user_id (必填，例如 u_alice)"/>
+      <input id="newDisplayName" placeholder="display_name (可选)"/>
+      <input id="newCredits" type="number" placeholder="initial_credits (默认 0)"/>
+      <input id="newDailyLimit" type="number" placeholder="daily_credits_limit (可选)"/>
+      <button id="btnCreate">开户并签发 key</button>
+    </div>
+    <div id="createResult" class="status-msg" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>充值</h2>
+    <div class="row">
+      <input id="topupUserId" placeholder="user_id"/>
+      <input id="topupAmount" type="number" placeholder="amount_credits"/>
+      <input id="topupNote" placeholder="note (可选)"/>
+      <input id="topupReqId" placeholder="request_id (可选, 幂等用)"/>
+      <button id="btnTopup">充值</button>
+    </div>
+    <div id="topupResult" class="status-msg" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>用户列表</h2>
+    <div class="toolbar">
+      <button id="btnRefreshUsers" class="ghost">刷新</button>
+      <span class="muted" style="font-size:12px;align-self:center">单击行可填入"充值/查 ledger"。</span>
+    </div>
+    <table id="usersTable" style="margin-top: 10px;">
+      <thead>
+        <tr><th>user_id</th><th>display_name</th><th>balance</th><th>状态</th><th>daily_limit</th><th>created</th><th></th></tr>
+      </thead>
+      <tbody><tr><td colspan="7" class="muted">未加载</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>定价</h2>
+    <div class="toolbar">
+      <button id="btnRefreshPricing" class="ghost">刷新</button>
+    </div>
+    <pre id="pricingJson" class="kbd" style="display:block;padding:10px;margin-top:10px;background:rgba(127,127,127,0.06);overflow:auto;max-height:240px;">未加载</pre>
+  </div>
+
+  <div class="card">
+    <h2>账本 (ledger)</h2>
+    <div class="row">
+      <input id="ledgerUserId" placeholder="user_id (留空 = 全局)"/>
+      <input id="ledgerLimit" type="number" placeholder="limit (默认 100)"/>
+      <button id="btnLedger" class="ghost">查询</button>
+    </div>
+    <table id="ledgerTable" style="margin-top: 10px;">
+      <thead>
+        <tr><th>时间</th><th>user_id</th><th>kind</th><th>endpoint</th><th>amount</th><th>balance_after</th><th>status</th><th>request_id</th></tr>
+      </thead>
+      <tbody><tr><td colspan="8" class="muted">未加载</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = "bazi_admin_token";
+const $ = (id) => document.getElementById(id);
+
+function getTok() { return localStorage.getItem(STORAGE_KEY) || ""; }
+function setTok(t) {
+  if (t) localStorage.setItem(STORAGE_KEY, t);
+  else localStorage.removeItem(STORAGE_KEY);
+}
+
+function showMsg(elId, text, ok = true) {
+  const el = $(elId);
+  el.style.display = "block";
+  el.textContent = text;
+  el.className = "status-msg " + (ok ? "status-ok" : "status-err");
+}
+
+function showHtmlMsg(elId, html, ok = true) {
+  const el = $(elId);
+  el.style.display = "block";
+  el.innerHTML = html;
+  el.className = "status-msg " + (ok ? "status-ok" : "status-err");
+}
+
+async function api(path, opts = {}) {
+  const tok = getTok();
+  if (!tok) throw new Error("请先填写并保存 admin token");
+  opts.headers = Object.assign({}, opts.headers || {}, {
+    "Authorization": "Bearer " + tok,
+    "Content-Type": "application/json"
+  });
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { body = text; }
+  if (!r.ok) {
+    const msg = (body && body.error && body.error.message) || ("HTTP " + r.status);
+    const err = new Error(msg);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+async function refreshUsers() {
+  try {
+    const d = await api("/admin/users?limit=200");
+    const tbody = $("usersTable").querySelector("tbody");
+    if (!d.users || d.users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">暂无用户</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.users.map(u => `
+      <tr class="${u.status === 'disabled' ? 'disabled' : ''}" data-user="${u.user_id}">
+        <td><span class="kbd">${u.user_id}</span></td>
+        <td>${u.display_name || "<i class='muted'>(无)</i>"}</td>
+        <td>${u.balance_credits}</td>
+        <td>${u.status}</td>
+        <td>${u.daily_credits_limit ?? "<i class='muted'>无限制</i>"}</td>
+        <td>${(u.created_at || "").slice(0,19).replace("T"," ")}</td>
+        <td>
+          <button class="ghost" data-act="ledger" data-user="${u.user_id}">查 ledger</button>
+          ${u.status === 'active'
+            ? `<button class="warn" data-act="disable" data-user="${u.user_id}">停用</button>`
+            : `<button data-act="activate" data-user="${u.user_id}">启用</button>`}
+        </td>
+      </tr>
+    `).join("");
+    tbody.querySelectorAll("tr[data-user]").forEach(tr => {
+      tr.addEventListener("click", (e) => {
+        if (e.target && e.target.tagName === "BUTTON") return;
+        const uid = tr.dataset.user;
+        $("topupUserId").value = uid;
+        $("ledgerUserId").value = uid;
+      });
+    });
+    tbody.querySelectorAll("button[data-act]").forEach(btn => {
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const act = btn.dataset.act;
+        const uid = btn.dataset.user;
+        if (act === "ledger") {
+          $("ledgerUserId").value = uid;
+          loadLedger();
+        } else if (act === "disable" || act === "activate") {
+          const status = act === "disable" ? "disabled" : "active";
+          if (act === "disable" && !confirm(`停用 ${uid}? 该用户的 API key 将立即失效。`)) return;
+          try {
+            await api(`/admin/users/${encodeURIComponent(uid)}/status`, {
+              method: "POST",
+              body: JSON.stringify({ status })
+            });
+            refreshUsers();
+          } catch (err) { alert(err.message); }
+        }
+      });
+    });
+  } catch (e) {
+    showMsg("createResult", e.message, false);
+  }
+}
+
+async function refreshPricing() {
+  try {
+    const d = await api("/admin/pricing");
+    $("pricingJson").textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    $("pricingJson").textContent = "Error: " + e.message;
+  }
+}
+
+async function createUser() {
+  const user_id = $("newUserId").value.trim();
+  if (!user_id) { showMsg("createResult", "user_id 必填", false); return; }
+  const payload = { user_id };
+  const dn = $("newDisplayName").value.trim();
+  if (dn) payload.display_name = dn;
+  const ic = parseInt($("newCredits").value || "0", 10);
+  if (ic > 0) payload.initial_credits = ic;
+  const dl = parseInt($("newDailyLimit").value || "0", 10);
+  if (dl > 0) payload.daily_credits_limit = dl;
+  try {
+    const d = await api("/admin/users", { method: "POST", body: JSON.stringify(payload) });
+    const key = d.api_key || "(未签发)";
+    showHtmlMsg(
+      "createResult",
+      `已创建 <span class="kbd">${d.user.user_id}</span> 余额 ${d.user.balance_credits}<br>API key: <span class="kbd">${key}</span><br><small class="muted">立即保存——刷新页面后将无法再看到。</small>`,
+      true
+    );
+    refreshUsers();
+  } catch (e) {
+    showMsg("createResult", e.message, false);
+  }
+}
+
+async function topup() {
+  const user_id = $("topupUserId").value.trim();
+  const amount = parseInt($("topupAmount").value || "0", 10);
+  if (!user_id || amount <= 0) { showMsg("topupResult", "user_id 和 amount_credits 都必填且 amount > 0", false); return; }
+  const payload = { user_id, amount_credits: amount };
+  const note = $("topupNote").value.trim();
+  if (note) payload.note = note;
+  const reqId = $("topupReqId").value.trim();
+  if (reqId) payload.request_id = reqId;
+  try {
+    const d = await api("/admin/topup", { method: "POST", body: JSON.stringify(payload) });
+    showMsg(
+      "topupResult",
+      `${d.duplicate ? "(重复 request_id) " : ""}user=${d.user_id} 充值 ${d.amount_credits}, 当前余额 ${d.balance_credits}`,
+      true
+    );
+    refreshUsers();
+  } catch (e) {
+    showMsg("topupResult", e.message, false);
+  }
+}
+
+async function loadLedger() {
+  const user_id = $("ledgerUserId").value.trim();
+  const limit = parseInt($("ledgerLimit").value || "100", 10);
+  const qs = new URLSearchParams();
+  if (user_id) qs.set("user_id", user_id);
+  if (limit) qs.set("limit", limit);
+  try {
+    const d = await api("/admin/ledger?" + qs.toString());
+    const tbody = $("ledgerTable").querySelector("tbody");
+    if (!d.rows || d.rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="muted">无记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.rows.map(r => `
+      <tr>
+        <td>${(r.ts || "").slice(0,19).replace("T"," ")}</td>
+        <td><span class="kbd">${r.user_id}</span></td>
+        <td class="kind-${r.kind}">${r.kind}</td>
+        <td>${r.endpoint || "-"}</td>
+        <td>${r.amount_credits}</td>
+        <td>${r.balance_after}</td>
+        <td>${r.status}</td>
+        <td><span class="kbd" style="font-size:11px;">${(r.request_id || "").slice(0,30)}</span></td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    showMsg("topupResult", e.message, false);
+  }
+}
+
+$("adminToken").value = getTok();
+$("btnSaveTok").addEventListener("click", () => {
+  const v = $("adminToken").value.trim();
+  setTok(v);
+  showMsg("tokStatus", v ? "已保存到 localStorage" : "已清除", !!v);
+  if (v) { refreshUsers(); refreshPricing(); }
+});
+$("btnReveal").addEventListener("click", () => {
+  const inp = $("adminToken");
+  inp.type = inp.type === "password" ? "text" : "password";
+});
+$("btnClearTok").addEventListener("click", () => {
+  setTok("");
+  $("adminToken").value = "";
+  showMsg("tokStatus", "已清除", false);
+});
+$("btnCreate").addEventListener("click", createUser);
+$("btnTopup").addEventListener("click", topup);
+$("btnRefreshUsers").addEventListener("click", refreshUsers);
+$("btnRefreshPricing").addEventListener("click", refreshPricing);
+$("btnLedger").addEventListener("click", loadLedger);
+
+if (getTok()) { refreshUsers(); refreshPricing(); }
+</script>
+</body>
+</html>

@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .errors import (
+    DailyLimitExceededError,
     DuplicateRequestError,
     InflightLimitError,
     InsufficientFundsError,
@@ -136,7 +137,8 @@ class BillingService:
 
         with self.store.transaction() as conn:
             user_row = conn.execute(
-                "SELECT balance_credits, status FROM users WHERE user_id = ?",
+                "SELECT balance_credits, status, daily_credits_limit FROM users"
+                " WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
             if user_row is None:
@@ -157,6 +159,28 @@ class BillingService:
             ).fetchone()["n"]
             if inflight_n >= self.inflight_limit:
                 raise InflightLimitError(user_id, self.inflight_limit, int(inflight_n))
+
+            daily_limit = user_row["daily_credits_limit"]
+            if amount_credits > 0 and daily_limit is not None and int(daily_limit) > 0:
+                today_floor = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT00:00:00.000000Z")
+                charged_today = conn.execute(
+                    "SELECT COALESCE(SUM(amount_credits), 0) AS s FROM ledger"
+                    " WHERE user_id = ? AND kind = 'charge' AND ts >= ?",
+                    (user_id, today_floor),
+                ).fetchone()["s"]
+                refunded_today = conn.execute(
+                    "SELECT COALESCE(SUM(amount_credits), 0) AS s FROM ledger"
+                    " WHERE user_id = ? AND kind = 'refund' AND ts >= ?",
+                    (user_id, today_floor),
+                ).fetchone()["s"]
+                used_today = int(charged_today) - int(refunded_today)
+                if used_today + int(amount_credits) > int(daily_limit):
+                    raise DailyLimitExceededError(
+                        user_id,
+                        limit=int(daily_limit),
+                        used=used_today,
+                        cost=int(amount_credits),
+                    )
 
             if amount_credits > 0:
                 cur = conn.execute(
@@ -203,6 +227,17 @@ class BillingService:
             balance_after=int(balance_after),
             status="pending",
         )
+
+    def update_charge_meta(self, request_id: str, **patch: Any) -> bool:
+        """Merge ``patch`` into the charge row's ``meta_json``.
+
+        Used by the HTTP layer to attach post-hoc LLM usage / latency stats
+        to a successful charge before settlement. No-op (returns False) if
+        the request_id has no matching charge row.
+        """
+        if not patch:
+            return False
+        return self.store.update_ledger_meta(request_id, patch)
 
     def settle(self, request_id: str) -> Optional[ChargeReceipt]:
         """Mark a pending charge as settled. Idempotent."""

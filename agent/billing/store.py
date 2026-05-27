@@ -245,6 +245,41 @@ class BillingStore:
     # ledger writes (low level — service.py builds higher-level flows)
     # ------------------------------------------------------------------
 
+    def update_ledger_meta(self, request_id: str, patch: Dict[str, Any]) -> bool:
+        """Merge ``patch`` into the ledger row's ``meta_json``.
+
+        Only updates rows where ``kind = 'charge'`` (the post-call billing
+        layer attaches LLM usage / latency stats to the charge entry, not to
+        refund or topup rows). Returns True if a row was updated.
+        """
+        if not patch:
+            return False
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT meta_json FROM ledger WHERE request_id = ? AND kind = 'charge'",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            current: Dict[str, Any] = {}
+            if row["meta_json"]:
+                try:
+                    parsed = json.loads(row["meta_json"])
+                    if isinstance(parsed, dict):
+                        current = parsed
+                except (TypeError, ValueError):
+                    current = {}
+            current.update(patch)
+            try:
+                merged = json.dumps(current, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                merged = json.dumps({"_serialize_error": True})
+            conn.execute(
+                "UPDATE ledger SET meta_json = ? WHERE request_id = ? AND kind = 'charge'",
+                (merged, request_id),
+            )
+        return True
+
     def find_ledger(self, request_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(

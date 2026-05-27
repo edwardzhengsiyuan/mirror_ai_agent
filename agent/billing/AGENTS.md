@@ -13,7 +13,7 @@ in-flight limits, and rate limiting.
 | File | Purpose |
 |------|---------|
 | `store.py` | Low-level SQLite CRUD. Owns the schema (`users` / `api_keys` / `ledger` / `inflight` / `rate_events`). |
-| `service.py` | High-level operations: `authenticate`, `charge`, `settle`, `refund`, `topup`, `issue_api_key`, `revoke_api_key`, `get_balance`, `list_usage`. Idempotent on `request_id`. |
+| `service.py` | High-level operations: `authenticate`, `charge`, `settle`, `refund`, `topup`, `issue_api_key`, `revoke_api_key`, `get_balance`, `list_usage`, `update_charge_meta`. Idempotent on `request_id`. |
 | `pricing.py` | Loads `config/pricing.json`. `Pricing.cost(endpoint, variant_params)` returns credits. |
 | `middleware.py` | Flask helpers: `BillingHelpers.authenticate_request`, `try_charge`, `settle`, `refund`, `with_billing` decorator. |
 | `errors.py` | Exception hierarchy. |
@@ -40,9 +40,9 @@ All write paths use `BEGIN IMMEDIATE` to take the writer lock up front.
 
 1. **Authenticate** — `BillingHelpers.authenticate_request(allow_admin_bypass=True)` resolves the bearer token to either `{user_id, key_hash, ...}` or `{is_admin: True}`. Admin requests skip steps 2–5 entirely.
 2. **Validate the payload** — return early on 4xx without touching credits.
-3. **Charge** — `service.charge(user_id, endpoint, cost, request_id)` deducts credits atomically and inserts a `pending` ledger row + an `inflight` slot. Raises `InsufficientFundsError` (→ 402), `InflightLimitError` (→ 429), `DuplicateRequestError` (→ 409).
-4. **Run the work**.
-5. **Settle on success** (`service.settle(request_id)`) or **refund on failure** (`service.refund(request_id, reason)`). Both clear the inflight slot and are idempotent.
+3. **Charge** — `service.charge(user_id, endpoint, cost, request_id)` deducts credits atomically and inserts a `pending` ledger row + an `inflight` slot. Raises `InsufficientFundsError` (→ 402, code `insufficient_funds`), `DailyLimitExceededError` (→ 402, code `daily_limit_exceeded`, computed from today's UTC charges − refunds vs. `users.daily_credits_limit`), `InflightLimitError` (→ 429), `DuplicateRequestError` (→ 409).
+4. **Run the work** through a sink wrapped by `ctx["wrap_sink"]`, which observes `llm_usage` events from `llm_tool` and aggregates `prompt_tokens` / `completion_tokens` / `node_count`.
+5. **Settle on success** (`service.settle(request_id)`) or **refund on failure** (`service.refund(request_id, reason)`). The wrapper persists the aggregated token counts and `duration_ms` into the charge row's `meta_json` via `update_charge_meta` immediately before settle/refund. Both calls clear the inflight slot and are idempotent.
 
 For SSE (`/v1/ask_stream`), step 3 happens before launching the worker so failed-charge errors return as plain HTTP 402; steps 4–5 execute inside the worker's `finally`, and a `billing` SSE event is emitted on settle/refund.
 
@@ -92,6 +92,7 @@ body must equal the auth-bound user_id. Admin requests can pass any user_id
 
 ## Tests
 
-- `tests/test_billing.py` — 27 unit tests on `BillingStore` / `BillingService` / `Pricing` (auth, charge/settle/refund, idempotency, inflight, rate limit, concurrent-charge stress).
-- `tests/test_endpoint_billing.py` — 17 Flask `test_client` tests covering all `/v1/*` and `/admin/*` paths, admin bypass, validation refunds, orchestrator-exception refunds, SSE billing events, and `user_id_mismatch`.
-- `scripts/smoke_billing.py` — production smoke test that hits a running server end-to-end.
+- `tests/test_billing.py` — unit tests on `BillingStore` / `BillingService` / `Pricing` (auth, charge/settle/refund, idempotency, inflight, rate limit, daily-limit, concurrent-charge stress, `update_charge_meta` merge).
+- `tests/test_endpoint_billing.py` — Flask `test_client` tests covering all `/v1/*` and `/admin/*` paths, admin bypass, validation refunds, orchestrator-exception refunds, SSE billing events, daily-limit 402, `user_id_mismatch`, and the `llm_usage` → ledger meta plumbing.
+- `scripts/smoke_billing.py` — production smoke test that hits a running server end-to-end (supports `--allow-stub` for stub-mode validation).
+- `scripts/smoke_sse_billing.py` — smoke for the SSE billing event wire format.

@@ -6,6 +6,7 @@ in :mod:`agent.billing.middleware`.
 
 from .errors import (
     BillingError,
+    DailyLimitExceededError,
     InsufficientFundsError,
     UnknownUserError,
     UnknownApiKeyError,
@@ -23,6 +24,7 @@ __all__ = [
     "ChargeReceipt",
     "Pricing",
     "BillingError",
+    "DailyLimitExceededError",
     "InsufficientFundsError",
     "UnknownUserError",
     "UnknownApiKeyError",

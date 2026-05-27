@@ -8,6 +8,7 @@ import os
 import queue
 import re
 import threading
+import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
@@ -276,7 +277,20 @@ def create_app(
         if err is not None:
             return None, None, err
         is_admin = bool(auth.get("is_admin"))
-        state: Dict[str, Any] = {"receipt": None, "is_admin": is_admin, "auth": auth}
+        state: Dict[str, Any] = {
+            "receipt": None,
+            "is_admin": is_admin,
+            "auth": auth,
+            "endpoint": endpoint_path,
+            "variant_params": list(variant_params or []),
+            "llm_usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "node_count": 0,
+            },
+            "started_perf": None,
+        }
 
         def do_charge() -> Optional[Any]:
             if state["is_admin"] or state["receipt"] is not None:
@@ -291,16 +305,62 @@ def create_app(
             state["receipt"] = receipt
             return None
 
+        def track_event(event: Dict[str, Any]) -> None:
+            if not isinstance(event, dict):
+                return
+            if event.get("type") != "llm_usage":
+                return
+            usage = state["llm_usage"]
+            usage["prompt_tokens"] += int(event.get("prompt_tokens", 0) or 0)
+            usage["completion_tokens"] += int(event.get("completion_tokens", 0) or 0)
+            usage["total_tokens"] += int(event.get("total_tokens", 0) or 0)
+            usage["node_count"] += 1
+
+        def wrap_sink(inner_sink):
+            def sink(event: Dict[str, Any]) -> None:
+                track_event(event)
+                if inner_sink is not None:
+                    inner_sink(event)
+            return sink
+
+        def _persist_meta() -> None:
+            if state["receipt"] is None:
+                return
+            patch: Dict[str, Any] = {}
+            usage = state["llm_usage"]
+            if usage["node_count"] > 0:
+                patch["llm_usage"] = dict(usage)
+            if state.get("started_perf") is not None:
+                patch["duration_ms"] = int(
+                    (time.perf_counter() - state["started_perf"]) * 1000
+                )
+            if state["variant_params"]:
+                patch["variant_params"] = state["variant_params"]
+            if patch:
+                try:
+                    billing_service.update_charge_meta(
+                        state["receipt"].request_id, **patch
+                    )
+                except Exception:
+                    # Never fail a request because we couldn't persist meta.
+                    pass
+
         def do_settle() -> None:
             if state["receipt"] is not None:
+                _persist_meta()
                 billing.settle(state["receipt"].request_id)
 
         def do_refund(reason: str = "error") -> None:
             if state["receipt"] is not None:
+                _persist_meta()
                 billing.refund(state["receipt"].request_id, reason)
 
         def do_annotate(response):
             return _annotate_billing(response, state["receipt"])
+
+        # Track wall-clock from the moment we authenticated; close enough for
+        # latency accounting and avoids needing every endpoint to thread it.
+        state["started_perf"] = time.perf_counter()
 
         ctx = {
             "is_admin": is_admin,
@@ -309,6 +369,7 @@ def create_app(
             "settle": do_settle,
             "refund": do_refund,
             "annotate": do_annotate,
+            "wrap_sink": wrap_sink,
             "state": state,
         }
         if not defer_charge and not is_admin:
@@ -573,8 +634,28 @@ def create_app(
                     "bearerAuth": {
                         "type": "http",
                         "scheme": "bearer",
-                        "bearerFormat": "demo-token",
+                        "bearerFormat": "user_api_key | DEMO_API_TOKEN",
+                        "description": (
+                            "Send `Authorization: Bearer <token>` where `<token>` is either a "
+                            "**user API key** (issued via POST /admin/users or POST /v1/api_keys; "
+                            "billed per request) or `DEMO_API_TOKEN` (admin bypass for /admin/* "
+                            "endpoints and legacy smoke tests; never billed)."
+                        ),
                     }
+                },
+                "headers": {
+                    "X-Charged-Credits": {
+                        "description": "Credits deducted for this request. Only present on billed (non-admin) responses.",
+                        "schema": {"type": "integer", "example": 30},
+                    },
+                    "X-Balance-After": {
+                        "description": "User's remaining credit balance after settlement.",
+                        "schema": {"type": "integer", "example": 970},
+                    },
+                    "X-Request-Id": {
+                        "description": "Idempotency key for this request. Resend the same value to retry without double-charging (returns 409).",
+                        "schema": {"type": "string", "example": "f3c1d8e9-..."},
+                    },
                 },
                 "schemas": {
                     "Birth": {
@@ -780,8 +861,144 @@ def create_app(
                                 "properties": {
                                     "code": {"type": "string"},
                                     "message": {"type": "string"},
+                                    "details": {"type": "object", "additionalProperties": True},
                                 },
                             }
+                        },
+                    },
+                    "BalanceResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_alice"},
+                            "balance_credits": {"type": "integer", "example": 970},
+                            "daily_credits_limit": {"type": "integer", "nullable": True, "example": None},
+                        },
+                    },
+                    "LedgerRow": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "user_id": {"type": "string"},
+                            "request_id": {"type": "string"},
+                            "endpoint": {"type": "string", "nullable": True, "example": "/v1/cezi/ask"},
+                            "kind": {"type": "string", "enum": ["charge", "refund", "topup"]},
+                            "amount_credits": {"type": "integer"},
+                            "balance_after": {"type": "integer"},
+                            "status": {"type": "string", "enum": ["pending", "settled", "refunded"]},
+                            "meta_json": {"type": "string", "nullable": True},
+                            "ts": {"type": "string", "example": "2026-05-27T13:14:15.123456Z"},
+                        },
+                    },
+                    "UsageResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string"},
+                            "rows": {
+                                "type": "array",
+                                "items": {"$ref": "#/components/schemas/LedgerRow"},
+                            },
+                        },
+                    },
+                    "ApiKeyListItem": {
+                        "type": "object",
+                        "properties": {
+                            "key_id": {"type": "string", "description": "12-char prefix of the key hash; safe to display.", "example": "a1b2c3d4e5f6"},
+                            "label": {"type": "string", "nullable": True, "example": "phone-app"},
+                            "created_at": {"type": "string"},
+                            "last_seen_at": {"type": "string", "nullable": True},
+                            "revoked": {"type": "boolean"},
+                        },
+                    },
+                    "ApiKeyListResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string"},
+                            "api_keys": {
+                                "type": "array",
+                                "items": {"$ref": "#/components/schemas/ApiKeyListItem"},
+                            },
+                        },
+                    },
+                    "ApiKeyIssueRequest": {
+                        "type": "object",
+                        "properties": {"label": {"type": "string", "example": "phone-app"}},
+                    },
+                    "ApiKeyIssueResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string"},
+                            "api_key": {"type": "string", "description": "Plaintext API key. Shown only once — store immediately."},
+                            "label": {"type": "string", "nullable": True},
+                            "warning": {"type": "string"},
+                        },
+                    },
+                    "AdminCreateUserRequest": {
+                        "type": "object",
+                        "required": ["user_id"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_alice"},
+                            "display_name": {"type": "string", "example": "Alice"},
+                            "initial_credits": {"type": "integer", "default": 0, "example": 1000},
+                            "daily_credits_limit": {"type": "integer", "nullable": True, "default": None},
+                            "issue_first_key": {"type": "boolean", "default": True},
+                            "key_label": {"type": "string", "example": "primary"},
+                        },
+                    },
+                    "AdminCreateUserResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user": {"type": "object"},
+                            "api_key": {"type": "string", "nullable": True},
+                            "warning": {"type": "string"},
+                        },
+                    },
+                    "AdminUserListResponse": {
+                        "type": "object",
+                        "properties": {
+                            "users": {"type": "array", "items": {"type": "object"}},
+                        },
+                    },
+                    "AdminStatusRequest": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {"status": {"type": "string", "enum": ["active", "disabled"]}},
+                    },
+                    "AdminTopupRequest": {
+                        "type": "object",
+                        "required": ["user_id", "amount_credits"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_alice"},
+                            "amount_credits": {"type": "integer", "minimum": 1, "example": 500},
+                            "request_id": {"type": "string", "description": "Optional idempotency key. Reusing returns duplicate=true without double-credit.", "example": "wechat-pay-20260527-0001"},
+                            "note": {"type": "string", "example": "promo"},
+                            "source": {"type": "string", "default": "admin"},
+                        },
+                    },
+                    "AdminTopupResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string"},
+                            "amount_credits": {"type": "integer"},
+                            "balance_credits": {"type": "integer"},
+                            "request_id": {"type": "string"},
+                            "duplicate": {"type": "boolean"},
+                        },
+                    },
+                    "AdminLedgerResponse": {
+                        "type": "object",
+                        "properties": {
+                            "rows": {
+                                "type": "array",
+                                "items": {"$ref": "#/components/schemas/LedgerRow"},
+                            },
+                        },
+                    },
+                    "PricingResponse": {
+                        "type": "object",
+                        "properties": {
+                            "default_credits": {"type": "integer"},
+                            "endpoints": {"type": "object", "additionalProperties": {"type": "integer"}},
+                            "variants": {"type": "object", "additionalProperties": {"type": "integer"}},
                         },
                     },
                 },
@@ -822,21 +1039,7 @@ def create_app(
                 "/v1/ask": {
                     "post": {
                         "summary": "Run a synchronous BaZi Q&A turn",
-                        "security": [{"bearerAuth": []}],
-                        "requestBody": {
-                            "required": True,
-                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskRequest"}}},
-                        },
-                        "responses": {
-                            "200": {"description": "Answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskResponse"}}}},
-                            "400": {"description": "Invalid request"},
-                            "401": {"description": "Unauthorized"},
-                        },
-                    }
-                },
-                "/v1/ask_stream": {
-                    "post": {
-                        "summary": "Run a streaming BaZi Q&A turn using Server-Sent Events",
+                        "description": "Billed at 200 credits when authenticated with a user API key. Free when authenticated with `DEMO_API_TOKEN` (admin bypass).",
                         "security": [{"bearerAuth": []}],
                         "requestBody": {
                             "required": True,
@@ -844,71 +1047,297 @@ def create_app(
                         },
                         "responses": {
                             "200": {
-                                "description": "SSE stream. Events include session, node_status, plan, tool_invocation, answer_delta, answer, and error.",
+                                "description": "Answer.",
+                                "headers": {
+                                    "X-Charged-Credits": {"$ref": "#/components/headers/X-Charged-Credits"},
+                                    "X-Balance-After": {"$ref": "#/components/headers/X-Balance-After"},
+                                    "X-Request-Id": {"$ref": "#/components/headers/X-Request-Id"},
+                                },
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskResponse"}}},
+                            },
+                            "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+                            "401": {"description": "Unauthorized: bearer token missing or unknown."},
+                            "402": {"description": "Insufficient funds: user balance below the endpoint's cost."},
+                            "403": {"description": "user_id in body does not match the authenticated API key."},
+                            "409": {"description": "Duplicate request_id (idempotency replay)."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
+                        },
+                    }
+                },
+                "/v1/ask_stream": {
+                    "post": {
+                        "summary": "Run a streaming BaZi Q&A turn using Server-Sent Events",
+                        "description": "Billed at 200 credits when authenticated with a user API key. The stream emits `billing` events with `stage=charged` (start) and `stage=settled`/`refunded` (end), plus the usual `session`, `plan`, `node_status`, `tool_invocation`, `response_delta`, `response`, `error`.",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AskRequest"}}},
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Server-Sent Events stream. See description for event types.",
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}},
                             },
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
+                            "402": {"description": "Insufficient funds."},
+                            "403": {"description": "user_id mismatch."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
                         },
                     }
                 },
                 "/v1/hepan/ask": {
                     "post": {
                         "summary": "Run a synchronous BaZi HePan compatibility turn",
+                        "description": "Billed at 100 credits.",
                         "security": [{"bearerAuth": []}],
                         "requestBody": {
                             "required": True,
                             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanRequest"}}},
                         },
                         "responses": {
-                            "200": {"description": "HePan answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanResponse"}}}},
+                            "200": {
+                                "description": "HePan answer",
+                                "headers": {
+                                    "X-Charged-Credits": {"$ref": "#/components/headers/X-Charged-Credits"},
+                                    "X-Balance-After": {"$ref": "#/components/headers/X-Balance-After"},
+                                    "X-Request-Id": {"$ref": "#/components/headers/X-Request-Id"},
+                                },
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HepanResponse"}}},
+                            },
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
+                            "402": {"description": "Insufficient funds."},
+                            "403": {"description": "user_id mismatch."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
                         },
                     }
                 },
                 "/v1/cezi/ask": {
                     "post": {
                         "summary": "Run a synchronous CeZi character-divination turn",
+                        "description": "Billed at 30 credits — the cheapest billed endpoint, suitable for smoke tests.",
                         "security": [{"bearerAuth": []}],
                         "requestBody": {
                             "required": True,
                             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziRequest"}}},
                         },
                         "responses": {
-                            "200": {"description": "CeZi answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziResponse"}}}},
+                            "200": {
+                                "description": "CeZi answer",
+                                "headers": {
+                                    "X-Charged-Credits": {"$ref": "#/components/headers/X-Charged-Credits"},
+                                    "X-Balance-After": {"$ref": "#/components/headers/X-Balance-After"},
+                                    "X-Request-Id": {"$ref": "#/components/headers/X-Request-Id"},
+                                },
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CeziResponse"}}},
+                            },
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
+                            "402": {"description": "Insufficient funds."},
+                            "403": {"description": "user_id mismatch."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
                         },
                     }
                 },
                 "/v1/najia/ask": {
                     "post": {
                         "summary": "Run a synchronous Liuyao/Najia divination turn",
+                        "description": "Billed at 50 credits, or 80 credits when `paraphrase=true` (forces a second LLM pass that humanizes the raw 卦盘).",
                         "security": [{"bearerAuth": []}],
                         "requestBody": {
                             "required": True,
                             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaRequest"}}},
                         },
                         "responses": {
-                            "200": {"description": "Najia answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaResponse"}}}},
+                            "200": {
+                                "description": "Najia answer",
+                                "headers": {
+                                    "X-Charged-Credits": {"$ref": "#/components/headers/X-Charged-Credits"},
+                                    "X-Balance-After": {"$ref": "#/components/headers/X-Balance-After"},
+                                    "X-Request-Id": {"$ref": "#/components/headers/X-Request-Id"},
+                                },
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaResponse"}}},
+                            },
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
+                            "402": {"description": "Insufficient funds."},
+                            "403": {"description": "user_id mismatch."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
                         },
                     }
                 },
                 "/v1/zwds/ask": {
                     "post": {
                         "summary": "Run a synchronous Ziwei Doushu (紫微斗数) turn",
+                        "description": "Billed at 80 credits, or 150 credits when `include_star_gong=true` (injects the ≈973 KB star/palace lookup).",
                         "security": [{"bearerAuth": []}],
                         "requestBody": {
                             "required": True,
                             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZwdsRequest"}}},
                         },
                         "responses": {
-                            "200": {"description": "Zwds answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZwdsResponse"}}}},
+                            "200": {
+                                "description": "Zwds answer",
+                                "headers": {
+                                    "X-Charged-Credits": {"$ref": "#/components/headers/X-Charged-Credits"},
+                                    "X-Balance-After": {"$ref": "#/components/headers/X-Balance-After"},
+                                    "X-Request-Id": {"$ref": "#/components/headers/X-Request-Id"},
+                                },
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZwdsResponse"}}},
+                            },
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
+                            "402": {"description": "Insufficient funds."},
+                            "403": {"description": "user_id mismatch."},
+                            "429": {"description": "Rate-limited or in-flight cap reached."},
+                        },
+                    }
+                },
+                "/v1/balance": {
+                    "get": {
+                        "summary": "Get the balance of the authenticated user",
+                        "description": "Requires a user API key. Admin tokens are rejected.",
+                        "security": [{"bearerAuth": []}],
+                        "responses": {
+                            "200": {"description": "Balance", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BalanceResponse"}}}},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/usage": {
+                    "get": {
+                        "summary": "List recent ledger rows for the authenticated user",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [
+                            {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50}},
+                        ],
+                        "responses": {
+                            "200": {"description": "Usage", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UsageResponse"}}}},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/api_keys": {
+                    "get": {
+                        "summary": "List the authenticated user's API keys",
+                        "security": [{"bearerAuth": []}],
+                        "responses": {
+                            "200": {"description": "Keys", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiKeyListResponse"}}}},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    },
+                    "post": {
+                        "summary": "Issue a new API key for the authenticated user",
+                        "description": "Returned plaintext `api_key` is shown ONCE — store it immediately.",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": False,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiKeyIssueRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "New key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiKeyIssueResponse"}}}},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    },
+                },
+                "/v1/api_keys/{key_id}": {
+                    "delete": {
+                        "summary": "Revoke an API key by its 12-char prefix",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [
+                            {"name": "key_id", "in": "path", "required": True, "schema": {"type": "string"}, "description": "First 12 hex chars of the key hash, as shown by GET /v1/api_keys."},
+                        ],
+                        "responses": {
+                            "200": {"description": "Revoked"},
+                            "404": {"description": "Key not found for this user"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/admin/users": {
+                    "post": {
+                        "summary": "[admin] Create a billing user and (optionally) issue a first API key",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminCreateUserRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "User created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminCreateUserResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Admin token required"},
+                            "409": {"description": "user_id already exists"},
+                        },
+                    },
+                    "get": {
+                        "summary": "[admin] List all users",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [
+                            {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 200}},
+                        ],
+                        "responses": {
+                            "200": {"description": "Users", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserListResponse"}}}},
+                            "401": {"description": "Admin token required"},
+                        },
+                    },
+                },
+                "/admin/users/{user_id}/status": {
+                    "post": {
+                        "summary": "[admin] Set a user's status to active|disabled",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [
+                            {"name": "user_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                        ],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminStatusRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Status updated"},
+                            "404": {"description": "Unknown user"},
+                            "401": {"description": "Admin token required"},
+                        },
+                    }
+                },
+                "/admin/topup": {
+                    "post": {
+                        "summary": "[admin] Add credits to a user's balance",
+                        "description": "Idempotent on `request_id`. Replay returns `duplicate=true` without re-crediting; useful when wiring real payment webhooks (use the payment processor's transaction ID as `request_id`).",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminTopupRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Topup applied", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminTopupResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "404": {"description": "Unknown user"},
+                            "401": {"description": "Admin token required"},
+                        },
+                    }
+                },
+                "/admin/ledger": {
+                    "get": {
+                        "summary": "[admin] Read recent ledger rows",
+                        "security": [{"bearerAuth": []}],
+                        "parameters": [
+                            {"name": "user_id", "in": "query", "schema": {"type": "string"}, "description": "Filter to one user; omit for global feed."},
+                            {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 100, "maximum": 2000}},
+                        ],
+                        "responses": {
+                            "200": {"description": "Ledger", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminLedgerResponse"}}}},
+                            "401": {"description": "Admin token required"},
+                        },
+                    }
+                },
+                "/admin/pricing": {
+                    "get": {
+                        "summary": "[admin] Inspect the active pricing table",
+                        "security": [{"bearerAuth": []}],
+                        "responses": {
+                            "200": {"description": "Pricing", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PricingResponse"}}}},
+                            "401": {"description": "Admin token required"},
                         },
                     }
                 },
@@ -1014,8 +1443,7 @@ def create_app(
         profile = prepared["profile"]
         convo_path = prepared["convo_path"]
 
-        def sink(event: Dict) -> None:
-            log_event_to_conversation(convo_path, event)
+        sink = ctx["wrap_sink"](lambda event: log_event_to_conversation(convo_path, event))
 
         try:
             result = run_turn_func(
@@ -1089,11 +1517,13 @@ def create_app(
                 "endpoint": receipt.endpoint,
             }
 
-        def sink(event: Dict) -> None:
+        def base_sink(event: Dict) -> None:
             log_event_to_conversation(convo_path, event)
             public_event = public_stream_event(event)
             if public_event:
                 event_q.put(public_event)
+
+        sink = ctx["wrap_sink"](base_sink)
 
         def worker() -> None:
             settled = False
@@ -1202,8 +1632,7 @@ def create_app(
             },
         )
 
-        def sink(event: Dict) -> None:
-            log_event_to_conversation(convo_path, event)
+        sink = ctx["wrap_sink"](lambda event: log_event_to_conversation(convo_path, event))
 
         try:
             result = run_hepan_turn_func(
@@ -1283,8 +1712,7 @@ def create_app(
             },
         )
 
-        def sink(event: Dict) -> None:
-            log_event_to_conversation(convo_path, event)
+        sink = ctx["wrap_sink"](lambda event: log_event_to_conversation(convo_path, event))
 
         try:
             result = run_cezi_turn_func(
@@ -1362,8 +1790,7 @@ def create_app(
             },
         )
 
-        def sink(event: Dict) -> None:
-            log_event_to_conversation(convo_path, event)
+        sink = ctx["wrap_sink"](lambda event: log_event_to_conversation(convo_path, event))
 
         try:
             result = run_najia_turn_func(
@@ -1475,8 +1902,7 @@ def create_app(
             },
         )
 
-        def sink(event: Dict) -> None:
-            log_event_to_conversation(convo_path, event)
+        sink = ctx["wrap_sink"](lambda event: log_event_to_conversation(convo_path, event))
 
         try:
             result = run_zwds_turn_func(

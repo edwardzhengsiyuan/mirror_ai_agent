@@ -116,6 +116,31 @@ def _exploding_cezi_turn(question, character, **kwargs):
     raise RuntimeError("simulated downstream failure")
 
 
+def _token_emitting_cezi_turn(question, character, **kwargs):
+    """Stub orchestrator that pushes ``llm_usage`` events through the sink.
+
+    Lets us exercise the token-meta plumbing without a real LLM provider.
+    """
+    sink = kwargs.get("event_sink")
+    if sink:
+        for prompt, completion in [(120, 60), (200, 90), (50, 25)]:
+            sink({
+                "type": "llm_usage",
+                "node": "STUB",
+                "model": "stub-model",
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "total_tokens": prompt + completion,
+            })
+        sink({"type": "response", "text": "stub-cezi-with-tokens"})
+    return {
+        "method": "cezi",
+        "response": "stub-cezi-with-tokens",
+        "character": character,
+        "cezi": {"type": "cezi", "character": character, "question": question},
+    }
+
+
 # ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
@@ -431,6 +456,82 @@ def test_user_id_mismatch_returns_403(client) -> None:
     )
     assert resp.status_code == 403
     assert resp.get_json()["error"]["code"] == "user_id_mismatch"
+
+
+def test_llm_usage_aggregates_into_ledger_meta(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
+    monkeypatch.setenv("BILLING_RATE_LIMIT_PER_MIN", "1000")
+    app = create_app(
+        run_turn_func=_fake_turn,
+        run_hepan_turn_func=_fake_hepan_turn,
+        run_cezi_turn_func=_token_emitting_cezi_turn,
+        run_najia_turn_func=_fake_najia_turn,
+        run_zwds_turn_func=_fake_zwds_turn,
+        storage_root=str(tmp_path / "storage"),
+    )
+    client = app.test_client()
+    api_key = _create_user(client, "u_alice", credits=500)
+
+    resp = client.post(
+        "/v1/cezi/ask",
+        headers=_user(api_key),
+        json={"question": "Q", "character": "合"},
+    )
+    assert resp.status_code == 200, resp.get_json()
+
+    # The charge ledger row should now carry aggregated llm_usage.
+    ledger = client.get(
+        "/admin/ledger",
+        headers=_admin(),
+        query_string={"user_id": "u_alice", "limit": 10},
+    ).get_json()["rows"]
+    charge_row = next(r for r in ledger if r["kind"] == "charge")
+    meta = json.loads(charge_row["meta_json"])
+    assert meta["llm_usage"]["node_count"] == 3
+    assert meta["llm_usage"]["prompt_tokens"] == 120 + 200 + 50
+    assert meta["llm_usage"]["completion_tokens"] == 60 + 90 + 25
+    assert meta["llm_usage"]["total_tokens"] == 545
+    assert meta["duration_ms"] >= 0
+
+
+def test_daily_credits_limit_returns_402_with_distinct_code(client) -> None:
+    # Open a user with a generous balance but a tight per-day cap.
+    resp = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={
+            "user_id": "u_capped",
+            "initial_credits": 10_000,
+            "daily_credits_limit": 60,
+        },
+    )
+    assert resp.status_code == 200, resp.get_json()
+    api_key = resp.get_json()["api_key"]
+    # First call (30 credits) fits; second exceeds the daily budget of 60.
+    r1 = client.post(
+        "/v1/cezi/ask",
+        headers=_user(api_key),
+        json={"question": "Q", "character": "合"},
+    )
+    assert r1.status_code == 200, r1.get_json()
+    r2 = client.post(
+        "/v1/cezi/ask",
+        headers=_user(api_key),
+        json={"question": "Q", "character": "合"},
+    )
+    assert r2.status_code == 200, r2.get_json()
+    r3 = client.post(
+        "/v1/cezi/ask",
+        headers=_user(api_key),
+        json={"question": "Q", "character": "合"},
+    )
+    # 3rd call would push today's spend over 60 → 402 with a distinct code.
+    assert r3.status_code == 402, r3.get_json()
+    body = r3.get_json()
+    assert body["error"]["code"] == "daily_limit_exceeded"
+    assert body["error"]["details"]["limit"] == 60
+    assert body["error"]["details"]["used"] == 60
 
 
 # ---------------------------------------------------------------------------

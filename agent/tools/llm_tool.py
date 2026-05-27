@@ -230,6 +230,24 @@ def _do_llm_api_call(
     content = message.get("content", "")
     reasoning_content = message.get("reasoning") or message.get("reasoning_content") or ""
 
+    # OpenAI-compatible providers (gptproto, DashScope/Qwen) include a
+    # ``usage`` block on non-stream responses. Surface it as a separate
+    # event so the billing layer can aggregate per-request token counts
+    # without changing this function's return signature.
+    usage = parsed.get("usage") if isinstance(parsed, dict) else None
+    if isinstance(usage, dict):
+        emit_event(
+            event_sink,
+            {
+                "type": "llm_usage",
+                "node": node_label,
+                "model": model_name,
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            },
+        )
+
     return content, reasoning_content, None
 
 

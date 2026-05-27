@@ -17,6 +17,7 @@ sys.path.insert(0, ROOT)
 from agent.billing import (
     BillingService,
     BillingStore,
+    DailyLimitExceededError,
     DuplicateRequestError,
     InflightLimitError,
     InsufficientFundsError,
@@ -247,6 +248,51 @@ def test_inflight_slot_freed_after_refund(service: BillingService) -> None:
 
 
 # ---------------------------------------------------------------------------
+# daily_credits_limit
+# ---------------------------------------------------------------------------
+
+
+def test_daily_limit_blocks_when_exceeded(store: BillingStore) -> None:
+    svc = BillingService(store, inflight_limit=10, rate_limit_per_minute=10_000)
+    svc.store.create_user("u1", initial_credits=10_000, daily_credits_limit=100)
+    # First two charges fit in the budget exactly.
+    svc.charge("u1", "/v1/x", 50, request_id="r1")
+    svc.charge("u1", "/v1/x", 50, request_id="r2")
+    # Third one would exceed → blocked.
+    with pytest.raises(DailyLimitExceededError) as excinfo:
+        svc.charge("u1", "/v1/x", 1, request_id="r3")
+    assert excinfo.value.used == 100
+    assert excinfo.value.limit == 100
+    # Crucially, the underlying balance is untouched (still 10_000 - 100).
+    assert svc.get_balance("u1") == 9_900
+
+
+def test_daily_limit_zero_or_none_means_no_limit(store: BillingStore) -> None:
+    svc = BillingService(store, inflight_limit=10, rate_limit_per_minute=10_000)
+    svc.store.create_user("u_none", initial_credits=10_000, daily_credits_limit=None)
+    svc.store.create_user("u_zero", initial_credits=10_000, daily_credits_limit=0)
+    for i in range(20):
+        svc.charge("u_none", "/v1/x", 100, request_id=f"none-{i}")
+        svc.settle(f"none-{i}")
+        svc.charge("u_zero", "/v1/x", 100, request_id=f"zero-{i}")
+        svc.settle(f"zero-{i}")
+    # No DailyLimitExceededError raised even after 2_000 credits spent each.
+    assert svc.get_balance("u_none") == 8_000
+    assert svc.get_balance("u_zero") == 8_000
+
+
+def test_daily_limit_refund_frees_today_budget(store: BillingStore) -> None:
+    svc = BillingService(store, inflight_limit=10, rate_limit_per_minute=10_000)
+    svc.store.create_user("u1", initial_credits=10_000, daily_credits_limit=100)
+    svc.charge("u1", "/v1/x", 100, request_id="r1")
+    with pytest.raises(DailyLimitExceededError):
+        svc.charge("u1", "/v1/x", 1, request_id="r-blocked")
+    # Refund r1 → today's net = 0, so we can charge again.
+    svc.refund("r1", reason="test")
+    svc.charge("u1", "/v1/x", 100, request_id="r2")
+
+
+# ---------------------------------------------------------------------------
 # rate limiting (sliding 60s)
 # ---------------------------------------------------------------------------
 
@@ -348,3 +394,25 @@ def test_store_recreate_is_idempotent(tmp_path) -> None:
     # second open must not blow up on existing tables/indexes
     s2 = BillingStore(path)
     assert s2.list_users() == []
+
+
+def test_update_charge_meta_merges_into_meta_json(service: BillingService) -> None:
+    service.create_user(user_id="u1", initial_credits=500)
+    service.charge("u1", "/v1/x", 50, request_id="r1", meta={"variant": "x=1"})
+    assert service.update_charge_meta(
+        "r1",
+        llm_usage={"prompt_tokens": 1234, "completion_tokens": 567, "node_count": 3},
+        duration_ms=2500,
+    )
+    rows = service.list_usage("u1", limit=5)
+    charge_row = next(r for r in rows if r["kind"] == "charge")
+    import json as _json
+    meta = _json.loads(charge_row["meta_json"])
+    assert meta["variant"] == "x=1"  # original preserved
+    assert meta["duration_ms"] == 2500
+    assert meta["llm_usage"]["prompt_tokens"] == 1234
+    assert meta["llm_usage"]["node_count"] == 3
+
+
+def test_update_charge_meta_unknown_request_returns_false(service: BillingService) -> None:
+    assert service.update_charge_meta("never-charged", duration_ms=1) is False

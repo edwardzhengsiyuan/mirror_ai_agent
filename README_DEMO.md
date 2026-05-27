@@ -6,6 +6,7 @@ This package exposes the existing BaZi agent as a customer-facing demo API with 
 
 - `GET /` - existing Web demo console
 - `GET /billing.html` - user self-service portal (balance / usage / API keys)
+- `GET /admin.html` - admin console (open users / topup / ledger; needs `DEMO_API_TOKEN`)
 - `GET /docs` - Swagger UI for API testing
 - `GET /openapi.json` - OpenAPI specification
 - `GET /health` - health check
@@ -160,21 +161,38 @@ curl -X POST http://localhost:8000/admin/users \
   -d '{"user_id":"u_alice","display_name":"Alice","initial_credits":1000}'
 # response: {"user": {...}, "api_key": "<save-this-now>"}
 
-# 2. Top up
+# Optional: cap the daily spend (resets at UTC midnight). Add this on
+# create or via PATCH-equivalent UPDATE on the users table. The check
+# fires inside charge() and returns 402 with code=daily_limit_exceeded.
+#   {"user_id":"u_capped","initial_credits":10000,"daily_credits_limit":300}
+
+# 2. Top up (idempotent on request_id — safe for payment webhooks)
 curl -X POST http://localhost:8000/admin/topup \
   -H "Authorization: Bearer $DEMO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"user_id":"u_alice","amount_credits":500,"note":"promo"}'
 
-# 3. List users / ledger
+# 3. List users / ledger / pricing
 curl -H "Authorization: Bearer $DEMO_API_TOKEN" http://localhost:8000/admin/users
 curl -H "Authorization: Bearer $DEMO_API_TOKEN" "http://localhost:8000/admin/ledger?user_id=u_alice&limit=20"
+curl -H "Authorization: Bearer $DEMO_API_TOKEN" http://localhost:8000/admin/pricing
 
 # 4. Disable / re-enable a user (e.g. fraud, abuse)
 curl -X POST http://localhost:8000/admin/users/u_alice/status \
   -H "Authorization: Bearer $DEMO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"disabled"}'
+```
+
+**Web UIs**: open `/admin.html` for a one-page admin console (paste `DEMO_API_TOKEN` once, then create/topup/inspect via buttons), or use the PowerShell helpers:
+
+```powershell
+. .\scripts\admin.ps1
+Set-BillingAdmin -BaseUrl "https://demo.example.com" -Token $env:DEMO_API_TOKEN
+New-BillingUser -UserId u_alice -InitialCredits 1000 -DisplayName "Alice"
+Invoke-Topup -UserId u_alice -Amount 500 -Note "promo"
+Get-BillingLedger -UserId u_alice -Limit 20
+Get-BillingPricing
 ```
 
 ### User cheatsheet
@@ -214,6 +232,21 @@ Every billed request returns:
 ```
 
 If the worker fails mid-stream, the final billing event has `stage:"refunded"` and the balance is restored.
+
+### Token / latency tracking
+
+Every successful charge stores LLM usage stats in the ledger row's `meta_json`:
+
+```json
+{
+  "llm_usage": {"prompt_tokens": 1234, "completion_tokens": 567,
+                "total_tokens": 1801, "node_count": 5},
+  "duration_ms": 12340,
+  "variant_params": ["paraphrase=True"]
+}
+```
+
+These show up in `GET /v1/usage` and `GET /admin/ledger` responses. They're recorded on a best-effort basis: stub mode and providers that don't return a `usage` block (some streaming responses) will leave `node_count: 0`.
 
 ### Storage
 

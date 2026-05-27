@@ -11,6 +11,20 @@ class InsufficientFundsError(BillingError):
     """The user does not have enough credits or is disabled."""
 
 
+class DailyLimitExceededError(BillingError):
+    """The user has hit their per-day spending limit."""
+
+    def __init__(self, user_id: str, limit: int, used: int, cost: int) -> None:
+        super().__init__(
+            f"daily limit reached for user={user_id}: used {used}/{limit}, "
+            f"requested +{cost}"
+        )
+        self.user_id = user_id
+        self.limit = limit
+        self.used = used
+        self.cost = cost
+
+
 class UnknownUserError(BillingError):
     """No user matches the supplied user_id."""
 

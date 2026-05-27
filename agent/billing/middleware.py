@@ -39,6 +39,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from flask import Response, jsonify, request
 
 from .errors import (
+    DailyLimitExceededError,
     DuplicateRequestError,
     InflightLimitError,
     InsufficientFundsError,
@@ -183,6 +184,16 @@ class BillingHelpers:
                 402,
                 "insufficient_funds",
                 str(e),
+                cost_credits=cost,
+                endpoint=endpoint,
+            )
+        except DailyLimitExceededError as e:
+            return None, _api_error(
+                402,
+                "daily_limit_exceeded",
+                str(e),
+                limit=e.limit,
+                used=e.used,
                 cost_credits=cost,
                 endpoint=endpoint,
             )
