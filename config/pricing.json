@@ -1,0 +1,16 @@
+{
+  "_comment": "Credit prices for billable endpoints. 1 元 = 100 credits.",
+  "default_credits": 50,
+  "endpoints": {
+    "/v1/ask": 200,
+    "/v1/ask_stream": 200,
+    "/v1/hepan/ask": 100,
+    "/v1/cezi/ask": 30,
+    "/v1/najia/ask": 50,
+    "/v1/zwds/ask": 80
+  },
+  "variants": {
+    "/v1/zwds/ask?include_star_gong=true": 150,
+    "/v1/najia/ask?paraphrase=true": 80
+  }
+}

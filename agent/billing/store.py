@@ -1,0 +1,336 @@
+"""SQLite-backed billing store.
+
+A single :class:`BillingStore` owns the underlying ``billing.db`` file and
+exposes low-level CRUD operations. Higher-level orchestration (charge /
+refund / rate-limit) lives in :mod:`agent.billing.service`.
+
+Concurrency model:
+    * SQLite is opened in WAL mode so multiple readers can run in parallel
+      with a single writer.
+    * Each method opens a fresh connection (fast on Windows; cheap on Linux),
+      enabling thread-safety without sharing connections across threads.
+    * Write transactions use ``BEGIN IMMEDIATE`` to take the writer lock up
+      front and avoid mid-statement ``SQLITE_BUSY`` upgrades.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import secrets
+import sqlite3
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id              TEXT PRIMARY KEY,
+    display_name         TEXT,
+    balance_credits      INTEGER NOT NULL DEFAULT 0,
+    status               TEXT NOT NULL DEFAULT 'active',
+    daily_credits_limit  INTEGER,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    api_key_hash   TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    label          TEXT,
+    created_at     TEXT NOT NULL,
+    last_seen_at   TEXT,
+    revoked        INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+
+CREATE TABLE IF NOT EXISTS ledger (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL,
+    request_id      TEXT NOT NULL UNIQUE,
+    endpoint        TEXT,
+    kind            TEXT NOT NULL,
+    amount_credits  INTEGER NOT NULL,
+    balance_after   INTEGER NOT NULL,
+    status          TEXT NOT NULL,
+    meta_json       TEXT,
+    ts              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_user_ts ON ledger(user_id, ts);
+CREATE INDEX IF NOT EXISTS idx_ledger_endpoint ON ledger(endpoint);
+
+CREATE TABLE IF NOT EXISTS inflight (
+    request_id  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    endpoint    TEXT NOT NULL,
+    started_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inflight_user ON inflight(user_id);
+
+CREATE TABLE IF NOT EXISTS rate_events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope     TEXT NOT NULL,
+    ts_epoch  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_events_scope_ts ON rate_events(scope, ts_epoch);
+"""
+
+
+def _now_iso() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def hash_api_key(plaintext: str) -> str:
+    """SHA-256 hex digest used as the lookup key for an API key."""
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+def generate_api_key() -> str:
+    """Generate a fresh URL-safe API key (43 chars, ~256 bits entropy)."""
+    return secrets.token_urlsafe(32)
+
+
+class BillingStore:
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+        with self._connect() as conn:
+            conn.executescript(SCHEMA_SQL)
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+
+    # ------------------------------------------------------------------
+    # connection helpers
+    # ------------------------------------------------------------------
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # users
+    # ------------------------------------------------------------------
+
+    def create_user(
+        self,
+        user_id: str,
+        display_name: Optional[str] = None,
+        initial_credits: int = 0,
+        daily_credits_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        now = _now_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO users (user_id, display_name, balance_credits, status,"
+                " daily_credits_limit, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'active', ?, ?, ?)",
+                (user_id, display_name, int(initial_credits), daily_credits_limit, now, now),
+            )
+        user = self.get_user(user_id)
+        if user is None:
+            # Should never happen: row was just inserted in same transaction.
+            raise RuntimeError(f"created user {user_id} but cannot read it back")
+        return user
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, display_name, balance_credits, status,"
+                " daily_credits_limit, created_at, updated_at"
+                " FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, display_name, balance_credits, status,"
+                " daily_credits_limit, created_at, updated_at"
+                " FROM users ORDER BY created_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_user_status(self, user_id: str, status: str) -> None:
+        if status not in ("active", "disabled"):
+            raise ValueError(f"invalid status: {status}")
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE users SET status = ?, updated_at = ? WHERE user_id = ?",
+                (status, _now_iso(), user_id),
+            )
+
+    # ------------------------------------------------------------------
+    # api keys
+    # ------------------------------------------------------------------
+
+    def issue_api_key(self, user_id: str, label: Optional[str] = None) -> Tuple[str, str]:
+        """Issue a fresh key. Returns ``(plaintext, key_hash)``.
+
+        The plaintext value is the **only** time the user can see it.
+        """
+        plaintext = generate_api_key()
+        key_hash = hash_api_key(plaintext)
+        now = _now_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO api_keys (api_key_hash, user_id, label, created_at, last_seen_at, revoked)"
+                " VALUES (?, ?, ?, ?, NULL, 0)",
+                (key_hash, user_id, label, now),
+            )
+        return plaintext, key_hash
+
+    def lookup_api_key(self, plaintext: str) -> Optional[Dict[str, Any]]:
+        if not plaintext:
+            return None
+        key_hash = hash_api_key(plaintext)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT k.api_key_hash, k.user_id, k.label, k.created_at,"
+                " k.last_seen_at, k.revoked, u.status AS user_status,"
+                " u.balance_credits, u.daily_credits_limit"
+                " FROM api_keys k JOIN users u ON u.user_id = k.user_id"
+                " WHERE k.api_key_hash = ?",
+                (key_hash,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def touch_api_key(self, key_hash: str) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE api_keys SET last_seen_at = ? WHERE api_key_hash = ?",
+                (_now_iso(), key_hash),
+            )
+
+    def revoke_api_key(self, key_hash: str) -> bool:
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE api_keys SET revoked = 1 WHERE api_key_hash = ? AND revoked = 0",
+                (key_hash,),
+            )
+            return cur.rowcount > 0
+
+    def list_api_keys(self, user_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT api_key_hash, label, created_at, last_seen_at, revoked"
+                " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # ledger writes (low level — service.py builds higher-level flows)
+    # ------------------------------------------------------------------
+
+    def find_ledger(self, request_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, user_id, request_id, endpoint, kind, amount_credits,"
+                " balance_after, status, meta_json, ts FROM ledger WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_ledger(
+        self,
+        user_id: Optional[str] = None,
+        limit: int = 50,
+        since_iso: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if since_iso:
+            clauses.append("ts >= ?")
+            params.append(since_iso)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, user_id, request_id, endpoint, kind, amount_credits,"
+                " balance_after, status, meta_json, ts FROM ledger"
+                + where
+                + " ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # inflight
+    # ------------------------------------------------------------------
+
+    def count_inflight(self, user_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM inflight WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def remove_inflight(self, request_id: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM inflight WHERE request_id = ?", (request_id,))
+
+    # ------------------------------------------------------------------
+    # rate limit (simple sliding-window counter table)
+    # ------------------------------------------------------------------
+
+    def record_rate_event(self, scope: str, ts_epoch: int) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO rate_events (scope, ts_epoch) VALUES (?, ?)",
+                (scope, int(ts_epoch)),
+            )
+
+    def count_rate_events(self, scope: str, since_epoch: int) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM rate_events WHERE scope = ? AND ts_epoch >= ?",
+                (scope, int(since_epoch)),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def prune_rate_events(self, before_epoch: int) -> int:
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM rate_events WHERE ts_epoch < ?",
+                (int(before_epoch),),
+            )
+            return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # debug / maintenance
+    # ------------------------------------------------------------------
+
+    def to_meta_json(self, meta: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not meta:
+            return None
+        try:
+            return json.dumps(meta, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            return json.dumps({"_serialize_error": True})
