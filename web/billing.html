@@ -116,9 +116,7 @@ th { color: var(--muted); font-weight: 500; }
       <input id="customYuan" type="number" min="1" max="9999" placeholder="自定义金额（元，1-9999）"/>
       <button id="btnCustomPay">充值</button>
     </div>
-    <div id="topupHint" class="muted" style="font-size:12px;margin-top:6px;">
-      支持 <strong>银行卡</strong> 和 <strong>微信支付</strong>。付款由 Stripe 处理；BaZi Agent 不会接触你的卡号。
-    </div>
+    <div id="topupHint" class="muted" style="font-size:12px;margin-top:6px;">付款由 Stripe 处理；BaZi Agent 不会接触你的卡号。</div>
     <div id="stripeStatus" class="muted" style="font-size:12px;margin-top:4px;"></div>
   </div>
 
@@ -301,8 +299,19 @@ async function loadPacks() {
       $("stripeStatus").style.color = "var(--danger)";
       $("packGrid").querySelectorAll("button").forEach(b => b.disabled = true);
       $("btnCustomPay").disabled = true;
-    } else if (d.stripe_mode === "test") {
-      $("stripeStatus").textContent = "测试模式 (test mode) — 卡号 4242 4242 4242 4242 / 任意未过期日期 / 任意 CVC";
+    } else {
+      const methods = (d.payment_methods || []);
+      const labelMap = { card: "银行卡", wechat_pay: "微信支付", alipay: "支付宝" };
+      const labels = methods.map(m => labelMap[m] || m).join(" / ");
+      const hint = $("topupHint");
+      hint.textContent = (labels ? "支持 " + labels + "。" : "") + "付款由 Stripe 处理；BaZi Agent 不会接触你的卡号。";
+      if (d.stripe_mode === "test") {
+        const tips = ["测试模式 — 卡号 4242 4242 4242 4242 / 任意未过期日期 / 任意 CVC"];
+        if (methods.includes("wechat_pay")) {
+          tips.push("微信测试：用手机自带相机扫码（不要用真实微信 App），跳到 Stripe 沙盒页点 Authorize。");
+        }
+        $("stripeStatus").textContent = tips.join(" · ");
+      }
     }
   } catch (e) {
     $("packGrid").innerHTML = '<span class="muted">套餐加载失败：' + (e.message || e) + '</span>';

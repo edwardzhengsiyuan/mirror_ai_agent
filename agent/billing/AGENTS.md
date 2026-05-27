@@ -100,10 +100,16 @@ body must equal the auth-bound user_id. Admin requests can pass any user_id
 `stripe_gateway.StripeGateway` is constructed once in
 `web_server.create_app` from environment variables (`STRIPE_MODE`,
 `STRIPE_SECRET_KEY_TEST/_LIVE`, `STRIPE_WEBHOOK_SECRET_TEST/_LIVE`,
-`STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`). The Stripe SDK is imported
-lazily inside the two methods that need it (`build_checkout_session`,
-`verify_webhook`) so the rest of the codebase still loads when `stripe`
-isn't installed.
+`STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`,
+`STRIPE_PAYMENT_METHODS`). The Stripe SDK is imported lazily inside the
+two methods that need it (`build_checkout_session`, `verify_webhook`) so
+the rest of the codebase still loads when `stripe` isn't installed.
+
+`STRIPE_PAYMENT_METHODS` is a comma-separated list (default
+`card,wechat_pay`). Methods listed here must also be turned on per
+account in the Stripe dashboard — listing `wechat_pay` when the account
+has not enabled it makes Session.create return 4xx. The list is
+echoed by `/v1/topup_packs` so the frontend can render the right hint.
 
 Three HTTP endpoints wire it up:
 

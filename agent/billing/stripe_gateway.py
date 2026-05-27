@@ -164,6 +164,7 @@ class StripeGateway:
         cancel_url: str,
         mode: str = "test",
         pack_config: Optional[TopupPackConfig] = None,
+        payment_method_types: Optional[List[str]] = None,
     ) -> None:
         self.secret_key = secret_key
         self.webhook_secret = webhook_secret
@@ -172,6 +173,7 @@ class StripeGateway:
         self.cancel_url = cancel_url
         self.mode = mode
         self.pack_config = pack_config or load_pack_config()
+        self.payment_method_types = list(payment_method_types or ["card", "wechat_pay"])
 
     # -- factories ------------------------------------------------------
 
@@ -182,6 +184,15 @@ class StripeGateway:
         if mode not in ("test", "live"):
             mode = "test"
         suffix = "LIVE" if mode == "live" else "TEST"
+        # Comma-separated list, e.g. "card,wechat_pay" or just "card".
+        # WeChat Pay must be turned on per-account in the Stripe dashboard
+        # (Settings → Payment methods); listing it here when the account
+        # hasn't enabled it will make Session.create return 4xx.
+        raw_methods = (env.get("STRIPE_PAYMENT_METHODS") or "").strip()
+        if raw_methods:
+            methods = [m.strip() for m in raw_methods.split(",") if m.strip()]
+        else:
+            methods = ["card", "wechat_pay"]
         return cls(
             secret_key=env.get(f"STRIPE_SECRET_KEY_{suffix}") or env.get("STRIPE_SECRET_KEY"),
             webhook_secret=env.get(f"STRIPE_WEBHOOK_SECRET_{suffix}") or env.get("STRIPE_WEBHOOK_SECRET"),
@@ -192,6 +203,7 @@ class StripeGateway:
             ),
             cancel_url=env.get("STRIPE_CANCEL_URL", "/billing.html?status=cancelled"),
             mode=mode,
+            payment_method_types=methods,
         )
 
     @property
@@ -278,7 +290,7 @@ class StripeGateway:
             ) from e
 
         stripe.api_key = self.secret_key
-        methods = payment_method_types or ["card", "wechat_pay"]
+        methods = list(payment_method_types or self.payment_method_types or ["card"])
         kwargs: Dict[str, Any] = {
             "mode": "payment",
             "payment_method_types": methods,

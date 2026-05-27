@@ -227,6 +227,41 @@ def test_checkout_create_with_custom_yuan(client, stripe_module_mock) -> None:
     assert body["credits"] == 5000
 
 
+def test_checkout_respects_card_only_env(tmp_path, monkeypatch) -> None:
+    """Setting STRIPE_PAYMENT_METHODS=card must drop wechat_pay from the
+    Stripe call so accounts that haven't enabled WeChat Pay don't 4xx."""
+    monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
+    monkeypatch.setenv("STRIPE_MODE", "test")
+    monkeypatch.setenv("STRIPE_SECRET_KEY_TEST", STRIPE_SECRET)
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET_TEST", WEBHOOK_SECRET)
+    monkeypatch.setenv("STRIPE_PAYMENT_METHODS", "card")
+    app = create_app(
+        run_turn_func=_stub_turn,
+        run_hepan_turn_func=_stub_turn,
+        run_cezi_turn_func=_stub_turn,
+        run_najia_turn_func=_stub_turn,
+        run_zwds_turn_func=_stub_turn,
+        storage_root=str(tmp_path / "storage"),
+    )
+    c = app.test_client()
+    api_key = _make_user(c)
+    fake = MagicMock()
+    fake.checkout.Session.create.return_value = {"id": "cs_card_only", "url": "https://x"}
+    with patch.dict(sys.modules, {"stripe": fake}):
+        resp = c.post(
+            "/v1/checkout/create",
+            headers=_user_headers(api_key),
+            json={"pack_id": "pack_10"},
+        )
+    assert resp.status_code == 200, resp.get_json()
+    kwargs = fake.checkout.Session.create.call_args.kwargs
+    assert kwargs["payment_method_types"] == ["card"]
+    # /v1/topup_packs should also report this back.
+    body = c.get("/v1/topup_packs").get_json()
+    assert body["payment_methods"] == ["card"]
+
+
 def test_checkout_create_rejects_invalid_pack(client, stripe_module_mock) -> None:
     api_key = _make_user(client)
     resp = client.post(

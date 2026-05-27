@@ -250,6 +250,24 @@ Stripe environment variables are configured.
 
 Expiry: any future date. CVC: any 3 digits.
 
+**Testing WeChat Pay (test mode):** the WeChat Pay button only appears
+if (a) you have `wechat_pay` listed in `STRIPE_PAYMENT_METHODS` (default)
+**and** (b) you've enabled WeChat Pay at
+https://dashboard.stripe.com/test/settings/payment_methods. If your
+Stripe account country (e.g. mainland China direct accounts) doesn't
+support WeChat Pay, set `STRIPE_PAYMENT_METHODS=card` so Session.create
+doesn't 4xx.
+
+To actually test the QR flow:
+
+1. Click "微信支付" at Checkout — Stripe renders a QR code.
+2. Scan it with your **phone's regular camera** (or any QR app) — **not**
+   the real WeChat App. Test-mode QR codes point at a Stripe sandbox URL
+   that the WeChat client refuses to open.
+3. The phone browser opens a Stripe-hosted "Authorize test payment"
+   page. Tap it; Stripe fires `checkout.session.completed` and your
+   webhook credits the user.
+
 **Idempotency:** `/webhooks/stripe` keys topups by
 `stripe:<checkout_session_id>`. If Stripe retries the same event, the
 second attempt returns `200 OK` with `duplicate=true` and no extra

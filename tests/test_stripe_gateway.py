@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import time
 import os
+import sys
+import time
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -142,6 +143,45 @@ def test_from_env_missing_secret_key_means_unconfigured() -> None:
     gw = StripeGateway.from_env({})
     assert gw.configured is False
     assert gw.webhook_configured is False
+
+
+def test_from_env_payment_methods_default_includes_wechat() -> None:
+    gw = StripeGateway.from_env({"STRIPE_SECRET_KEY_TEST": "sk_test_x"})
+    # Default ships with both card and wechat_pay.
+    assert "card" in gw.payment_method_types
+    assert "wechat_pay" in gw.payment_method_types
+
+
+def test_from_env_payment_methods_overridable_via_env() -> None:
+    gw = StripeGateway.from_env({
+        "STRIPE_SECRET_KEY_TEST": "sk_test_x",
+        "STRIPE_PAYMENT_METHODS": "card",  # account hasn't enabled wechat_pay
+    })
+    assert gw.payment_method_types == ["card"]
+
+
+def test_from_env_payment_methods_strips_whitespace() -> None:
+    gw = StripeGateway.from_env({
+        "STRIPE_SECRET_KEY_TEST": "sk_test_x",
+        "STRIPE_PAYMENT_METHODS": " card , wechat_pay , alipay ",
+    })
+    assert gw.payment_method_types == ["card", "wechat_pay", "alipay"]
+
+
+def test_build_checkout_uses_gateway_default_methods() -> None:
+    """If the caller doesn't pass methods, fall back to gateway default."""
+    gw = _gw()
+    gw.payment_method_types = ["card"]  # simulate wechat-disabled account
+    fake_stripe = MagicMock()
+    fake_stripe.checkout.Session.create.return_value = {"id": "cs", "url": "https://x"}
+    with patch.dict(sys.modules, {"stripe": fake_stripe}):
+        gw.build_checkout_session(
+            user_id="u", amount_fen=1000, credits=1000, currency="cny", label="¥10",
+        )
+    kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+    assert kwargs["payment_method_types"] == ["card"]
+    # No wechat_pay → no wechat options.
+    assert "payment_method_options" not in kwargs
 
 
 # ---------------------------------------------------------------------------

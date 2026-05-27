@@ -2542,6 +2542,7 @@ def create_app(
         body["stripe_configured"] = stripe_gateway.configured
         body["stripe_publishable_key"] = stripe_gateway.publishable_key or None
         body["stripe_mode"] = stripe_gateway.mode
+        body["payment_methods"] = list(stripe_gateway.payment_method_types)
         return jsonify(body)
 
     # --- Stripe checkout creation ----------------------------------------
