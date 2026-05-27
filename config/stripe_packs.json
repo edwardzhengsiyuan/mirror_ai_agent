@@ -1,0 +1,32 @@
+{
+  "_comment": "Topup packs surfaced in the UI. amount_fen is what we charge via Stripe (in CNY 分; 1 元 = 100 fen). credits is what we add to the balance. Flat rate: 1 元 = 100 credits, so credits == amount_fen.",
+  "currency": "cny",
+  "min_custom_yuan": 1,
+  "max_custom_yuan": 9999,
+  "packs": [
+    {
+      "id": "pack_10",
+      "label": "体验包",
+      "amount_yuan": 10,
+      "amount_fen": 1000,
+      "credits": 1000,
+      "description": "10 次测字 / 5 次六爻 / 2 次八字"
+    },
+    {
+      "id": "pack_30",
+      "label": "标准包",
+      "amount_yuan": 30,
+      "amount_fen": 3000,
+      "credits": 3000,
+      "description": "30 次测字 / 15 次六爻 / 6 次八字"
+    },
+    {
+      "id": "pack_100",
+      "label": "大包",
+      "amount_yuan": 100,
+      "amount_fen": 10000,
+      "credits": 10000,
+      "description": "100 次测字 / 50 次六爻 / 20 次八字"
+    }
+  ]
+}

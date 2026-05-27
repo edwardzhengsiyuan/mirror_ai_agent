@@ -14,7 +14,14 @@ from typing import Any, Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from agent.billing import BillingService, BillingStore, Pricing
+from agent.billing import (
+    BillingService,
+    BillingStore,
+    Pricing,
+    StripeGateway,
+    StripeNotConfiguredError,
+    StripeSignatureError,
+)
 from agent.billing.errors import (
     BillingError,
     DuplicateRequestError,
@@ -244,6 +251,8 @@ def create_app(
         billing_pricing,
         admin_token_getter=lambda: os.environ.get("DEMO_API_TOKEN", ""),
     )
+
+    stripe_gateway = StripeGateway.from_env()
 
     def _annotate_billing(response, charge, balance_after: Optional[int] = None):
         """Attach X-Charged-Credits / X-Balance-After / X-Request-Id headers."""
@@ -1001,6 +1010,72 @@ def create_app(
                             "variants": {"type": "object", "additionalProperties": {"type": "integer"}},
                         },
                     },
+                    "RegisterRequest": {
+                        "type": "object",
+                        "properties": {
+                            "display_name": {"type": "string", "example": "Alice"},
+                            "key_label": {"type": "string", "example": "primary"},
+                        },
+                    },
+                    "RegisterResponse": {
+                        "type": "object",
+                        "properties": {
+                            "user": {"type": "object"},
+                            "api_key": {"type": "string", "description": "Plaintext API key, shown ONCE."},
+                            "warning": {"type": "string"},
+                        },
+                    },
+                    "TopupPack": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "example": "pack_30"},
+                            "label": {"type": "string", "example": "标准包"},
+                            "amount_yuan": {"type": "integer", "example": 30},
+                            "amount_fen": {"type": "integer", "example": 3000},
+                            "credits": {"type": "integer", "example": 3000},
+                            "description": {"type": "string"},
+                        },
+                    },
+                    "TopupPacksResponse": {
+                        "type": "object",
+                        "properties": {
+                            "currency": {"type": "string", "example": "cny"},
+                            "min_custom_yuan": {"type": "integer", "example": 1},
+                            "max_custom_yuan": {"type": "integer", "example": 9999},
+                            "packs": {"type": "array", "items": {"$ref": "#/components/schemas/TopupPack"}},
+                            "stripe_configured": {"type": "boolean"},
+                            "stripe_publishable_key": {"type": "string", "nullable": True},
+                            "stripe_mode": {"type": "string", "enum": ["test", "live"]},
+                        },
+                    },
+                    "CheckoutCreateRequest": {
+                        "type": "object",
+                        "description": "Provide exactly one of pack_id (preset SKU) or custom_yuan (1-9999 元).",
+                        "properties": {
+                            "pack_id": {"type": "string", "example": "pack_30"},
+                            "custom_yuan": {"type": "integer", "minimum": 1, "maximum": 9999, "example": 50},
+                        },
+                    },
+                    "CheckoutCreateResponse": {
+                        "type": "object",
+                        "properties": {
+                            "checkout_url": {"type": "string", "format": "uri", "description": "Redirect the user's browser here."},
+                            "session_id": {"type": "string"},
+                            "amount_fen": {"type": "integer"},
+                            "credits": {"type": "integer"},
+                            "currency": {"type": "string"},
+                        },
+                    },
+                    "StripeWebhookResponse": {
+                        "type": "object",
+                        "properties": {
+                            "received": {"type": "boolean"},
+                            "user_id": {"type": "string"},
+                            "credits_added": {"type": "integer"},
+                            "balance_credits": {"type": "integer"},
+                            "duplicate": {"type": "boolean"},
+                        },
+                    },
                 },
             },
             "paths": {
@@ -1338,6 +1413,80 @@ def create_app(
                         "responses": {
                             "200": {"description": "Pricing", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PricingResponse"}}}},
                             "401": {"description": "Admin token required"},
+                        },
+                    }
+                },
+                "/v1/register": {
+                    "post": {
+                        "summary": "Open a new user account (public)",
+                        "description": (
+                            "No auth required. Auto-generates a user_id like `u_<8hex>` and"
+                            " returns a one-time plaintext API key. Starting balance is 0"
+                            " credits unless the operator has set the `REGISTER_INITIAL_CREDITS`"
+                            " env var. Designed to be called from `/register.html`."
+                        ),
+                        "requestBody": {
+                            "required": False,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegisterRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Account created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegisterResponse"}}}},
+                            "503": {"description": "Could not allocate a fresh user_id; transient — retry."},
+                        },
+                    }
+                },
+                "/v1/topup_packs": {
+                    "get": {
+                        "summary": "List available Stripe topup packs (catalog)",
+                        "description": "Public catalog endpoint. Returns the configured packs from `config/stripe_packs.json` plus whether Stripe is configured server-side.",
+                        "responses": {
+                            "200": {"description": "Pack catalog", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TopupPacksResponse"}}}},
+                        },
+                    }
+                },
+                "/v1/checkout/create": {
+                    "post": {
+                        "summary": "Create a Stripe Checkout Session for a topup",
+                        "description": (
+                            "Returns the hosted Checkout URL the user's browser should be"
+                            " redirected to. Body must contain exactly one of `pack_id`"
+                            " (preset SKU from /v1/topup_packs) or `custom_yuan` (1–9999元)."
+                            " Admin tokens are rejected — this endpoint requires a real user"
+                            " API key so the webhook knows who to credit."
+                        ),
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CheckoutCreateRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Checkout session created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CheckoutCreateResponse"}}}},
+                            "400": {"description": "Invalid pack_id / custom_yuan"},
+                            "401": {"description": "User API key required"},
+                            "502": {"description": "Stripe API error"},
+                            "503": {"description": "Stripe not configured on this server"},
+                        },
+                    }
+                },
+                "/webhooks/stripe": {
+                    "post": {
+                        "summary": "Stripe webhook receiver (public; signed by Stripe)",
+                        "description": (
+                            "Stripe POSTs `checkout.session.completed` here after a user pays."
+                            " Signature is verified via `STRIPE_WEBHOOK_SECRET_*`. On a paid"
+                            " session we call `service.topup(user_id, credits, request_id="
+                            "stripe:<session_id>)`, which is idempotent — Stripe's automatic"
+                            " retries never double-credit. Other event types are accepted with"
+                            " `{ignored_type}` so Stripe stops retrying."
+                        ),
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"type": "object", "description": "Raw Stripe event payload."}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Event accepted (or ignored)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StripeWebhookResponse"}}}},
+                            "400": {"description": "Stripe-Signature header missing or invalid"},
+                            "503": {"description": "STRIPE_WEBHOOK_SECRET_* not configured"},
                         },
                     }
                 },
@@ -2341,6 +2490,174 @@ def create_app(
             return api_error(404, "key_not_found", "no api key with that prefix for this user.")
         revoked = billing_service.revoke_api_key(match["api_key_hash"])
         return jsonify({"user_id": auth["user_id"], "key_id": key_id, "revoked": bool(revoked)})
+
+    # --- self-service registration ---------------------------------------
+
+    @app.route("/v1/register", methods=["POST"])
+    def v1_register() -> Response:
+        """Public endpoint: open a fresh user account with a random user_id.
+
+        No auth. Returns the one-time API key plaintext. Display name and
+        a starter credit grant can be set via env vars (kept zero by
+        default so we don't give away credits).
+        """
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            initial = int(os.environ.get("REGISTER_INITIAL_CREDITS", "0"))
+        except ValueError:
+            initial = 0
+        if initial < 0:
+            initial = 0
+        # 8 hex chars = ~4 billion combinations; collision retry below.
+        for attempt in range(5):
+            user_id = "u_" + uuid.uuid4().hex[:8]
+            try:
+                out = billing_service.create_user(
+                    user_id=user_id,
+                    display_name=(data.get("display_name") or None),
+                    initial_credits=initial,
+                    issue_first_key=True,
+                    key_label=(data.get("key_label") or "primary"),
+                )
+                break
+            except ValueError:
+                if attempt == 4:
+                    return api_error(503, "register_collision", "could not allocate a fresh user_id; try again")
+                continue
+        return jsonify(
+            {
+                "user": out["user"],
+                "api_key": out.get("api_key_plaintext"),
+                "warning": "Save the api_key now — it will not be shown again.",
+            }
+        )
+
+    # --- topup packs (catalog) -------------------------------------------
+
+    @app.route("/v1/topup_packs", methods=["GET"])
+    def v1_topup_packs() -> Response:
+        """Public catalog endpoint: list available Stripe topup packs."""
+        cfg = stripe_gateway.pack_config
+        body = cfg.to_public_json()
+        body["stripe_configured"] = stripe_gateway.configured
+        body["stripe_publishable_key"] = stripe_gateway.publishable_key or None
+        body["stripe_mode"] = stripe_gateway.mode
+        return jsonify(body)
+
+    # --- Stripe checkout creation ----------------------------------------
+
+    @app.route("/v1/checkout/create", methods=["POST"])
+    def v1_checkout_create() -> Response:
+        """Authenticated user creates a Stripe Checkout Session.
+
+        Body: ``{pack_id?: str, custom_yuan?: int}`` — exactly one required.
+        Returns ``{checkout_url, session_id, amount_fen, credits, currency}``.
+        Admin tokens cannot create checkouts (since there's no real user_id
+        bound to admin).
+        """
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err is not None:
+            return err
+        if not stripe_gateway.configured:
+            return api_error(
+                503,
+                "stripe_not_configured",
+                "Stripe SDK is not configured on this server. Contact the admin.",
+            )
+        data = request.get_json(force=True, silent=True) or {}
+        pack_id = (data.get("pack_id") or "").strip() or None
+        custom_yuan = data.get("custom_yuan")
+        if custom_yuan is not None:
+            try:
+                custom_yuan = int(custom_yuan)
+            except (TypeError, ValueError):
+                return api_error(400, "invalid_custom_yuan", "custom_yuan must be int")
+        try:
+            amount = stripe_gateway.resolve_amount(pack_id=pack_id, custom_yuan=custom_yuan)
+        except ValueError as e:
+            return api_error(400, "invalid_amount", str(e))
+        try:
+            session = stripe_gateway.build_checkout_session(
+                user_id=auth["user_id"],
+                amount_fen=amount["amount_fen"],
+                credits=amount["credits"],
+                currency=amount["currency"],
+                label=amount["label"],
+            )
+        except StripeNotConfiguredError as e:
+            return api_error(503, "stripe_not_configured", str(e))
+        except Exception as e:  # noqa: BLE001 — anything Stripe raises bubbles up here
+            return api_error(502, "stripe_error", f"checkout creation failed: {e}")
+        return jsonify(
+            {
+                "checkout_url": session["url"],
+                "session_id": session["id"],
+                "amount_fen": session["amount_fen"],
+                "credits": session["credits"],
+                "currency": session["currency"],
+            }
+        )
+
+    # --- Stripe webhook --------------------------------------------------
+
+    @app.route("/webhooks/stripe", methods=["POST"])
+    def webhooks_stripe() -> Response:
+        """Receive Stripe webhooks (checkout.session.completed → topup).
+
+        Signature verification is mandatory. Idempotent on
+        ``checkout_session.id`` so Stripe retries don't double-credit.
+        """
+        if not stripe_gateway.webhook_configured:
+            return api_error(503, "stripe_webhook_not_configured", "STRIPE_WEBHOOK_SECRET_* missing")
+        signature = request.headers.get("Stripe-Signature", "")
+        payload = request.get_data()
+        try:
+            event = stripe_gateway.verify_webhook(payload, signature)
+        except StripeSignatureError as e:
+            return api_error(400, "stripe_signature_invalid", str(e))
+        except StripeNotConfiguredError as e:
+            return api_error(503, "stripe_webhook_not_configured", str(e))
+
+        event_type = event.get("type", "")
+        if event_type != "checkout.session.completed":
+            # Not interested — but still 200 OK so Stripe stops retrying.
+            return jsonify({"received": True, "ignored_type": event_type})
+
+        parsed = stripe_gateway.parse_checkout_completed(event)
+        if parsed is None:
+            return jsonify({"received": True, "ignored_reason": "session not paid or missing fields"})
+
+        try:
+            receipt = billing_service.topup(
+                parsed["user_id"],
+                parsed["credits"],
+                request_id=f"stripe:{parsed['session_id']}",
+                meta={
+                    "source": "stripe",
+                    "session_id": parsed["session_id"],
+                    "currency": parsed["currency"],
+                    "amount_fen": parsed["amount_fen"],
+                    "customer_email": parsed.get("customer_email"),
+                    "payment_intent": parsed.get("payment_intent"),
+                },
+            )
+            duplicate = False
+            balance_after = receipt.balance_after
+        except DuplicateRequestError as dup:
+            # Stripe retries are expected; surface 200 OK so it stops.
+            duplicate = True
+            balance_after = dup.balance_after
+        except UnknownUserError as e:
+            return api_error(404, "unknown_user", str(e))
+        return jsonify(
+            {
+                "received": True,
+                "user_id": parsed["user_id"],
+                "credits_added": parsed["credits"],
+                "balance_credits": balance_after,
+                "duplicate": duplicate,
+            }
+        )
 
     # --- admin -----------------------------------------------------------
 

@@ -5,7 +5,8 @@ This package exposes the existing BaZi agent as a customer-facing demo API with 
 ## What Is Included
 
 - `GET /` - existing Web demo console
-- `GET /billing.html` - user self-service portal (balance / usage / API keys)
+- `GET /register.html` - one-button signup (issues a new user_id + first API key)
+- `GET /billing.html` - user self-service portal (balance / usage / API keys / Stripe topup)
 - `GET /admin.html` - admin console (open users / topup / ledger; needs `DEMO_API_TOKEN`)
 - `GET /docs` - Swagger UI for API testing
 - `GET /openapi.json` - OpenAPI specification
@@ -18,6 +19,10 @@ This package exposes the existing BaZi agent as a customer-facing demo API with 
 - `POST /v1/api_keys`, `GET /v1/api_keys`, `DELETE /v1/api_keys/{prefix}` - user API key management
 - `POST /admin/users`, `GET /admin/users`, `POST /admin/users/{id}/status` - admin user management
 - `POST /admin/topup`, `GET /admin/ledger`, `GET /admin/pricing` - admin billing management
+- `POST /v1/register` - public self-signup (auto-generates `user_id`, returns one-time API key)
+- `GET /v1/topup_packs` - public pack catalog (¥10/¥30/¥100 + custom amount)
+- `POST /v1/checkout/create` (user) - creates a Stripe Checkout Session URL
+- `POST /webhooks/stripe` - Stripe webhook receiver (verifies signature, idempotent topup)
 
 The legacy `/api/*` endpoints remain available for the bundled Web console. Customer integrations should use `/v1/*`.
 
@@ -134,17 +139,17 @@ The server now runs **two parallel auth schemes** for `/v1/*` endpoints:
 
 ### Pricing (defaults in `config/pricing.json`)
 
-1 元 = 100 credits. Override per deploy by editing the JSON file (and restarting).
+**1 元 = 100 credits = 100 fen** (Stripe sends amounts in CNY's smallest unit, fen, so the topup amount is always equal to the credits added 1:1). Override per deploy by editing the JSON file (and restarting).
 
-| Endpoint | Cost (credits) | Notes |
-|----------|---------------:|-------|
-| `/v1/cezi/ask`  | 30 | cheapest |
-| `/v1/najia/ask` | 50 | + 30 with `paraphrase=true` |
-| `/v1/zwds/ask`  | 80 | + 70 with `include_star_gong=true` |
-| `/v1/hepan/ask` | 100 | requires two BaZi computations |
-| `/v1/ask`, `/v1/ask_stream` | 200 | full BaZi DAG |
+| Endpoint | Cost (credits) | ≈ ¥ | Notes |
+|----------|---------------:|---:|-------|
+| `/v1/cezi/ask`  | 100 | ¥1 | 测字, cheapest |
+| `/v1/najia/ask` | 200 | ¥2 | 六爻 base; ¥4 with `paraphrase=true` (步骤2 加 200) |
+| `/v1/hepan/ask` | 300 | ¥3 | 合盘 — runs two BaZi computations |
+| `/v1/zwds/ask`  | 400 | ¥4 | 紫微; ¥7 with `include_star_gong=true` |
+| `/v1/ask`, `/v1/ask_stream` | 500 | ¥5 | 八字, full DAG |
 
-Default for any unconfigured endpoint: 50 credits.
+Default for any unconfigured endpoint: 100 credits.
 
 ### Concurrency & rate limits
 
@@ -183,6 +188,90 @@ curl -X POST http://localhost:8000/admin/users/u_alice/status \
   -H "Content-Type: application/json" \
   -d '{"status":"disabled"}'
 ```
+
+### Stripe payment self-service
+
+Users can register and pay for credits without admin involvement once the
+Stripe environment variables are configured.
+
+**One-time setup:**
+
+1. Sign in at https://dashboard.stripe.com → Developers → API keys.
+   Copy the **Test secret key** (`sk_test_...`) and **Test publishable
+   key** (`pk_test_...`) into `.env`:
+
+   ```env
+   STRIPE_MODE=test
+   STRIPE_SECRET_KEY_TEST=sk_test_...
+   STRIPE_PUBLISHABLE_KEY_TEST=pk_test_...
+   ```
+
+2. Install the [Stripe CLI](https://docs.stripe.com/stripe-cli) and run
+   it in a separate terminal so webhook events tunnel into your local
+   server:
+
+   ```powershell
+   stripe listen --forward-to http://localhost:8000/webhooks/stripe
+   # Copy the printed `whsec_...` into .env as STRIPE_WEBHOOK_SECRET_TEST
+   ```
+
+3. Set the redirect URLs in `.env`:
+
+   ```env
+   STRIPE_SUCCESS_URL=http://localhost:8000/billing.html?status=success&session_id={CHECKOUT_SESSION_ID}
+   STRIPE_CANCEL_URL=http://localhost:8000/billing.html?status=cancelled
+   ```
+
+4. Restart the server. `/health` should now expose
+   `stripe_configured: true` (via `/v1/topup_packs`).
+
+5. **Production:** swap `_TEST` for `_LIVE` and `STRIPE_MODE=live`. In
+   the dashboard, add a webhook endpoint pointing at
+   `https://YOUR_HOST/webhooks/stripe` listening to
+   `checkout.session.completed`, then copy that `whsec_...` to
+   `STRIPE_WEBHOOK_SECRET_LIVE`.
+
+**End-user flow:**
+
+1. Visit `/register.html` → click "开通账户" → save the displayed API key.
+2. Visit `/billing.html` → choose a pack (¥10/¥30/¥100) or custom amount
+   → redirects to Stripe Checkout (card or WeChat Pay).
+3. After payment, Stripe redirects back; the page polls `/v1/balance`
+   for ~5 seconds while the webhook lands and shows
+   "✓ 已到账" once credits arrive.
+
+**Test cards** (Stripe test mode):
+
+| Brand | Number | Outcome |
+|-------|--------|---------|
+| Visa  | `4242 4242 4242 4242` | Always succeeds |
+| Visa  | `4000 0000 0000 9995` | Insufficient funds |
+| 3D-Secure | `4000 0027 6000 3184` | Authentication required |
+
+Expiry: any future date. CVC: any 3 digits.
+
+**Idempotency:** `/webhooks/stripe` keys topups by
+`stripe:<checkout_session_id>`. If Stripe retries the same event, the
+second attempt returns `200 OK` with `duplicate=true` and no extra
+credit is granted.
+
+**Smoke test the full flow:**
+
+```powershell
+# Terminal A — server with stripe configured
+.\.venv\Scripts\python.exe web_server.py
+
+# Terminal B — webhook tunnel
+stripe listen --forward-to http://localhost:8000/webhooks/stripe
+
+# Terminal C — driver
+.\.venv\Scripts\python.exe scripts\smoke_stripe.py --pack pack_30
+# Open the printed Checkout URL, pay with 4242, watch balance flip to 3000.
+```
+
+**Configuring packs:** edit `config/stripe_packs.json` (no code change
+required). Each entry must satisfy `amount_fen == amount_yuan * 100`
+and `credits == amount_fen` if you want to keep the 1:1 invariant.
 
 **Web UIs**: open `/admin.html` for a one-page admin console (paste `DEMO_API_TOKEN` once, then create/topup/inspect via buttons), or use the PowerShell helpers:
 

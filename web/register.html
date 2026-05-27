@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>开通账户 · BaZi Agent</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --card-bg: #ffffff;
+  --border: #e2e3e5;
+  --muted: #6c6f73;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --warn: #b45309;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card-bg: #1f2024;
+    --border: #2c2d31;
+    --muted: #9aa0a6;
+    --accent: #60a5fa;
+    --accent-hover: #93c5fd;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: inherit;
+  line-height: 1.6;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+.wrap { width: min(560px, 92vw); padding: 32px 0; }
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 26px;
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+}
+h1 { margin: 0 0 8px; font-size: 22px; }
+.sub { color: var(--muted); font-size: 14px; margin-bottom: 22px; }
+button.primary {
+  font: inherit; padding: 12px 22px; cursor: pointer;
+  background: var(--accent); color: white; border: 1px solid var(--accent);
+  border-radius: 8px; font-weight: 500; font-size: 16px;
+}
+button.primary:hover { background: var(--accent-hover); }
+button.primary:disabled { opacity: 0.55; cursor: progress; }
+.kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: rgba(127,127,127,0.12); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.field input { width: 100%; font: inherit; padding: 9px 11px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: inherit; }
+.success { display: none; }
+.success.shown { display: block; }
+.muted { color: var(--muted); font-size: 13px; }
+.warn-box {
+  background: rgba(180,83,9,0.10); border-left: 3px solid var(--warn);
+  padding: 10px 14px; margin: 12px 0; font-size: 13px; border-radius: 0 6px 6px 0;
+}
+.api-key {
+  font-family: ui-monospace, monospace; font-size: 14px;
+  background: rgba(127,127,127,0.12); padding: 12px 14px; border-radius: 6px;
+  word-break: break-all; user-select: all;
+}
+.copy-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.copy-row button { font: inherit; cursor: pointer; padding: 6px 10px; border-radius: 5px; border: 1px solid var(--border); background: transparent; color: inherit; }
+.next-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.next-row a { display: inline-block; padding: 9px 16px; border-radius: 6px; text-decoration: none; }
+.next-row a.primary { background: var(--accent); color: white; }
+.next-row a.ghost { border: 1px solid var(--border); color: inherit; }
+.error-box { display: none; background: rgba(196,61,61,0.12); color: #c43d3d; padding: 10px 14px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
+.error-box.shown { display: block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="step-register">
+    <h1>开通 BaZi Agent 账户</h1>
+    <div class="sub">点一下就好，30 秒内拿到你的 API key。</div>
+    <div class="field">
+      <label for="displayName">昵称（可选）</label>
+      <input id="displayName" placeholder="留空也行"/>
+    </div>
+    <button class="primary" id="btnRegister">开通账户</button>
+    <div class="error-box" id="regError"></div>
+    <p class="muted" style="margin-top:18px;">已有 API key？<a href="/billing.html">直接去充值/查询</a></p>
+  </div>
+
+  <div class="card success" id="step-success">
+    <h1>账户已开通 ✓</h1>
+    <div class="sub">下方是你的 user_id 和 API key。<strong>API key 只显示这一次</strong>，请立即保存。</div>
+    <div class="field">
+      <label>user_id</label>
+      <div class="api-key" id="userIdOut"></div>
+    </div>
+    <div class="field">
+      <label>API key</label>
+      <div class="api-key" id="apiKeyOut"></div>
+      <div class="copy-row">
+        <button id="btnCopy">复制 API key</button>
+        <span class="muted" id="copyHint"></span>
+      </div>
+    </div>
+    <div class="warn-box">
+      把上面这串字符像密码一样保存好。丢了就只能让 admin 重新发一个。
+    </div>
+    <div class="next-row">
+      <a href="#" id="goBilling" class="primary">下一步：充值</a>
+      <a href="/docs" class="ghost">查看 API 文档</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function doRegister() {
+  const btn = $("btnRegister");
+  btn.disabled = true;
+  btn.textContent = "开通中…";
+  $("regError").className = "error-box";
+  try {
+    const r = await fetch("/v1/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        display_name: $("displayName").value.trim() || undefined,
+      }),
+    });
+    const text = await r.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { body = { error: { message: text } }; }
+    if (!r.ok) {
+      throw new Error(body?.error?.message || ("HTTP " + r.status));
+    }
+    showSuccess(body);
+  } catch (e) {
+    $("regError").textContent = "开通失败：" + (e.message || e);
+    $("regError").className = "error-box shown";
+    btn.disabled = false;
+    btn.textContent = "重试";
+  }
+}
+
+function showSuccess(body) {
+  const userId = body.user.user_id;
+  const apiKey = body.api_key;
+  $("userIdOut").textContent = userId;
+  $("apiKeyOut").textContent = apiKey;
+  // Stash the key in localStorage so /billing.html auto-fills.
+  try {
+    localStorage.setItem("bazi_billing_api_key", apiKey);
+    localStorage.setItem("bazi_user_id", userId);
+  } catch {}
+  $("step-register").style.display = "none";
+  $("step-success").className = "card success shown";
+  $("goBilling").href = "/billing.html";
+}
+
+$("btnRegister").addEventListener("click", doRegister);
+$("btnCopy").addEventListener("click", async () => {
+  const key = $("apiKeyOut").textContent;
+  try {
+    await navigator.clipboard.writeText(key);
+    $("copyHint").textContent = "已复制";
+    setTimeout(() => { $("copyHint").textContent = ""; }, 2000);
+  } catch {
+    $("copyHint").textContent = "复制失败，请手动选中";
+  }
+});
+</script>
+</body>
+</html>

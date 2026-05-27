@@ -17,12 +17,26 @@ from .errors import (
 from .pricing import Pricing
 from .service import BillingService, ChargeReceipt
 from .store import BillingStore
+from .stripe_gateway import (
+    StripeGateway,
+    StripeNotConfiguredError,
+    StripeSignatureError,
+    TopupPack,
+    TopupPackConfig,
+    load_pack_config,
+)
 
 __all__ = [
     "BillingService",
     "BillingStore",
     "ChargeReceipt",
     "Pricing",
+    "StripeGateway",
+    "StripeNotConfiguredError",
+    "StripeSignatureError",
+    "TopupPack",
+    "TopupPackConfig",
+    "load_pack_config",
     "BillingError",
     "DailyLimitExceededError",
     "InsufficientFundsError",

@@ -17,6 +17,7 @@ in-flight limits, and rate limiting.
 | `pricing.py` | Loads `config/pricing.json`. `Pricing.cost(endpoint, variant_params)` returns credits. |
 | `middleware.py` | Flask helpers: `BillingHelpers.authenticate_request`, `try_charge`, `settle`, `refund`, `with_billing` decorator. |
 | `errors.py` | Exception hierarchy. |
+| `stripe_gateway.py` | Stripe SDK façade: `StripeGateway.from_env()`, `build_checkout_session()`, `verify_webhook()`, `parse_checkout_completed()`, `resolve_amount(pack_id|custom_yuan)`. Loads pack catalog from `config/stripe_packs.json`. |
 
 `BillingService` is composed in `web_server.create_app` and held inside the
 `BillingHelpers` instance. Each endpoint calls `_begin_billed_request(...)`
@@ -64,11 +65,15 @@ Clients can safely retry network-flapping calls by reusing `X-Request-Id`.
 
 ```json
 {
-  "default_credits": 50,
-  "endpoints":  {"/v1/cezi/ask": 30, "/v1/zwds/ask": 80, ...},
-  "variants":   {"/v1/zwds/ask?include_star_gong=true": 150, ...}
+  "default_credits": 100,
+  "endpoints":  {"/v1/cezi/ask": 100, "/v1/najia/ask": 200, "/v1/hepan/ask": 300, "/v1/zwds/ask": 400, "/v1/ask": 500, "/v1/ask_stream": 500},
+  "variants":   {"/v1/zwds/ask?include_star_gong=true": 700, "/v1/najia/ask?paraphrase=true": 400}
 }
 ```
+
+1 元 = 100 credits = 100 fen (CNY's smallest unit). This invariant lets
+us trust Stripe's `amount_total` (returned in fen) as the credit count
+when topping up via the webhook.
 
 Variant lookup precedence: `variants[exact_key] > endpoints[endpoint] > default_credits`.
 Variant keys are built deterministically (`sorted(name=lowercased_value)`)
@@ -90,9 +95,41 @@ body must equal the auth-bound user_id. Admin requests can pass any user_id
 
 ---
 
+## Stripe payments
+
+`stripe_gateway.StripeGateway` is constructed once in
+`web_server.create_app` from environment variables (`STRIPE_MODE`,
+`STRIPE_SECRET_KEY_TEST/_LIVE`, `STRIPE_WEBHOOK_SECRET_TEST/_LIVE`,
+`STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`). The Stripe SDK is imported
+lazily inside the two methods that need it (`build_checkout_session`,
+`verify_webhook`) so the rest of the codebase still loads when `stripe`
+isn't installed.
+
+Three HTTP endpoints wire it up:
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `POST /v1/register` | none | Public self-signup. Auto-generates `user_id = u_<8hex>`, returns one-time API key. Initial credits taken from `REGISTER_INITIAL_CREDITS` env (default 0). |
+| `GET /v1/topup_packs` | none | Public catalog: list packs from `config/stripe_packs.json` plus `stripe_configured` flag. |
+| `POST /v1/checkout/create` | user API key | Builds a Stripe Checkout Session (card + WeChat Pay), returns `{checkout_url, session_id}`. Admin tokens are rejected (no real `user_id` to bind to). |
+| `POST /webhooks/stripe` | Stripe-Signature header | Verifies signature, parses `checkout.session.completed`, calls `service.topup(user_id, credits, request_id="stripe:<session_id>")`. Idempotent — duplicate sessions return `duplicate=true` with no extra credit. |
+
+`stripe_gateway.resolve_amount(pack_id|custom_yuan)` enforces the
+range `[min_custom_yuan, max_custom_yuan]` from `stripe_packs.json` and
+returns `{amount_fen, credits, currency, label, pack_id}`.
+
+The gateway JSON-serializes the verified Stripe event (via
+`to_dict_recursive` → `to_dict` → `json.dumps` fallback) so callers
+never depend on the SDK's runtime types.
+
+---
+
 ## Tests
 
 - `tests/test_billing.py` — unit tests on `BillingStore` / `BillingService` / `Pricing` (auth, charge/settle/refund, idempotency, inflight, rate limit, daily-limit, concurrent-charge stress, `update_charge_meta` merge).
 - `tests/test_endpoint_billing.py` — Flask `test_client` tests covering all `/v1/*` and `/admin/*` paths, admin bypass, validation refunds, orchestrator-exception refunds, SSE billing events, daily-limit 402, `user_id_mismatch`, and the `llm_usage` → ledger meta plumbing.
+- `tests/test_stripe_gateway.py` — `StripeGateway` unit tests with mocked SDK (pack lookup, custom amounts, checkout kwargs, real-HMAC webhook signature verification, payload parsing).
+- `tests/test_endpoint_stripe.py` — endpoint tests for `/v1/register`, `/v1/topup_packs`, `/v1/checkout/create`, `/webhooks/stripe` (idempotent topup, bad signature, unconfigured server, unknown user).
 - `scripts/smoke_billing.py` — production smoke test that hits a running server end-to-end (supports `--allow-stub` for stub-mode validation).
 - `scripts/smoke_sse_billing.py` — smoke for the SSE billing event wire format.
+- `scripts/smoke_stripe.py` — drives a full Checkout flow end-to-end against a running server + `stripe listen`. Prints the URL to open and polls `/v1/balance` until the webhook lands.
