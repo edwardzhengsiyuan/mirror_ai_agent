@@ -2620,8 +2620,11 @@ def create_app(
             return api_error(503, "stripe_webhook_not_configured", str(e))
 
         event_type = event.get("type", "")
-        if event_type != "checkout.session.completed":
-            # Not interested — but still 200 OK so Stripe stops retrying.
+        if event_type not in StripeGateway.PAID_EVENT_TYPES:
+            # Other event types (refund, expired, async_payment_failed, …)
+            # — ack with 200 so Stripe stops retrying. We log the type so
+            # operators can see what's coming through if they ever subscribe
+            # to extra events.
             return jsonify({"received": True, "ignored_type": event_type})
 
         parsed = stripe_gateway.parse_checkout_completed(event)

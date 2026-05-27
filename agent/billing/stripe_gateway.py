@@ -397,15 +397,26 @@ class StripeGateway:
 
     # -- event helpers --------------------------------------------------
 
+    # Event types we treat as "payment is final, give the user credits".
+    # ``async_payment_succeeded`` covers payment methods that confirm later
+    # (Alipay, SEPA, ACH, …); WeChat Pay routes through ``completed``.
+    PAID_EVENT_TYPES = (
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+    )
+
     @staticmethod
     def parse_checkout_completed(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Pull the fields we care about out of a checkout.session.completed event.
+        """Pull the fields we care about out of a paid Checkout Session event.
 
-        Returns ``None`` for any other event type or a payment-not-yet-paid session.
+        Accepts both ``checkout.session.completed`` (the common case for
+        card / WeChat Pay) and ``checkout.session.async_payment_succeeded``
+        (delayed methods like Alipay / SEPA). Returns ``None`` for any
+        other event type or a payment-not-yet-paid session.
         """
         if not isinstance(event, dict):
             return None
-        if event.get("type") != "checkout.session.completed":
+        if event.get("type") not in StripeGateway.PAID_EVENT_TYPES:
             return None
         session = (event.get("data") or {}).get("object") or {}
         if session.get("payment_status") not in ("paid", "no_payment_required"):

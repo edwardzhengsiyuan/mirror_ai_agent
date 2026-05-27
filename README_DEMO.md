@@ -227,9 +227,20 @@ Stripe environment variables are configured.
 
 5. **Production:** swap `_TEST` for `_LIVE` and `STRIPE_MODE=live`. In
    the dashboard, add a webhook endpoint pointing at
-   `https://YOUR_HOST/webhooks/stripe` listening to
-   `checkout.session.completed`, then copy that `whsec_...` to
+   `https://YOUR_HOST/webhooks/stripe`, then copy that `whsec_...` to
    `STRIPE_WEBHOOK_SECRET_LIVE`.
+
+   **Which events to subscribe?** The handler treats these two as
+   "credit the user":
+
+   | Event | Required? | Why |
+   |-------|-----------|-----|
+   | `checkout.session.completed` | ✅ | Fires for card and WeChat Pay (synchronous methods). |
+   | `checkout.session.async_payment_succeeded` | recommended | Fires for Alipay / SEPA / ACH after delayed confirmation. WeChat Pay does **not** trigger this, but subscribing is harmless and future-proofs you against adding async methods later. |
+
+   You can leave everything else off. Refunds, expired sessions, and
+   async failures are acked with HTTP 200 and ignored — `stripe listen
+   --events ...` works the same way.
 
 **End-user flow:**
 

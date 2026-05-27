@@ -118,7 +118,7 @@ Three HTTP endpoints wire it up:
 | `POST /v1/register` | none | Public self-signup. Auto-generates `user_id = u_<8hex>`, returns one-time API key. Initial credits taken from `REGISTER_INITIAL_CREDITS` env (default 0). |
 | `GET /v1/topup_packs` | none | Public catalog: list packs from `config/stripe_packs.json` plus `stripe_configured` flag. |
 | `POST /v1/checkout/create` | user API key | Builds a Stripe Checkout Session (card + WeChat Pay), returns `{checkout_url, session_id}`. Admin tokens are rejected (no real `user_id` to bind to). |
-| `POST /webhooks/stripe` | Stripe-Signature header | Verifies signature, parses `checkout.session.completed`, calls `service.topup(user_id, credits, request_id="stripe:<session_id>")`. Idempotent — duplicate sessions return `duplicate=true` instead of crediting twice. |
+| `POST /webhooks/stripe` | Stripe-Signature header | Verifies signature, parses `checkout.session.completed` **and** `checkout.session.async_payment_succeeded`, calls `service.topup(user_id, credits, request_id="stripe:<session_id>")`. Idempotent — duplicate sessions return `duplicate=true` instead of crediting twice. |
 
 Pack catalog (`config/stripe_packs.json`) holds `{amount_yuan,
 amount_fen, credits, label, description}` per pack. `stripe_gateway.resolve_amount`

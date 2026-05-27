@@ -392,6 +392,36 @@ def test_webhook_bad_signature_returns_400(client) -> None:
     assert resp.get_json()["error"]["code"] == "stripe_signature_invalid"
 
 
+def test_webhook_credits_on_async_payment_succeeded(client) -> None:
+    """Async payment methods (Alipay/SEPA/ACH) fire `async_payment_succeeded`
+    instead of `checkout.session.completed`. Both must credit the user."""
+    _make_user(client, user_id="u_alice", credits=0)
+    event = _checkout_completed_event("u_alice", "cs_test_async", 2000, 2000)
+    event["type"] = "checkout.session.async_payment_succeeded"
+    body, sig = _sign_event(event, WEBHOOK_SECRET)
+    resp = client.post("/webhooks/stripe", data=body, headers={"Stripe-Signature": sig})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["received"] is True
+    assert data["credits_added"] == 2000
+    assert data["balance_credits"] == 2000
+
+
+def test_webhook_async_payment_failed_is_ignored(client) -> None:
+    """Failed async payment must NOT credit the user."""
+    _make_user(client, user_id="u_alice", credits=0)
+    event = _checkout_completed_event("u_alice", "cs_test_failed", 1000, 1000)
+    event["type"] = "checkout.session.async_payment_failed"
+    body, sig = _sign_event(event, WEBHOOK_SECRET)
+    resp = client.post("/webhooks/stripe", data=body, headers={"Stripe-Signature": sig})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "ignored_type" in data
+    bal = client.get("/admin/users", headers=_admin_headers()).get_json()["users"]
+    alice = next(u for u in bal if u["user_id"] == "u_alice")
+    assert alice["balance_credits"] == 0
+
+
 def test_webhook_unknown_event_type_acked(client) -> None:
     """Stripe sends many event types; we ack non-checkout events without retrying."""
     event = {

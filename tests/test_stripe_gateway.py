@@ -393,8 +393,39 @@ def test_parse_checkout_completed_other_event_returns_none() -> None:
         StripeGateway.parse_checkout_completed({"type": "payment_intent.succeeded"})
         is None
     )
+    assert (
+        StripeGateway.parse_checkout_completed({"type": "checkout.session.expired"})
+        is None
+    )
+    assert (
+        StripeGateway.parse_checkout_completed({"type": "checkout.session.async_payment_failed"})
+        is None
+    )
     assert StripeGateway.parse_checkout_completed({}) is None
     assert StripeGateway.parse_checkout_completed("garbage") is None  # type: ignore[arg-type]
+
+
+def test_parse_checkout_completed_async_payment_succeeded_event() -> None:
+    """async_payment_succeeded fires for Alipay / SEPA / ACH after delayed
+    confirmation — it must be treated identically to .completed."""
+    event = {
+        "type": "checkout.session.async_payment_succeeded",
+        "data": {
+            "object": {
+                "id": "cs_test_async",
+                "payment_status": "paid",
+                "amount_total": 3000,
+                "currency": "cny",
+                "client_reference_id": "u_alice",
+                "metadata": {"user_id": "u_alice", "credits": "3000"},
+            }
+        },
+    }
+    parsed = StripeGateway.parse_checkout_completed(event)
+    assert parsed is not None
+    assert parsed["session_id"] == "cs_test_async"
+    assert parsed["user_id"] == "u_alice"
+    assert parsed["credits"] == 3000
 
 
 def test_parse_checkout_completed_falls_back_to_amount_when_metadata_missing() -> None:
