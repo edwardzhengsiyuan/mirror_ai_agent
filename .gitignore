@@ -12,6 +12,10 @@ storage/logs/
 storage/conversations/
 storage/profile_demo.json
 storage/users/
+storage/billing.db
+storage/billing.db-wal
+storage/billing.db-shm
+storage/*.json
 *.log
 
 # Editor/OS noise

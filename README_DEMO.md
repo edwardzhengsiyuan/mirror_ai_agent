@@ -5,13 +5,18 @@ This package exposes the existing BaZi agent as a customer-facing demo API with 
 ## What Is Included
 
 - `GET /` - existing Web demo console
+- `GET /billing.html` - user self-service portal (balance / usage / API keys)
 - `GET /docs` - Swagger UI for API testing
 - `GET /openapi.json` - OpenAPI specification
 - `GET /health` - health check
-- `POST /v1/users` - create or update a demo user profile
-- `GET /v1/users/{user_id}` - read a safe profile summary
-- `POST /v1/ask` - synchronous Q&A
-- `POST /v1/ask_stream` - Server-Sent Events streaming Q&A
+- `POST /v1/users` (admin) - create or update a profile (birth chart info)
+- `GET /v1/users/{user_id}` (admin) - read a safe profile summary
+- `POST /v1/ask`, `POST /v1/ask_stream` - BaZi Q&A (billed)
+- `POST /v1/hepan/ask`, `POST /v1/cezi/ask`, `POST /v1/najia/ask`, `POST /v1/zwds/ask` - other divination systems (billed)
+- `GET /v1/balance`, `GET /v1/usage` - user billing self-service
+- `POST /v1/api_keys`, `GET /v1/api_keys`, `DELETE /v1/api_keys/{prefix}` - user API key management
+- `POST /admin/users`, `GET /admin/users`, `POST /admin/users/{id}/status` - admin user management
+- `POST /admin/topup`, `GET /admin/ledger`, `GET /admin/pricing` - admin billing management
 
 The legacy `/api/*` endpoints remain available for the bundled Web console. Customer integrations should use `/v1/*`.
 
@@ -115,15 +120,104 @@ If any of those return non-200, inspect `docker compose logs bazi-agent-api` and
 - The waitress entrypoint is `waitress-serve --call web_server:create_app` (Python WSGI factory). To switch to gunicorn, swap the Dockerfile `CMD` to `gunicorn -w 2 -k gthread -t 600 -b 0.0.0.0:8000 'wsgi:app'` and add `gunicorn` to `requirements.txt`.
 - LLM token usage and prompt traces live in `storage/users/<user>/conversations/*.jsonl` — sensitive, do not expose publicly.
 
-## Authentication
+## Authentication & Billing
 
-All `/v1/*` endpoints require:
+The server now runs **two parallel auth schemes** for `/v1/*` endpoints:
 
-```http
-Authorization: Bearer <DEMO_API_TOKEN>
+| Scheme | Token | Use case | Charged? |
+|--------|-------|----------|----------|
+| **User API key** | `Bearer <api_key>` issued via `/admin/users` or `/v1/api_keys` | Customer-facing requests | Yes — credits deducted per call |
+| **Admin token** | `Bearer <DEMO_API_TOKEN>` | Internal smoke tests, the `/admin/*` endpoints, the bundled Web UI | No — admin requests bypass billing |
+
+`/docs`, `/openapi.json`, `/health`, and the existing Web UI remain public.
+
+### Pricing (defaults in `config/pricing.json`)
+
+1 元 = 100 credits. Override per deploy by editing the JSON file (and restarting).
+
+| Endpoint | Cost (credits) | Notes |
+|----------|---------------:|-------|
+| `/v1/cezi/ask`  | 30 | cheapest |
+| `/v1/najia/ask` | 50 | + 30 with `paraphrase=true` |
+| `/v1/zwds/ask`  | 80 | + 70 with `include_star_gong=true` |
+| `/v1/hepan/ask` | 100 | requires two BaZi computations |
+| `/v1/ask`, `/v1/ask_stream` | 200 | full BaZi DAG |
+
+Default for any unconfigured endpoint: 50 credits.
+
+### Concurrency & rate limits
+
+- Per user: **≤ 2** in-flight billable requests (overrides via `BILLING_INFLIGHT_LIMIT`).
+- Per API key: **≤ 10** requests / minute (overrides via `BILLING_RATE_LIMIT_PER_MIN`).
+
+### Admin cheatsheet
+
+```bash
+# 1. Create a user with starting credits and get a one-time API key
+curl -X POST http://localhost:8000/admin/users \
+  -H "Authorization: Bearer $DEMO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u_alice","display_name":"Alice","initial_credits":1000}'
+# response: {"user": {...}, "api_key": "<save-this-now>"}
+
+# 2. Top up
+curl -X POST http://localhost:8000/admin/topup \
+  -H "Authorization: Bearer $DEMO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u_alice","amount_credits":500,"note":"promo"}'
+
+# 3. List users / ledger
+curl -H "Authorization: Bearer $DEMO_API_TOKEN" http://localhost:8000/admin/users
+curl -H "Authorization: Bearer $DEMO_API_TOKEN" "http://localhost:8000/admin/ledger?user_id=u_alice&limit=20"
+
+# 4. Disable / re-enable a user (e.g. fraud, abuse)
+curl -X POST http://localhost:8000/admin/users/u_alice/status \
+  -H "Authorization: Bearer $DEMO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"disabled"}'
 ```
 
-The `/docs`, `/openapi.json`, `/health`, and existing Web UI are public by default. Do not place secrets in requests shown publicly.
+### User cheatsheet
+
+```bash
+# Check balance + recent usage
+curl -H "Authorization: Bearer $API_KEY" http://localhost:8000/v1/balance
+curl -H "Authorization: Bearer $API_KEY" "http://localhost:8000/v1/usage?limit=20"
+
+# Issue a second API key (e.g. for a phone app) and revoke it later
+curl -X POST -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"label":"phone-app"}' http://localhost:8000/v1/api_keys
+# Response includes the new "api_key" field — store it now (won't be shown again).
+
+curl -H "Authorization: Bearer $API_KEY" http://localhost:8000/v1/api_keys
+curl -X DELETE -H "Authorization: Bearer $API_KEY" \
+  http://localhost:8000/v1/api_keys/<first-12-hex-of-the-key>
+```
+
+A self-service web page is bundled at `/billing.html` — it stores the API key in `localStorage` and shows balance, usage and active keys.
+
+### Response headers (billed requests only)
+
+Every billed request returns:
+
+- `X-Charged-Credits: <int>` — how many credits this call cost.
+- `X-Balance-After: <int>` — the user's remaining balance after settlement.
+- `X-Request-Id: <uuid>` — pass back as `X-Request-Id` on retries to make the call idempotent.
+
+### SSE billing events
+
+`/v1/ask_stream` emits two extra events (in addition to `session`, `plan`, `response_delta`, etc.):
+
+```json
+{"type":"billing","stage":"charged","amount_credits":200,"balance_after":800,...}
+{"type":"billing","stage":"settled","amount_credits":200,"balance_after":800,...}
+```
+
+If the worker fails mid-stream, the final billing event has `stage:"refunded"` and the balance is restored.
+
+### Storage
+
+Billing data lives in `storage/billing.db` (SQLite, WAL mode). Override with the `BILLING_DB_PATH` env var. The repo's Docker bind-mount (`./storage:/app/storage`) already persists this across container restarts.
 
 ## Example Request
 

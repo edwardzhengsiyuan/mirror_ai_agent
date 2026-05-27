@@ -37,10 +37,12 @@ Backend agent for BaZi (八字, Four Pillars) Q&A: chart calculation (paipan), p
 | `agent/tools/` | Tool implementations (paipan, time_context, llm) |
 | `agent/prompts/` | Prompt templates |
 | `agent/storage/` | Profile/conversation storage |
+| `agent/billing/` | Credit accounting (SQLite-backed users / api_keys / ledger) |
 | `bazi/` | BaZi calculation engine |
 | `web/` | Web UI frontend |
 | `storage/` | User data and logs |
 | `tests/` | Test suite |
+| `config/pricing.json` | Per-endpoint price book (credits) |
 
 ---
 
@@ -79,6 +81,9 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `LLM_TRACE_RAW` | false | Include raw API response in llm_response events |
 | `LLM_FORCE_ERROR` | - | Force node errors (NODE1,NODE2\|ALL) |
 | `LLM_BYPASS_CACHE` | false | Skip all cache lookups and re-run nodes |
+| `BILLING_DB_PATH` | `<storage>/billing.db` | SQLite path for billing state |
+| `BILLING_INFLIGHT_LIMIT` | 2 | Max concurrent billable requests per user |
+| `BILLING_RATE_LIMIT_PER_MIN` | 10 | Max requests per minute per API key |
 
 **Available Models** (canonical list in `config/llm_routes.json`):
 - `gemini-3.1-pro-preview` (default, gptproto provider)

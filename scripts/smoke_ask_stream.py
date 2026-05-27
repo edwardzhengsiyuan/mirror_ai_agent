@@ -32,7 +32,7 @@ def post_json(url: str, payload: dict) -> "urllib.request.addinfourl":
     return urllib.request.urlopen(req, timeout=600)
 
 
-def stream(url: str, payload: dict) -> tuple[str | None, list[dict]]:
+def stream(url: str, payload: dict) -> tuple[str | None, list[dict], str]:
     events: list[dict] = []
     session_id: str | None = None
     answer_chunks: list[str] = []
@@ -55,19 +55,19 @@ def stream(url: str, payload: dict) -> tuple[str | None, list[dict]]:
                 session_id = event.get("session_id")
             elif etype == "plan":
                 plan = event.get("plan")
-            elif etype == "answer_delta":
+            elif etype == "response_delta":
                 answer_chunks.append(event.get("delta") or "")
-            elif etype == "answer":
-                if event.get("answer"):
-                    answer_chunks.append("\n[final]\n" + event["answer"])
-            elif etype == "error":
-                answer_chunks.append("\n[ERROR] " + str(event.get("message")))
+            elif etype == "response":
+                if event.get("text"):
+                    answer_chunks.append("\n[final]\n" + event["text"])
+            elif etype in ("error", "server_error"):
+                answer_chunks.append("\n[ERROR] " + str(event.get("message") or event.get("error")))
     print("---- plan ----")
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     print("---- answer (truncated) ----")
     text = "".join(answer_chunks)
     print(text[:600] + ("..." if len(text) > 600 else ""))
-    return session_id, events
+    return session_id, events, text
 
 
 def report_prompts(convo_path: str) -> None:
@@ -114,26 +114,38 @@ def main() -> int:
         "history_n": 0,
     }
     started = time.time()
-    session_id, events = stream(f"{base_url}/api/ask_stream", payload)
+    session_id, events, answer_text = stream(f"{base_url}/api/ask_stream", payload)
     elapsed = time.time() - started
     print(f"\nstreamed {len(events)} events in {elapsed:.2f}s session={session_id}")
+    print(f"answer length: {len(answer_text)} chars")
 
     if session_id:
         convo_path = os.path.join(args.conversation_root, args.user_id, "conversations", session_id)
         report_prompts(convo_path)
 
+    failures: list[str] = []
+
     plan_events = [e for e in events if e.get("type") == "plan"]
+    aspects: list[str] = []
     if plan_events:
         plan = plan_events[-1].get("plan") or {}
         aspects = plan.get("aspects") or []
         print(f"\nfinal aspects: {aspects}")
-        if "CAREER" in aspects and "OTHER" not in aspects:
-            print("[PASS] planner picked CAREER without falling back to OTHER")
-        elif "OTHER" in aspects:
-            print("[WARN] planner returned OTHER (fallback path)")
-        else:
-            print("[INFO] aspects:", aspects)
+    else:
+        failures.append("no plan event received")
 
+    if "CAREER" not in aspects:
+        failures.append(f"planner did not pick CAREER (aspects={aspects})")
+    elif "OTHER" in aspects:
+        failures.append(f"planner included OTHER fallback alongside CAREER (aspects={aspects})")
+
+    if not answer_text.strip():
+        failures.append("empty answer text streamed (no response_delta/response events captured)")
+
+    if failures:
+        print("\n[FAIL] " + "; ".join(failures))
+        return 1
+    print("\n[PASS] planner picked CAREER and answer streamed")
     return 0
 
 

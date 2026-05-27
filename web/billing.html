@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账户与计费 · BaZi Agent</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --card-bg: #ffffff;
+  --border: #e2e3e5;
+  --muted: #6c6f73;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --danger: #c43d3d;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card-bg: #1f2024;
+    --border: #2c2d31;
+    --muted: #9aa0a6;
+    --accent: #60a5fa;
+    --accent-hover: #93c5fd;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: inherit;
+  line-height: 1.5;
+}
+.wrap { max-width: 920px; margin: 0 auto; padding: 24px 18px 48px; }
+h1 { margin: 0 0 4px; font-size: 22px; }
+.sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.card h2 { margin: 0 0 12px; font-size: 16px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input, button, select {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: inherit;
+}
+input { flex: 1; min-width: 200px; }
+button {
+  background: var(--accent); color: white; border-color: var(--accent);
+  cursor: pointer; padding: 8px 14px;
+}
+button:hover { background: var(--accent-hover); }
+button.ghost { background: transparent; color: inherit; border-color: var(--border); }
+button.danger { background: var(--danger); border-color: var(--danger); }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
+.balance-big { font-size: 32px; font-weight: 600; }
+.balance-sub { font-size: 13px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+.kind-charge { color: #b45309; }
+.kind-refund { color: #15803d; }
+.kind-topup  { color: #2563eb; }
+.muted { color: var(--muted); }
+.status-msg { font-size: 13px; padding: 8px 10px; border-radius: 6px; margin-top: 10px; }
+.status-ok { background: rgba(34,197,94,0.12); color: #15803d; }
+.status-err { background: rgba(196,61,61,0.12); color: var(--danger); }
+.kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: rgba(127,127,127,0.12); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>账户与计费</h1>
+  <div class="sub">输入你的 API key 查看余额、用量与密钥；密钥本身保存在浏览器 <span class="kbd">localStorage</span>，不会上传到任何第三方。</div>
+
+  <div class="card">
+    <h2>API Key</h2>
+    <div class="row">
+      <input id="apiKey" type="password" placeholder="粘贴你的 API key"/>
+      <button id="btnSaveKey">保存</button>
+      <button id="btnReveal" class="ghost">显示</button>
+      <button id="btnClearKey" class="ghost">清除</button>
+    </div>
+    <div id="keyStatus" class="status-msg muted" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>余额</h2>
+    <div class="balance-big"><span id="balance">--</span> credits</div>
+    <div class="balance-sub">用户 ID: <span id="userId" class="kbd">未登录</span></div>
+    <div class="row" style="margin-top: 10px;">
+      <button id="btnRefreshBal" class="ghost">刷新余额</button>
+    </div>
+    <div id="balStatus" class="status-msg" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>最近用量 <span class="muted" style="font-weight:normal;font-size:12px;">(最多 30 条)</span></h2>
+    <div class="row">
+      <button id="btnRefreshUsage" class="ghost">刷新</button>
+    </div>
+    <table id="usageTable" style="margin-top: 10px;">
+      <thead>
+        <tr><th>时间</th><th>类型</th><th>endpoint</th><th>金额</th><th>余额后</th><th>状态</th></tr>
+      </thead>
+      <tbody><tr><td colspan="6" class="muted">未加载</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>API Keys</h2>
+    <table id="keysTable">
+      <thead>
+        <tr><th>label</th><th>key_id</th><th>创建</th><th>最近使用</th><th>状态</th><th></th></tr>
+      </thead>
+      <tbody><tr><td colspan="6" class="muted">未加载</td></tr></tbody>
+    </table>
+    <div class="row" style="margin-top: 12px;">
+      <input id="newKeyLabel" placeholder="新 key label (可选，例如 'phone-app')"/>
+      <button id="btnIssueKey">签发新 key</button>
+    </div>
+    <div id="keyIssueResult" class="status-msg" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = "bazi_billing_api_key";
+const $ = (id) => document.getElementById(id);
+
+function getKey() { return localStorage.getItem(STORAGE_KEY) || ""; }
+function setKey(k) {
+  if (k) localStorage.setItem(STORAGE_KEY, k);
+  else localStorage.removeItem(STORAGE_KEY);
+}
+
+function fmt(text, ok=true) {
+  const el = $("balStatus");
+  el.style.display = "block";
+  el.textContent = text;
+  el.className = "status-msg " + (ok ? "status-ok" : "status-err");
+}
+
+async function api(path, opts = {}) {
+  const key = getKey();
+  if (!key) { throw new Error("请先填写并保存 API key"); }
+  opts.headers = Object.assign({}, opts.headers || {}, {
+    "Authorization": "Bearer " + key,
+    "Content-Type": "application/json"
+  });
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { body = text; }
+  if (!r.ok) {
+    const msg = (body && body.error && body.error.message) || ("HTTP " + r.status);
+    const err = new Error(msg);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+async function refreshBalance() {
+  try {
+    const d = await api("/v1/balance");
+    $("balance").textContent = d.balance_credits;
+    $("userId").textContent = d.user_id;
+    fmt("余额已更新", true);
+  } catch (e) {
+    fmt(e.message || String(e), false);
+    $("balance").textContent = "--";
+    $("userId").textContent = "未登录";
+  }
+}
+
+async function refreshUsage() {
+  try {
+    const d = await api("/v1/usage?limit=30");
+    const tbody = $("usageTable").querySelector("tbody");
+    if (!d.rows || d.rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.rows.map(r => `
+      <tr>
+        <td>${(r.ts || "").replace("T", " ").slice(0, 19)}</td>
+        <td class="kind-${r.kind}">${r.kind}</td>
+        <td>${r.endpoint || "-"}</td>
+        <td>${r.amount_credits}</td>
+        <td>${r.balance_after}</td>
+        <td>${r.status}</td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    fmt(e.message, false);
+  }
+}
+
+async function refreshKeys() {
+  try {
+    const d = await api("/v1/api_keys");
+    const tbody = $("keysTable").querySelector("tbody");
+    if (!d.api_keys || d.api_keys.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">暂无 key</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.api_keys.map(k => `
+      <tr>
+        <td>${k.label || "<i class='muted'>(无)</i>"}</td>
+        <td><span class="kbd">${k.key_id}…</span></td>
+        <td>${(k.created_at || "").slice(0, 19).replace("T", " ")}</td>
+        <td>${(k.last_seen_at || "").slice(0, 19).replace("T", " ") || "-"}</td>
+        <td>${k.revoked ? "<span class='kind-refund'>已吊销</span>" : "active"}</td>
+        <td>${k.revoked ? "" : `<button class="danger" data-key="${k.key_id}">吊销</button>`}</td>
+      </tr>
+    `).join("");
+    tbody.querySelectorAll("button[data-key]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("确认吊销此 key？吊销后无法恢复。")) return;
+        try {
+          await api("/v1/api_keys/" + btn.dataset.key, { method: "DELETE" });
+          fmt("已吊销", true);
+          refreshKeys();
+        } catch (e) { fmt(e.message, false); }
+      });
+    });
+  } catch (e) { fmt(e.message, false); }
+}
+
+async function issueKey() {
+  const label = $("newKeyLabel").value.trim() || null;
+  try {
+    const d = await api("/v1/api_keys", {
+      method: "POST",
+      body: JSON.stringify({ label })
+    });
+    const out = $("keyIssueResult");
+    out.style.display = "block";
+    out.className = "status-msg status-ok";
+    out.innerHTML = `新 key: <span class="kbd">${d.api_key}</span><br><small class="muted">立即保存——刷新页面后将无法再看到。</small>`;
+    $("newKeyLabel").value = "";
+    refreshKeys();
+  } catch (e) {
+    const out = $("keyIssueResult");
+    out.style.display = "block";
+    out.className = "status-msg status-err";
+    out.textContent = e.message;
+  }
+}
+
+function refreshAll() { refreshBalance(); refreshUsage(); refreshKeys(); }
+
+// init
+$("apiKey").value = getKey();
+$("btnSaveKey").addEventListener("click", () => {
+  const v = $("apiKey").value.trim();
+  setKey(v);
+  const el = $("keyStatus");
+  el.style.display = "block";
+  el.textContent = v ? "已保存到 localStorage" : "已清除";
+  el.className = "status-msg " + (v ? "status-ok" : "muted");
+  refreshAll();
+});
+$("btnReveal").addEventListener("click", () => {
+  const inp = $("apiKey");
+  inp.type = inp.type === "password" ? "text" : "password";
+});
+$("btnClearKey").addEventListener("click", () => {
+  setKey("");
+  $("apiKey").value = "";
+  refreshAll();
+});
+$("btnRefreshBal").addEventListener("click", refreshBalance);
+$("btnRefreshUsage").addEventListener("click", refreshUsage);
+$("btnIssueKey").addEventListener("click", issueKey);
+
+if (getKey()) refreshAll();
+</script>
+</body>
+</html>

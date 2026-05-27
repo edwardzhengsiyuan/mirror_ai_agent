@@ -13,6 +13,15 @@ from typing import Any, Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from agent.billing import BillingService, BillingStore, Pricing
+from agent.billing.errors import (
+    BillingError,
+    DuplicateRequestError,
+    InsufficientFundsError,
+    UnknownApiKeyError,
+    UnknownUserError,
+)
+from agent.billing.middleware import BillingHelpers
 from agent.llm_config import available_models, configurable_nodes, default_model, validate_model
 from agent.orchestrator_cezi import run_cezi_turn
 from agent.orchestrator_hepan import run_hepan_turn
@@ -205,6 +214,131 @@ def create_app(
         if bearer_token() != expected:
             return api_error(401, "unauthorized", "Valid Bearer token required.")
         return None
+
+    # ------------------------------------------------------------------
+    # billing wiring
+    # ------------------------------------------------------------------
+
+    billing_db_path = (
+        os.environ.get("BILLING_DB_PATH")
+        or os.path.join(root, "billing.db")
+    )
+    billing_store = BillingStore(billing_db_path)
+    billing_pricing = Pricing.load()
+    try:
+        billing_inflight_limit = int(os.environ.get("BILLING_INFLIGHT_LIMIT", "2"))
+    except ValueError:
+        billing_inflight_limit = 2
+    try:
+        billing_rate_limit_per_min = int(os.environ.get("BILLING_RATE_LIMIT_PER_MIN", "10"))
+    except ValueError:
+        billing_rate_limit_per_min = 10
+    billing_service = BillingService(
+        billing_store,
+        inflight_limit=billing_inflight_limit,
+        rate_limit_per_minute=billing_rate_limit_per_min,
+    )
+    billing = BillingHelpers(
+        billing_service,
+        billing_pricing,
+        admin_token_getter=lambda: os.environ.get("DEMO_API_TOKEN", ""),
+    )
+
+    def _annotate_billing(response, charge, balance_after: Optional[int] = None):
+        """Attach X-Charged-Credits / X-Balance-After / X-Request-Id headers."""
+        if charge is None:
+            return response
+        if balance_after is None:
+            try:
+                balance_after = billing_service.get_balance(charge.user_id)
+            except UnknownUserError:
+                balance_after = charge.balance_after
+        response.headers["X-Charged-Credits"] = str(charge.amount_credits)
+        response.headers["X-Balance-After"] = str(balance_after)
+        response.headers["X-Request-Id"] = charge.request_id
+        return response
+
+    def _begin_billed_request(endpoint_path: str,
+                              variant_params: Optional[list] = None,
+                              defer_charge: bool = True):
+        """Authenticate and (optionally) charge a request.
+
+        Returns ``(auth, ctx, err_response)``. ``err_response`` is non-None
+        on auth/charge failure and should be returned immediately. ``ctx``
+        is a dict the caller uses to ``settle`` / ``refund`` / ``annotate``.
+        Admin bypass requests get a ctx where charge is a no-op.
+
+        With ``defer_charge=True`` the charge is not performed yet — call
+        ``ctx["charge"]()`` after validating the payload so a 400 doesn't
+        spend the user's credits.
+        """
+        auth, err = billing.authenticate_request(allow_admin_bypass=True)
+        if err is not None:
+            return None, None, err
+        is_admin = bool(auth.get("is_admin"))
+        state: Dict[str, Any] = {"receipt": None, "is_admin": is_admin, "auth": auth}
+
+        def do_charge() -> Optional[Any]:
+            if state["is_admin"] or state["receipt"] is not None:
+                return None
+            receipt, err_resp = billing.try_charge(
+                auth=auth,
+                endpoint=endpoint_path,
+                variant_params=variant_params,
+            )
+            if err_resp is not None:
+                return err_resp
+            state["receipt"] = receipt
+            return None
+
+        def do_settle() -> None:
+            if state["receipt"] is not None:
+                billing.settle(state["receipt"].request_id)
+
+        def do_refund(reason: str = "error") -> None:
+            if state["receipt"] is not None:
+                billing.refund(state["receipt"].request_id, reason)
+
+        def do_annotate(response):
+            return _annotate_billing(response, state["receipt"])
+
+        ctx = {
+            "is_admin": is_admin,
+            "auth": auth,
+            "charge": do_charge,
+            "settle": do_settle,
+            "refund": do_refund,
+            "annotate": do_annotate,
+            "state": state,
+        }
+        if not defer_charge and not is_admin:
+            err_resp = do_charge()
+            if err_resp is not None:
+                return None, None, err_resp
+        return auth, ctx, None
+
+    def _resolved_user_id(ctx: Dict[str, Any], body_user_id: Optional[str], default: str = "demo_guest"):
+        """Pick the user_id for a request.
+
+        For admin (legacy DEMO_API_TOKEN) callers the body value wins, falling
+        back to ``default``. For real users the auth-bound ``user_id`` always
+        wins; if the body sent a different ``user_id`` we reject 403.
+        """
+        body_uid = (body_user_id or "").strip()
+        if ctx["is_admin"]:
+            user_id = body_uid or default
+            id_error = validate_safe_id(user_id, "user_id")
+            if id_error:
+                return None, api_error(400, "invalid_user_id", id_error)
+            return user_id, None
+        auth_uid = ctx["auth"]["user_id"]
+        if body_uid and body_uid != auth_uid:
+            return None, api_error(
+                403,
+                "user_id_mismatch",
+                f"user_id in body ({body_uid}) does not match authenticated user ({auth_uid}).",
+            )
+        return auth_uid, None
 
     def public_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -859,14 +993,23 @@ def create_app(
 
     @app.route("/v1/ask", methods=["POST"])
     def v1_ask() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
+        auth, ctx, err = _begin_billed_request("/v1/ask")
+        if err:
+            return err
         data = request.get_json(force=True) or {}
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="bazi_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         prepared, error_response = run_v1_request(data)
         if error_response:
             return error_response
         assert prepared is not None
+
+        err = ctx["charge"]()
+        if err:
+            return err
 
         profile = prepared["profile"]
         convo_path = prepared["convo_path"]
@@ -874,18 +1017,28 @@ def create_app(
         def sink(event: Dict) -> None:
             log_event_to_conversation(convo_path, event)
 
-        result = run_turn_func(
-            profile,
-            prepared["question"],
-            now=prepared["now"],
-            event_sink=sink,
-            history_rounds=prepared["history_rounds"],
-        )
+        try:
+            result = run_turn_func(
+                profile,
+                prepared["question"],
+                now=prepared["now"],
+                event_sink=sink,
+                history_rounds=prepared["history_rounds"],
+            )
+        except Exception:
+            ctx["refund"]("endpoint_exception")
+            raise
         append_event(convo_path, {"ts": prepared["now"].isoformat(), "type": "plan", "plan": result["plan"]})
         if result["time_context"]:
             append_event(convo_path, {"ts": prepared["now"].isoformat(), "type": "time_context", "value": result["time_context"]})
         save_profile(profile_path(profile["user_id"]), profile)
-        return jsonify(
+
+        if result.get("error"):
+            ctx["refund"]("orchestrator_error")
+        else:
+            ctx["settle"]()
+
+        response = jsonify(
             {
                 "request_id": prepared["request_id"],
                 "session_id": os.path.basename(convo_path),
@@ -898,21 +1051,43 @@ def create_app(
                 "skipped_nodes": result.get("skipped_nodes", []),
             }
         )
+        return ctx["annotate"](response)
 
     @app.route("/v1/ask_stream", methods=["POST"])
     def v1_ask_stream() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
+        auth, ctx, err = _begin_billed_request("/v1/ask_stream")
+        if err:
+            return err
         data = request.get_json(force=True) or {}
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="bazi_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         prepared, error_response = run_v1_request(data, stream=True)
         if error_response:
             return error_response
         assert prepared is not None
 
+        err = ctx["charge"]()
+        if err:
+            return err
+
         profile = prepared["profile"]
         convo_path = prepared["convo_path"]
         event_q: queue.Queue = queue.Queue()
+
+        receipt = ctx["state"]["receipt"]
+        billing_kickoff_event = None
+        if receipt is not None:
+            billing_kickoff_event = {
+                "type": "billing",
+                "stage": "charged",
+                "request_id": receipt.request_id,
+                "amount_credits": receipt.amount_credits,
+                "balance_after": receipt.balance_after,
+                "endpoint": receipt.endpoint,
+            }
 
         def sink(event: Dict) -> None:
             log_event_to_conversation(convo_path, event)
@@ -921,6 +1096,7 @@ def create_app(
                 event_q.put(public_event)
 
         def worker() -> None:
+            settled = False
             try:
                 result = run_turn_func(
                     profile,
@@ -937,15 +1113,38 @@ def create_app(
                         {"ts": prepared["now"].isoformat(), "type": "time_context", "value": result["time_context"]},
                     )
                 save_profile(profile_path(profile["user_id"]), profile)
+                if result.get("error"):
+                    ctx["refund"]("orchestrator_error")
+                else:
+                    ctx["settle"]()
+                    settled = True
             except Exception as exc:
+                ctx["refund"]("endpoint_exception")
                 event_q.put({"type": "error", "message": str(exc)})
             finally:
+                if receipt is not None:
+                    try:
+                        balance_after = billing_service.get_balance(receipt.user_id)
+                    except UnknownUserError:
+                        balance_after = receipt.balance_after
+                    event_q.put(
+                        {
+                            "type": "billing",
+                            "stage": "settled" if settled else "refunded",
+                            "request_id": receipt.request_id,
+                            "amount_credits": receipt.amount_credits,
+                            "balance_after": balance_after,
+                            "endpoint": receipt.endpoint,
+                        }
+                    )
                 event_q.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
 
         def gen():
             yield f"data: {json.dumps({'type': 'session', 'request_id': prepared['request_id'], 'session_id': os.path.basename(convo_path)}, ensure_ascii=False)}\n\n"
+            if billing_kickoff_event is not None:
+                yield f"data: {json.dumps(billing_kickoff_event, ensure_ascii=False)}\n\n"
             while True:
                 event = event_q.get()
                 if event is None:
@@ -956,10 +1155,15 @@ def create_app(
 
     @app.route("/v1/hepan/ask", methods=["POST"])
     def v1_hepan_ask() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
+        auth, ctx, err = _begin_billed_request("/v1/hepan/ask")
+        if err:
+            return err
         data = request.get_json(force=True) or {}
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="hepan_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         question = (data.get("question") or "").strip()
         if not question:
             return api_error(400, "question_required", "question required")
@@ -978,6 +1182,10 @@ def create_app(
         if error_response:
             return error_response
         assert model_options is not None
+
+        err = ctx["charge"]()
+        if err:
+            return err
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -1009,9 +1217,13 @@ def create_app(
                 node_model_overrides=model_options["node_model_overrides"],
             )
         except ValueError as exc:
+            ctx["refund"]("invalid_hepan_request")
             return api_error(400, "invalid_hepan_request", str(exc))
+        except Exception:
+            ctx["refund"]("endpoint_exception")
+            raise
 
-        return jsonify(
+        response = jsonify(
             {
                 "request_id": request_id,
                 "session_id": os.path.basename(convo_path),
@@ -1021,13 +1233,20 @@ def create_app(
                 "compatibility": result["hepan"]["compatibility"],
             }
         )
+        ctx["settle"]()
+        return ctx["annotate"](response)
 
     @app.route("/v1/cezi/ask", methods=["POST"])
     def v1_cezi_ask() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
+        auth, ctx, err = _begin_billed_request("/v1/cezi/ask")
+        if err:
+            return err
         data = request.get_json(force=True) or {}
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="cezi_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         question = (data.get("question") or "").strip()
         character = (data.get("character") or "").strip()
         if not question:
@@ -1043,6 +1262,10 @@ def create_app(
         if error_response:
             return error_response
         assert model_options is not None
+
+        err = ctx["charge"]()
+        if err:
+            return err
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -1074,9 +1297,13 @@ def create_app(
                 node_model_overrides=model_options["node_model_overrides"],
             )
         except ValueError as exc:
+            ctx["refund"]("invalid_cezi_request")
             return api_error(400, "invalid_cezi_request", str(exc))
+        except Exception:
+            ctx["refund"]("endpoint_exception")
+            raise
 
-        return jsonify(
+        response = jsonify(
             {
                 "request_id": request_id,
                 "session_id": os.path.basename(convo_path),
@@ -1086,13 +1313,22 @@ def create_app(
                 "character": result["character"],
             }
         )
+        ctx["settle"]()
+        return ctx["annotate"](response)
 
     @app.route("/v1/najia/ask", methods=["POST"])
     def v1_najia_ask() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
         data = request.get_json(force=True) or {}
+        paraphrase = bool(data.get("paraphrase", False))
+        variant_params = [("paraphrase", True)] if paraphrase else None
+        auth, ctx, err = _begin_billed_request("/v1/najia/ask", variant_params=variant_params)
+        if err:
+            return err
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="najia_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         question = (data.get("question") or "").strip()
         if not question:
             return api_error(400, "question_required", "question required")
@@ -1106,6 +1342,10 @@ def create_app(
             return error_response
         assert model_options is not None
 
+        err = ctx["charge"]()
+        if err:
+            return err
+
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
         convo_path = context["convo_path"]
@@ -1118,6 +1358,7 @@ def create_app(
                 "request_id": request_id,
                 "api_version": "v1",
                 "method": "najia",
+                "paraphrase": paraphrase,
             },
         )
 
@@ -1133,12 +1374,17 @@ def create_app(
                 history_rounds=context["history_rounds"],
                 model=model_options["model"],
                 node_model_overrides=model_options["node_model_overrides"],
+                paraphrase=paraphrase,
             )
         except ValueError as exc:
+            ctx["refund"]("invalid_najia_request")
             return api_error(400, "invalid_najia_request", str(exc))
+        except Exception:
+            ctx["refund"]("endpoint_exception")
+            raise
 
         najia_result = result["najia"]
-        return jsonify(
+        response = jsonify(
             {
                 "request_id": request_id,
                 "session_id": os.path.basename(convo_path),
@@ -1154,13 +1400,27 @@ def create_app(
                 },
             }
         )
+        ctx["settle"]()
+        return ctx["annotate"](response)
 
     @app.route("/v1/zwds/ask", methods=["POST"])
     def v1_zwds_ask() -> Response:
-        auth_error = require_demo_auth()
-        if auth_error:
-            return auth_error
         data = request.get_json(force=True) or {}
+        include_star_gong_raw = data.get("include_star_gong")
+        if include_star_gong_raw is not None and not isinstance(include_star_gong_raw, bool):
+            # Charge resolution and full validation will reject it; surface early.
+            return api_error(400, "invalid_include_star_gong", "include_star_gong must be bool")
+        variant_params = (
+            [("include_star_gong", True)] if include_star_gong_raw else None
+        )
+        auth, ctx, err = _begin_billed_request("/v1/zwds/ask", variant_params=variant_params)
+        if err:
+            return err
+        resolved_uid, err = _resolved_user_id(ctx, data.get("user_id"), default="zwds_guest")
+        if err:
+            return err
+        data["user_id"] = resolved_uid
+
         question = (data.get("question") or "").strip()
         if not question:
             return api_error(400, "question_required", "question required")
@@ -1185,9 +1445,7 @@ def create_app(
             except (TypeError, ValueError):
                 return api_error(400, "invalid_target_years", "target_years entries must be int")
 
-        include_star_gong = data.get("include_star_gong")
-        if include_star_gong is not None and not isinstance(include_star_gong, bool):
-            return api_error(400, "invalid_include_star_gong", "include_star_gong must be bool")
+        include_star_gong = include_star_gong_raw
 
         context, error_response = optional_conversation_context(data)
         if error_response:
@@ -1197,6 +1455,10 @@ def create_app(
         if error_response:
             return error_response
         assert model_options is not None
+
+        err = ctx["charge"]()
+        if err:
+            return err
 
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
@@ -1230,10 +1492,14 @@ def create_app(
                 include_star_gong=include_star_gong,
             )
         except ValueError as exc:
+            ctx["refund"]("invalid_zwds_request")
             return api_error(400, "invalid_zwds_request", str(exc))
+        except Exception:
+            ctx["refund"]("endpoint_exception")
+            raise
 
         zwds_result = result["zwds"]
-        return jsonify(
+        response = jsonify(
             {
                 "request_id": request_id,
                 "session_id": os.path.basename(convo_path),
@@ -1250,6 +1516,8 @@ def create_app(
                 },
             }
         )
+        ctx["settle"]()
+        return ctx["annotate"](response)
 
     @app.route("/api/users", methods=["GET"])
     def list_users() -> Response:
@@ -1556,6 +1824,234 @@ def create_app(
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         return Response(gen(), mimetype="text/event-stream")
+
+    # ======================================================================
+    # Billing endpoints (user self-service + admin)
+    # ======================================================================
+
+    @app.route("/v1/balance", methods=["GET"])
+    def v1_balance() -> Response:
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err:
+            return err
+        try:
+            bal = billing_service.get_balance(auth["user_id"])
+        except UnknownUserError as exc:
+            return api_error(404, "unknown_user", str(exc))
+        return jsonify(
+            {
+                "user_id": auth["user_id"],
+                "balance_credits": bal,
+                "daily_credits_limit": auth.get("daily_credits_limit"),
+            }
+        )
+
+    @app.route("/v1/usage", methods=["GET"])
+    def v1_usage() -> Response:
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err:
+            return err
+        try:
+            limit = int(request.args.get("limit", "50"))
+        except ValueError:
+            return api_error(400, "invalid_limit", "limit must be int")
+        limit = max(1, min(500, limit))
+        rows = billing_service.list_usage(auth["user_id"], limit=limit)
+        return jsonify({"user_id": auth["user_id"], "rows": rows})
+
+    @app.route("/v1/api_keys", methods=["GET"])
+    def v1_list_api_keys() -> Response:
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err:
+            return err
+        keys = billing_service.list_api_keys(auth["user_id"])
+        # Never echo the plaintext or full hash; surface a short prefix and metadata.
+        public = [
+            {
+                "key_id": k["api_key_hash"][:12],
+                "label": k.get("label"),
+                "created_at": k.get("created_at"),
+                "last_seen_at": k.get("last_seen_at"),
+                "revoked": bool(k.get("revoked")),
+            }
+            for k in keys
+        ]
+        return jsonify({"user_id": auth["user_id"], "api_keys": public})
+
+    @app.route("/v1/api_keys", methods=["POST"])
+    def v1_issue_api_key() -> Response:
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err:
+            return err
+        data = request.get_json(force=True, silent=True) or {}
+        label = (data.get("label") or "").strip() or None
+        try:
+            plaintext = billing_service.issue_api_key(auth["user_id"], label=label)
+        except UnknownUserError as exc:
+            return api_error(404, "unknown_user", str(exc))
+        return jsonify(
+            {
+                "user_id": auth["user_id"],
+                "api_key": plaintext,
+                "label": label,
+                "warning": "Store this key now; it will not be shown again.",
+            }
+        )
+
+    @app.route("/v1/api_keys/<key_id>", methods=["DELETE"])
+    def v1_revoke_api_key(key_id: str) -> Response:
+        auth, err = billing.authenticate_request(allow_admin_bypass=False)
+        if err:
+            return err
+        # ``key_id`` here is the prefix shown by GET /v1/api_keys (first 12 hex chars).
+        # We look up the user's keys and match by that prefix to avoid exposing
+        # full hashes or plaintexts in URLs.
+        user_keys = billing_service.list_api_keys(auth["user_id"])
+        match = next(
+            (k for k in user_keys if k["api_key_hash"].startswith(key_id)),
+            None,
+        )
+        if match is None:
+            return api_error(404, "key_not_found", "no api key with that prefix for this user.")
+        revoked = billing_service.revoke_api_key(match["api_key_hash"])
+        return jsonify({"user_id": auth["user_id"], "key_id": key_id, "revoked": bool(revoked)})
+
+    # --- admin -----------------------------------------------------------
+
+    @app.route("/admin/users", methods=["POST"])
+    def admin_create_user() -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        data = request.get_json(force=True, silent=True) or {}
+        user_id = (data.get("user_id") or "").strip()
+        id_error = validate_safe_id(user_id, "user_id")
+        if id_error:
+            return api_error(400, "invalid_user_id", id_error)
+        try:
+            initial_credits = int(data.get("initial_credits", 0))
+        except (TypeError, ValueError):
+            return api_error(400, "invalid_initial_credits", "initial_credits must be int")
+        if initial_credits < 0:
+            return api_error(400, "invalid_initial_credits", "initial_credits must be >= 0")
+        daily_limit = data.get("daily_credits_limit")
+        if daily_limit is not None:
+            try:
+                daily_limit = int(daily_limit)
+            except (TypeError, ValueError):
+                return api_error(400, "invalid_daily_limit", "daily_credits_limit must be int")
+            if daily_limit < 0:
+                return api_error(400, "invalid_daily_limit", "daily_credits_limit must be >= 0")
+        try:
+            out = billing_service.create_user(
+                user_id=user_id,
+                display_name=(data.get("display_name") or None),
+                initial_credits=initial_credits,
+                daily_credits_limit=daily_limit,
+                issue_first_key=bool(data.get("issue_first_key", True)),
+                key_label=(data.get("key_label") or None),
+            )
+        except ValueError as exc:
+            return api_error(409, "user_exists", str(exc))
+        return jsonify(
+            {
+                "user": out["user"],
+                "api_key": out.get("api_key_plaintext"),
+                "warning": "If api_key is non-null, store it now; it will not be shown again.",
+            }
+        )
+
+    @app.route("/admin/users", methods=["GET"])
+    def admin_list_users() -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        try:
+            limit = int(request.args.get("limit", "200"))
+        except ValueError:
+            return api_error(400, "invalid_limit", "limit must be int")
+        users = billing_service.admin_list_users(limit=max(1, min(1000, limit)))
+        return jsonify({"users": users})
+
+    @app.route("/admin/users/<user_id>/status", methods=["POST"])
+    def admin_set_user_status(user_id: str) -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        data = request.get_json(force=True, silent=True) or {}
+        status = (data.get("status") or "").strip()
+        if status not in ("active", "disabled"):
+            return api_error(400, "invalid_status", "status must be 'active' or 'disabled'")
+        try:
+            billing_service.admin_set_user_status(user_id, status)
+        except UnknownUserError as exc:
+            return api_error(404, "unknown_user", str(exc))
+        return jsonify({"user_id": user_id, "status": status})
+
+    @app.route("/admin/topup", methods=["POST"])
+    def admin_topup() -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        data = request.get_json(force=True, silent=True) or {}
+        user_id = (data.get("user_id") or "").strip()
+        if not user_id:
+            return api_error(400, "user_id_required", "user_id required")
+        try:
+            amount = int(data.get("amount_credits", 0))
+        except (TypeError, ValueError):
+            return api_error(400, "invalid_amount", "amount_credits must be int")
+        if amount <= 0:
+            return api_error(400, "invalid_amount", "amount_credits must be > 0")
+        explicit_request_id = (data.get("request_id") or "").strip() or None
+        try:
+            receipt = billing_service.topup(
+                user_id,
+                amount,
+                request_id=explicit_request_id,
+                meta={"note": data.get("note"), "source": data.get("source", "admin")},
+            )
+        except UnknownUserError as exc:
+            return api_error(404, "unknown_user", str(exc))
+        except DuplicateRequestError as exc:
+            return jsonify(
+                {
+                    "user_id": user_id,
+                    "amount_credits": amount,
+                    "balance_credits": exc.balance_after,
+                    "request_id": exc.request_id,
+                    "duplicate": True,
+                }
+            )
+        return jsonify(
+            {
+                "user_id": user_id,
+                "amount_credits": amount,
+                "balance_credits": receipt.balance_after,
+                "request_id": receipt.request_id,
+                "duplicate": False,
+            }
+        )
+
+    @app.route("/admin/ledger", methods=["GET"])
+    def admin_ledger() -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        user_id = request.args.get("user_id") or None
+        try:
+            limit = int(request.args.get("limit", "100"))
+        except ValueError:
+            return api_error(400, "invalid_limit", "limit must be int")
+        rows = billing_service.admin_list_ledger(user_id=user_id, limit=max(1, min(2000, limit)))
+        return jsonify({"rows": rows})
+
+    @app.route("/admin/pricing", methods=["GET"])
+    def admin_pricing() -> Response:
+        err = billing.require_admin()
+        if err:
+            return err
+        return jsonify(billing_pricing.as_dict())
 
     return app
 

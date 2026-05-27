@@ -94,6 +94,7 @@ def _fake_najia_turn(
     history_rounds=None,
     model=None,
     node_model_overrides=None,
+    paraphrase=False,
 ):
     values = yao_values or [0, 1, 2, 3, 4, 5]
     if event_sink:
