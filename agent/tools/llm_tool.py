@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -192,7 +193,14 @@ def _do_llm_api_call(
                     body = resp.read().decode("utf-8")
             last_err = None
             break
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            TimeoutError,
+            http.client.HTTPException,
+            ConnectionError,
+            OSError,
+        ) as e:
             last_err = e
             _debug(f"error attempt={attempt} node={node_label} err={e}")
             emit_event(
