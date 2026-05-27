@@ -6,7 +6,7 @@ repo's example .env. Override with ``--admin-token`` or
 ``$env:DEMO_API_TOKEN`` when the server is configured with a different value.
 
 This is a safe smoke test: it uses the cheapest billed endpoint (``/v1/cezi/ask``)
-so a single run only spends 30 credits.
+so a single run only spends 100 credits (¥1).
 """
 
 from __future__ import annotations
@@ -76,8 +76,8 @@ def main(argv) -> int:
         default=os.environ.get("DEMO_API_TOKEN", "local-demo-token"),
     )
     parser.add_argument("--user-id", default=f"u_billing_smoke_{int(time.time())}")
-    parser.add_argument("--initial-credits", type=int, default=300)
-    parser.add_argument("--topup", type=int, default=200)
+    parser.add_argument("--initial-credits", type=int, default=500)
+    parser.add_argument("--topup", type=int, default=300)
     parser.add_argument(
         "--allow-stub",
         action="store_true",
@@ -197,10 +197,10 @@ def main(argv) -> int:
     print("[drain] draining balance via /admin/topup negative trick? skip — unsupported.")
     # We instead trigger insufficient funds by issuing a charge that exceeds balance.
     # Easiest: disable user, then re-enable. But disabled = 401, not 402. Instead,
-    # call cezi again until balance < 30. Each call costs 30 credits.
-    while bal2["balance_credits"] >= 30:
+    # call cezi again until balance < 100. Each call costs 100 credits.
+    while bal2["balance_credits"] >= 100:
         bal2, _ = _get_json(f"{base_url}/v1/balance", token=api_key)
-        if bal2["balance_credits"] < 30:
+        if bal2["balance_credits"] < 100:
             break
         print(f"[drain] balance={bal2['balance_credits']}, calling /v1/cezi/ask to drain...")
         _post_json(

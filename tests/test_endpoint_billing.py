@@ -318,12 +318,12 @@ def test_cezi_charges_user_and_settles_on_success(client) -> None:
         json={"question": "ok?", "character": "合"},
     )
     assert resp.status_code == 200, resp.get_json()
-    # /v1/cezi/ask defaults to 30 credits in config/pricing.json
-    assert resp.headers["X-Charged-Credits"] == "30"
-    assert resp.headers["X-Balance-After"] == "170"
+    # /v1/cezi/ask is 100 credits (¥1) per config/pricing.json
+    assert resp.headers["X-Charged-Credits"] == "100"
+    assert resp.headers["X-Balance-After"] == "100"
     # balance reflects deduction
     bal = client.get("/v1/balance", headers=_user(api_key))
-    assert bal.get_json()["balance_credits"] == 170
+    assert bal.get_json()["balance_credits"] == 100
     # ledger shows a settled charge (no refund)
     kinds = _ledger_kinds(client, "u_alice")
     assert "charge" in kinds
@@ -331,7 +331,8 @@ def test_cezi_charges_user_and_settles_on_success(client) -> None:
 
 
 def test_zwds_star_gong_variant_costs_more(client) -> None:
-    api_key = _create_user(client, "u_alice", credits=1000)
+    # Two zwds calls: default (400) + star_gong (700) = 1100 credits.
+    api_key = _create_user(client, "u_alice", credits=1500)
     base = client.post(
         "/v1/zwds/ask",
         headers=_user(api_key),
@@ -503,12 +504,12 @@ def test_daily_credits_limit_returns_402_with_distinct_code(client) -> None:
         json={
             "user_id": "u_capped",
             "initial_credits": 10_000,
-            "daily_credits_limit": 60,
+            "daily_credits_limit": 200,
         },
     )
     assert resp.status_code == 200, resp.get_json()
     api_key = resp.get_json()["api_key"]
-    # First call (30 credits) fits; second exceeds the daily budget of 60.
+    # First two cezi calls (100 credits each) fit; third would exceed 200.
     r1 = client.post(
         "/v1/cezi/ask",
         headers=_user(api_key),
@@ -526,12 +527,12 @@ def test_daily_credits_limit_returns_402_with_distinct_code(client) -> None:
         headers=_user(api_key),
         json={"question": "Q", "character": "合"},
     )
-    # 3rd call would push today's spend over 60 → 402 with a distinct code.
+    # 3rd call would push today's spend over 200 → 402 with a distinct code.
     assert r3.status_code == 402, r3.get_json()
     body = r3.get_json()
     assert body["error"]["code"] == "daily_limit_exceeded"
-    assert body["error"]["details"]["limit"] == 60
-    assert body["error"]["details"]["used"] == 60
+    assert body["error"]["details"]["limit"] == 200
+    assert body["error"]["details"]["used"] == 200
 
 
 # ---------------------------------------------------------------------------
@@ -644,5 +645,5 @@ def test_ask_stream_emits_billing_settled(client) -> None:
     assert any(e.get("stage") == "settled" for e in billing_events)
 
     final = next(e for e in billing_events if e.get("stage") == "settled")
-    assert final["amount_credits"] == 200  # /v1/ask_stream price
-    assert final["balance_after"] == 800
+    assert final["amount_credits"] == 500  # /v1/ask_stream price (¥5)
+    assert final["balance_after"] == 500

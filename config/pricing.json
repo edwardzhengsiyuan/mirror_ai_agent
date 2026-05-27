@@ -1,16 +1,16 @@
 {
-  "_comment": "Credit prices for billable endpoints. 1 元 = 100 credits.",
-  "default_credits": 50,
+  "_comment": "Credit prices for billable endpoints. 1 元 = 100 credits = 100 fen (CNY smallest unit). Stripe topup amount in fen maps 1:1 to credits.",
+  "default_credits": 100,
   "endpoints": {
-    "/v1/ask": 200,
-    "/v1/ask_stream": 200,
-    "/v1/hepan/ask": 100,
-    "/v1/cezi/ask": 30,
-    "/v1/najia/ask": 50,
-    "/v1/zwds/ask": 80
+    "/v1/ask": 500,
+    "/v1/ask_stream": 500,
+    "/v1/hepan/ask": 300,
+    "/v1/cezi/ask": 100,
+    "/v1/najia/ask": 200,
+    "/v1/zwds/ask": 400
   },
   "variants": {
-    "/v1/zwds/ask?include_star_gong=true": 150,
-    "/v1/najia/ask?paraphrase=true": 80
+    "/v1/zwds/ask?include_star_gong=true": 700,
+    "/v1/najia/ask?paraphrase=true": 400
   }
 }

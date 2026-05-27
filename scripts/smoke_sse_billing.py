@@ -33,7 +33,7 @@ def main() -> int:
     user_id = f"u_sse_smoke_{int(time.time())}"
     body, status = _post(
         f"{base}/admin/users",
-        {"user_id": user_id, "initial_credits": 1000},
+        {"user_id": user_id, "initial_credits": 2000},
         admin,
     )
     assert status == 200, body
@@ -89,8 +89,8 @@ def main() -> int:
     if final:
         f = final[-1]
         print(f"[sse] final stage={f['stage']} amount={f.get('amount_credits')} balance_after={f.get('balance_after')}")
-        if f["stage"] == "settled" and f.get("amount_credits") != 200:
-            failures.append(f"settled amount {f.get('amount_credits')} != 200")
+        if f["stage"] == "settled" and f.get("amount_credits") != 500:
+            failures.append(f"settled amount {f.get('amount_credits')} != 500")
 
     if failures:
         print("[FAIL] " + "; ".join(failures))
