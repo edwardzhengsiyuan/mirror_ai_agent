@@ -78,6 +78,11 @@ def main(argv) -> int:
     parser.add_argument("--user-id", default=f"u_billing_smoke_{int(time.time())}")
     parser.add_argument("--initial-credits", type=int, default=300)
     parser.add_argument("--topup", type=int, default=200)
+    parser.add_argument(
+        "--allow-stub",
+        action="store_true",
+        help="Accept [LLM_PLACEHOLDER:...] answers (use when the server is in LLM_MODE=stub).",
+    )
     args = parser.parse_args(argv)
 
     base_url = f"http://127.0.0.1:{args.port}"
@@ -159,7 +164,10 @@ def main(argv) -> int:
     if charged is None or balance_after is None:
         failures.append("response missing X-Charged-Credits / X-Balance-After")
     if cezi_resp.get("answer", "").startswith("[LLM_PLACEHOLDER"):
-        failures.append("cezi answer is stubbed (LLM_MODE=stub or LLM not configured)")
+        if args.allow_stub:
+            print("[note] cezi answer is a stub placeholder (LLM_MODE=stub) — billing path validated regardless")
+        else:
+            failures.append("cezi answer is stubbed (pass --allow-stub if intentional)")
 
     # 6. user: balance should reflect deduction
     bal2, err = _get_json(f"{base_url}/v1/balance", token=api_key)
