@@ -40,6 +40,15 @@ import time
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
+# Windows consoles default to GBK and choke on yuan / arrow glyphs;
+# force UTF-8 so the script runs there too.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 
 def _post(url: str, payload: Dict[str, Any], token: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -120,7 +129,7 @@ def main(argv=None) -> int:
         print(f"[FATAL] /v1/checkout/create failed: {err or session}", file=sys.stderr)
         return 2
     print()
-    print(f"[checkout] amount=¥{session['amount_fen']/100:.2f} → {session['credits']} credits")
+    print(f"[checkout] amount=CNY {session['amount_fen']/100:.2f} -> {session['credits']} credits")
     print(f"[checkout] session_id={session['session_id']}")
     print()
     print("=" * 70)
