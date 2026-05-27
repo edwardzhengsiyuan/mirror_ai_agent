@@ -1,10 +1,20 @@
-"""Orchestrator for BaZi HePan compatibility turns."""
+"""Orchestrator for BaZi HePan compatibility turns.
+
+The system prompt and user-prompt structure mirror the original
+``bazi_langgraph_integrate/src/agents/bazi_hepan_agent.py`` Langgraph agent:
+
+* ``hepan.md`` is loaded as the full system prompt (≈16 KB of compatibility
+  theory and instructions).
+* The user prompt contains both individuals' full paipan / liupan / guji
+  texts, plus the user's question and recent dialogue history.
+"""
 
 from __future__ import annotations
 
 import datetime as dt
-import json
+import os
 import time
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from .events import EventSink, emit_event
@@ -12,28 +22,21 @@ from .llm_config import default_model
 from .tools.hepan_tool import hepan_tool
 from .tools.llm_tool import llm_report_tool
 
-HEPAN_SYSTEM_PROMPT = (
-    "你是一位擅长八字合盘的咨询师。请基于结构化合盘结果，"
-    "用克制、清晰、便于客户理解的语言分析两个人的关系匹配度。"
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "templates")
+
+HEPAN_SYSTEM_PROMPT_FALLBACK = (
+    "你是一位擅长八字合盘的咨询师，请基于两人完整命盘进行匹配度分析。"
 )
 
-HEPAN_USER_PROMPT_TEMPLATE = """请根据下面的八字合盘结构化结果，回答用户问题。
 
-要求：
-1. 先给出整体判断和分数解释。
-2. 再分别说明五行互补/相似、生肖关系、互看神煞对关系的影响。
-3. 结论要包含相处建议，避免绝对化断语。
-4. 如果用户问题很具体，优先回应具体问题。
-
-用户问题：
-{question}
-
-近期对话：
-{history}
-
-合盘结果：
-{hepan_json}
-"""
+@lru_cache(maxsize=4)
+def _load_template(name: str) -> str:
+    path = os.path.join(PROMPTS_DIR, name)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 def _format_history(history_rounds: Optional[List[Dict[str, str]]]) -> str:
@@ -47,17 +50,56 @@ def _format_history(history_rounds: Optional[List[Dict[str, str]]]) -> str:
     return "\n".join(lines)
 
 
+def _person_block(label: str, person: Dict[str, Any]) -> str:
+    name = person.get("name") or label
+    birth = person.get("birth") or {}
+    gender_cn = "男" if person.get("gender") == "male" else "女"
+    birth_str = (
+        f"{birth.get('year', '?')}-{birth.get('month', '?')}-{birth.get('day', '?')} "
+        f"{birth.get('hour', 0):02d}:{birth.get('minute', 0):02d}"
+    )
+    paipan = person.get("paipan_text") or ""
+    liupan = person.get("liupan_text") or ""
+    guji = person.get("guji_text") or ""
+    return (
+        f"【{label}：{name}（{gender_cn}，公历 {birth_str}）的命盘】\n"
+        f"排盘结果：\n{paipan}\n\n"
+        f"流年大运：\n{liupan}\n\n"
+        f"古籍参考：\n{guji}"
+    )
+
+
 def build_hepan_prompt(
     question: str,
     hepan_result: Dict[str, Any],
     history_rounds: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, str]:
-    user_prompt = HEPAN_USER_PROMPT_TEMPLATE.format(
-        question=question,
-        history=_format_history(history_rounds),
-        hepan_json=json.dumps(hepan_result, ensure_ascii=False, indent=2),
-    )
-    return {"system_prompt": HEPAN_SYSTEM_PROMPT, "user_prompt": user_prompt}
+    """Build the (system, user) prompt pair for the HePan LLM call."""
+    system_prompt = _load_template("hepan.md") or HEPAN_SYSTEM_PROMPT_FALLBACK
+
+    person_a = hepan_result.get("person_a", {})
+    person_b = hepan_result.get("person_b", {})
+
+    parts: List[str] = [
+        _person_block("第一个人", person_a),
+        "",
+        _person_block("第二个人", person_b),
+        "",
+        "请根据八字合婚的规则，从六个方面进行分析，给各个面向打分，并给出最终分数和建议。",
+    ]
+    if question and question.strip():
+        parts.extend(
+            [
+                "",
+                "用户的具体问题（请优先回应，并自然融入合婚分析中）：",
+                question.strip(),
+            ]
+        )
+    if history_rounds:
+        parts.extend(["", "近期对话：", _format_history(history_rounds)])
+
+    user_prompt = "\n".join(parts)
+    return {"system_prompt": system_prompt, "user_prompt": user_prompt}
 
 
 def run_hepan_turn(

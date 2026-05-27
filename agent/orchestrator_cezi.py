@@ -1,10 +1,16 @@
-"""Orchestrator for CeZi character divination turns."""
+"""Orchestrator for CeZi character divination turns.
+
+The system prompt is loaded from ``cezi.md`` (≈15 KB of character-divination
+theory and instructions), matching the original
+``bazi_langgraph_integrate/src/agents/cezi_agent.py`` Langgraph agent.
+"""
 
 from __future__ import annotations
 
 import datetime as dt
-import json
+import os
 import time
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from .events import EventSink, emit_event
@@ -12,24 +18,21 @@ from .llm_config import default_model
 from .tools.cezi_tool import cezi_tool
 from .tools.llm_tool import llm_report_tool
 
-CEZI_SYSTEM_PROMPT = """你是一位擅长测字的咨询师。
-你会结合字形、偏旁、拆字、增减笔、语境联想与用户所问之事进行分析。
-请保持解释清楚、审慎，不要使用恐吓式或绝对化表达。
-"""
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "templates")
 
-CEZI_USER_PROMPT_TEMPLATE = """请根据下面的测字请求回答用户。
+CEZI_SYSTEM_PROMPT_FALLBACK = (
+    "你是一位擅长测字的咨询师，请结合字形、偏旁、拆字与语境联想分析用户所问之事。"
+)
 
-要求：
-1. 围绕用户给出的字和问题展开，不要泛泛而谈。
-2. 至少从字形/结构、含义联想、与问题的对应关系三个角度分析。
-3. 最后给出简短建议。
 
-近期对话：
-{history}
-
-测字请求：
-{cezi_json}
-"""
+@lru_cache(maxsize=4)
+def _load_template(name: str) -> str:
+    path = os.path.join(PROMPTS_DIR, name)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 def _format_history(history_rounds: Optional[List[Dict[str, str]]]) -> str:
@@ -47,11 +50,24 @@ def build_cezi_prompt(
     cezi_result: Dict[str, Any],
     history_rounds: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, str]:
-    user_prompt = CEZI_USER_PROMPT_TEMPLATE.format(
-        history=_format_history(history_rounds),
-        cezi_json=json.dumps(cezi_result, ensure_ascii=False, indent=2),
-    )
-    return {"system_prompt": CEZI_SYSTEM_PROMPT, "user_prompt": user_prompt}
+    """Build the (system, user) prompt pair for the CeZi LLM call."""
+    system_prompt = _load_template("cezi.md") or CEZI_SYSTEM_PROMPT_FALLBACK
+
+    character = cezi_result.get("character", "")
+    question = cezi_result.get("question", "")
+
+    parts: List[str] = [
+        f"这是用户要测的字：{character}",
+        "",
+        f"这是用户的问题：{question}",
+        "",
+        "请根据测字的规则，对这个字进行分析，并回答用户的问题。",
+    ]
+    if history_rounds:
+        parts.extend(["", "近期对话：", _format_history(history_rounds)])
+
+    user_prompt = "\n".join(parts)
+    return {"system_prompt": system_prompt, "user_prompt": user_prompt}
 
 
 def run_cezi_turn(

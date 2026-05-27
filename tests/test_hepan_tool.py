@@ -33,3 +33,12 @@ def test_hepan_tool_returns_compatibility_shape() -> None:
     assert "wuxing_vector" in compatibility
     assert "a_wang_b" in compatibility
     assert "b_wang_a" in compatibility
+
+    # Full-chart text fields are required by the LLM-facing orchestrator
+    # (mirrors the original bazi_langgraph_integrate hepan agent input).
+    for key in ("paipan_text", "liupan_text", "guji_text"):
+        assert key in result["person_a"]
+        assert key in result["person_b"]
+        assert isinstance(result["person_a"][key], str)
+        assert isinstance(result["person_b"][key], str)
+    assert result["person_a"]["paipan_text"], "paipan_text should be non-empty"
