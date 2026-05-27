@@ -310,6 +310,43 @@ def run_cezi(base_url: str, token: str) -> Outcome:
     return out
 
 
+def run_zwds(base_url: str, token: str) -> Outcome:
+    out = Outcome("Zwds / 紫微斗数: 事业感情")
+    payload = {
+        "user_id": "u_zwds_smoke",
+        "question": "今年我的事业和感情运势如何？",
+        "birth": {"year": 1990, "month": 5, "day": 12, "hour": 8, "minute": 0, "second": 0},
+        "gender": "male",
+        "target_years": [2026],
+    }
+    started = time.time()
+    data, err = _post_json(base_url, "/v1/zwds/ask", payload, token)
+    out.duration_s = time.time() - started
+    if err:
+        out.error = err
+        return out
+    assert data is not None
+    out.session_id = data.get("session_id")
+    answer = data.get("answer") or ""
+    out.answer_preview = answer[:300]
+    chart = data.get("chart") or {}
+    if isinstance(chart, dict):
+        out.add(f"chart target_years={chart.get('target_years')} benming_chars={len(chart.get('benming_info') or '')}")
+    if not answer:
+        out.add("answer empty")
+        return out
+
+    if out.session_id:
+        events = _load_events(_conversation_path(payload["user_id"], out.session_id))
+        out.prompt_sizes = _summarize_prompts(events)
+        errors = _llm_errors(events)
+        if errors:
+            out.add(f"llm_error count: {len(errors)} (last: {errors[-1].get('error')})")
+            return out
+    out.passed = True
+    return out
+
+
 def run_najia(base_url: str, token: str) -> Outcome:
     out = Outcome("Najia / 六爻: 项目推进")
     payload = {
@@ -359,7 +396,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "--suite",
         default="all",
-        choices=["all", "bazi", "hepan", "cezi", "najia"],
+        choices=["all", "bazi", "hepan", "cezi", "najia", "zwds"],
         help="Which sub-suite to run",
     )
     args = parser.parse_args(argv)
@@ -393,6 +430,9 @@ def main(argv: List[str]) -> int:
 
     if args.suite in ("all", "najia"):
         outcomes.append(run_najia(base_url, args.token))
+
+    if args.suite in ("all", "zwds"):
+        outcomes.append(run_zwds(base_url, args.token))
 
     print("\n================ E2E RESULTS ================\n")
     for o in outcomes:

@@ -17,6 +17,7 @@ from agent.llm_config import available_models, configurable_nodes, default_model
 from agent.orchestrator_cezi import run_cezi_turn
 from agent.orchestrator_hepan import run_hepan_turn
 from agent.orchestrator_najia import run_najia_turn
+from agent.orchestrator_zwds import run_zwds_turn
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
@@ -44,6 +45,7 @@ def create_app(
     run_hepan_turn_func: Callable = run_hepan_turn,
     run_cezi_turn_func: Callable = run_cezi_turn,
     run_najia_turn_func: Callable = run_najia_turn,
+    run_zwds_turn_func: Callable = run_zwds_turn,
     storage_root: Optional[str] = None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
@@ -572,6 +574,60 @@ def create_app(
                             "gua": {"type": "object"},
                         },
                     },
+                    "ZwdsRequest": {
+                        "type": "object",
+                        "required": ["question", "birth"],
+                        "properties": {
+                            "user_id": {"type": "string", "example": "u_demo"},
+                            "session_id": {"type": "string", "example": "zwds_demo"},
+                            "history_n": {"type": "integer", "default": 5},
+                            "question": {
+                                "type": "string",
+                                "example": "今年我的事业和感情运势如何？",
+                            },
+                            "birth": {
+                                "type": "object",
+                                "required": ["year", "month", "day"],
+                                "properties": {
+                                    "year": {"type": "integer", "example": 1990},
+                                    "month": {"type": "integer", "example": 5},
+                                    "day": {"type": "integer", "example": 12},
+                                    "hour": {"type": "integer", "default": 0},
+                                    "minute": {"type": "integer", "default": 0},
+                                    "second": {"type": "integer", "default": 0},
+                                },
+                            },
+                            "gender": {"type": "string", "enum": ["male", "female"], "default": "male"},
+                            "target_years": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Years to render flow-year (流年) analyses for. Defaults to current civil year.",
+                                "example": [2026],
+                            },
+                            "include_star_gong": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Whether to inject the ≈973 KB star_gong.md star/palace lookup into the system prompt.",
+                            },
+                            "llm_model": {
+                                "type": "string",
+                                "enum": available_models(),
+                                "example": current_default_model(),
+                            },
+                            "node_model_overrides": node_model_overrides_schema(),
+                        },
+                    },
+                    "ZwdsResponse": {
+                        "type": "object",
+                        "properties": {
+                            "request_id": {"type": "string"},
+                            "session_id": {"type": "string"},
+                            "user_id": {"type": "string"},
+                            "method": {"type": "string", "example": "zwds"},
+                            "answer": {"type": "string"},
+                            "chart": {"type": "object"},
+                        },
+                    },
                     "ProfileRequest": {
                         "allOf": [
                             {"$ref": "#/components/schemas/AskRequest"},
@@ -702,6 +758,21 @@ def create_app(
                         },
                         "responses": {
                             "200": {"description": "Najia answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NajiaResponse"}}}},
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/v1/zwds/ask": {
+                    "post": {
+                        "summary": "Run a synchronous Ziwei Doushu (紫微斗数) turn",
+                        "security": [{"bearerAuth": []}],
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZwdsRequest"}}},
+                        },
+                        "responses": {
+                            "200": {"description": "Zwds answer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZwdsResponse"}}}},
                             "400": {"description": "Invalid request"},
                             "401": {"description": "Unauthorized"},
                         },
@@ -1080,6 +1151,102 @@ def create_app(
                     "bengua": najia_result["bengua"],
                     "biangua": najia_result["biangua"],
                     "raw_text": najia_result["raw_text"],
+                },
+            }
+        )
+
+    @app.route("/v1/zwds/ask", methods=["POST"])
+    def v1_zwds_ask() -> Response:
+        auth_error = require_demo_auth()
+        if auth_error:
+            return auth_error
+        data = request.get_json(force=True) or {}
+        question = (data.get("question") or "").strip()
+        if not question:
+            return api_error(400, "question_required", "question required")
+
+        birth = data.get("birth")
+        if not isinstance(birth, dict):
+            return api_error(400, "invalid_birth", "birth required")
+        birth_error = validate_birth(birth)
+        if birth_error:
+            return api_error(400, "invalid_birth", birth_error)
+
+        gender = data.get("gender", "male")
+        if gender not in ("male", "female"):
+            return api_error(400, "invalid_gender", "gender must be male|female")
+
+        target_years = data.get("target_years")
+        if target_years is not None:
+            if not isinstance(target_years, list):
+                return api_error(400, "invalid_target_years", "target_years must be list[int]")
+            try:
+                target_years = [int(y) for y in target_years]
+            except (TypeError, ValueError):
+                return api_error(400, "invalid_target_years", "target_years entries must be int")
+
+        include_star_gong = data.get("include_star_gong")
+        if include_star_gong is not None and not isinstance(include_star_gong, bool):
+            return api_error(400, "invalid_include_star_gong", "include_star_gong must be bool")
+
+        context, error_response = optional_conversation_context(data)
+        if error_response:
+            return error_response
+        assert context is not None
+        model_options, error_response = normalize_model_options(data)
+        if error_response:
+            return error_response
+        assert model_options is not None
+
+        now = dt.datetime.now()
+        request_id = f"req_{uuid.uuid4().hex[:16]}"
+        convo_path = context["convo_path"]
+        append_event(
+            convo_path,
+            {
+                "ts": now.isoformat(),
+                "type": "user_message",
+                "text": question,
+                "request_id": request_id,
+                "api_version": "v1",
+                "method": "zwds",
+            },
+        )
+
+        def sink(event: Dict) -> None:
+            log_event_to_conversation(convo_path, event)
+
+        try:
+            result = run_zwds_turn_func(
+                question,
+                birth=birth,
+                gender=gender,
+                target_years=target_years,
+                now=now,
+                event_sink=sink,
+                history_rounds=context["history_rounds"],
+                model=model_options["model"],
+                node_model_overrides=model_options["node_model_overrides"],
+                include_star_gong=include_star_gong,
+            )
+        except ValueError as exc:
+            return api_error(400, "invalid_zwds_request", str(exc))
+
+        zwds_result = result["zwds"]
+        return jsonify(
+            {
+                "request_id": request_id,
+                "session_id": os.path.basename(convo_path),
+                "user_id": context["user_id"],
+                "method": "zwds",
+                "answer": result["response"],
+                "chart": {
+                    "birth": zwds_result["birth"],
+                    "gender": zwds_result["gender"],
+                    "target_years": zwds_result["target_years"],
+                    "benming_info": zwds_result["benming_info"],
+                    "liunian_infos": zwds_result["liunian_infos"],
+                    "raw_text": zwds_result["raw_text"],
                 },
             }
         )
