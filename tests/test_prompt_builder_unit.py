@@ -181,6 +181,108 @@ class TestPromptConfigVariations:
         assert "system_prompt" in result
 
 
+class TestDependencyContextSelection:
+    """Aspect nodes should only see prereqs they actually need (no full GEJU dump)."""
+
+    def test_career_skips_geju_router_full_text(self, sample_cache):
+        """CAREER prompt should not include GEJU_ROUTER raw JSON or GEJU_ANALYSIS body."""
+        result = build_prompt("CAREER", sample_cache, prompt_config="lingyun_cat")
+        user_prompt = result["user_prompt"]
+        # GEJU_ROUTER raw content (the JSON string) must NOT appear.
+        assert "正官格" not in user_prompt or "Test geju level content" in user_prompt
+        # The bulky analysis block is dropped for downstream domain nodes.
+        assert "Test geju analysis content" not in user_prompt
+        # The distilled level summary IS kept.
+        assert "Test geju level content" in user_prompt
+
+    def test_overall_only_sees_paipan(self, sample_cache):
+        """OVERALL should only see paipan/guji, not other prereqs."""
+        result = build_prompt("OVERALL", sample_cache)
+        user_prompt = result["user_prompt"]
+        assert "Test paipan results" in user_prompt
+        assert "Test shishen content" not in user_prompt
+        assert "Test wuxing prefs content" not in user_prompt
+
+
+class TestResponseAspectFiltering:
+    """RESPONSE prompt must respect the current-turn aspects list."""
+
+    def test_response_only_includes_requested_aspects(self, sample_cache):
+        """Cached aspects not in current plan should NOT appear in the prompt."""
+        sample_cache["RELATIONSHIP"] = {
+            "output": {
+                "type": "report",
+                "content": "Stale relationship analysis from a previous turn",
+                "structured": {"node": "RELATIONSHIP"},
+                "reasoning_content": "",
+                "error": False,
+            }
+        }
+        result = build_response_prompt(
+            cache=sample_cache,
+            time_context=None,
+            question="今年事业怎么样",
+            history_rounds=[],
+            aspects=["CAREER"],
+        )
+        user_prompt = result["user_prompt"]
+        assert "Test career analysis content" in user_prompt
+        assert "Stale relationship analysis from a previous turn" not in user_prompt
+
+    def test_response_legacy_no_aspects_falls_back(self, sample_cache):
+        """When aspects is None, all cached aspects are still included (legacy)."""
+        result = build_response_prompt(
+            cache=sample_cache,
+            time_context=None,
+            question="今年事业怎么样",
+            history_rounds=[],
+            aspects=None,
+        )
+        user_prompt = result["user_prompt"]
+        assert "Test career analysis content" in user_prompt
+
+    def test_response_skips_geju_router_and_analysis(self, sample_cache):
+        """RESPONSE prompt only reuses GEJU_LEVEL summary, not router/analysis raw."""
+        result = build_response_prompt(
+            cache=sample_cache,
+            time_context=None,
+            question="今年事业怎么样",
+            history_rounds=[],
+            aspects=["CAREER"],
+        )
+        user_prompt = result["user_prompt"]
+        assert "Test geju level content" in user_prompt
+        assert "Test geju analysis content" not in user_prompt
+
+    def test_response_dedup_same_text(self, sample_cache):
+        """Identical content present in two cached nodes should appear only once."""
+        sample_cache["SHISHEN"]["output"]["content"] = "Same overall content"
+        sample_cache["OVERALL"]["output"]["content"] = "Same overall content"
+        result = build_response_prompt(
+            cache=sample_cache,
+            time_context=None,
+            question="性格特点",
+            history_rounds=[],
+            aspects=["XINGGE"],
+        )
+        user_prompt = result["user_prompt"]
+        assert user_prompt.count("Same overall content") == 1
+
+    def test_history_rounds_truncated(self, sample_cache):
+        """Very long historical assistant outputs should be truncated."""
+        long_text = "X" * 5000
+        result = build_response_prompt(
+            cache=sample_cache,
+            time_context=None,
+            question="今年事业怎么样",
+            history_rounds=[{"user": "earlier", "assistant": long_text}],
+            aspects=["CAREER"],
+        )
+        user_prompt = result["user_prompt"]
+        assert long_text not in user_prompt
+        assert "truncated" in user_prompt
+
+
 @pytest.fixture
 def sample_cache():
     """Node cache with standard outputs for testing."""

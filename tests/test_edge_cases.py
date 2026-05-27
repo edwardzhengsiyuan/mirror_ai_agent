@@ -73,22 +73,28 @@ class TestMalformedData:
             build_prompt("CAREER", malformed_cache)
 
     def test_time_context_with_missing_fields(self, stub_env):
-        """Time context with missing fields raises KeyError (known limitation)."""
+        """Time context with missing 'data' field is now handled gracefully.
+
+        Previously this raised ``KeyError``; the response prompt builder now
+        skips year entries that have no ``data`` payload instead of crashing.
+        """
         from agent.nodes.prompt_builder import build_response_prompt
 
         time_context = {"year_data": [{"year": 2025}]}  # Missing 'data' field
         cache = {
             "PAIPAN": {"output": {"paipan_results": "", "liupan_results": "", "guji_results": ""}},
         }
-        # Currently raises - documenting existing behavior
-        with pytest.raises(KeyError):
-            build_response_prompt(
-                cache=cache,
-                time_context=time_context,
-                prompt_config="lingyun_cat",
-                question="test",
-                history_rounds=[],
-            )
+        result = build_response_prompt(
+            cache=cache,
+            time_context=time_context,
+            prompt_config="lingyun_cat",
+            question="test",
+            history_rounds=[],
+        )
+        assert "system_prompt" in result
+        assert "user_prompt" in result
+        # Empty year_data entries should not be rendered as a section.
+        assert "目标年份详情" not in result["user_prompt"]
 
 
 class TestBoundaryDates:

@@ -166,11 +166,49 @@ class TestParseToolCall:
         assert result is None
 
     def test_json_with_extra_text(self):
-        """JSON embedded in text should not be extracted (requires valid JSON)."""
+        """JSON embedded in text should be extracted via the balanced-brace scan."""
         content = 'Here is my analysis: {"tool":"planning_tool","args":{"aspects":["HEALTH"],"times":[]}}'
         result = _parse_tool_call(content)
-        # Invalid JSON due to extra text prefix
-        assert result is None
+        assert result is not None
+        assert result["aspects"] == ["HEALTH"]
+
+    def test_fenced_json_block(self):
+        """Markdown fenced ```json block should be parsed."""
+        content = (
+            "Sure, here is the plan:\n"
+            "```json\n"
+            '{"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[{"year":2026,"need_tool":true,"ref_text":"今年"}]}}\n'
+            "```"
+        )
+        result = _parse_tool_call(content)
+        assert result is not None
+        assert result["aspects"] == ["CAREER"]
+        assert result["times"][0]["year"] == 2026
+
+    def test_fenced_block_no_lang_tag(self):
+        """Fenced block without `json` language tag should still parse."""
+        content = (
+            "```\n"
+            '{"aspects":["RELATIONSHIP"],"time":{"year":2030,"need_tool":true}}\n'
+            "```"
+        )
+        result = _parse_tool_call(content)
+        assert result is not None
+        assert result["aspects"] == ["RELATIONSHIP"]
+
+    def test_fenced_json_with_thinking_prefix(self):
+        """Reasoning prose followed by fenced JSON should still parse."""
+        content = (
+            "<thinking>Let me think...</thinking>\n"
+            "After analysis the plan is:\n"
+            "```json\n"
+            '{"tool":"planning_tool","args":{"aspects":["CAREER"],"times":[]}}\n'
+            "```\n"
+            "Done."
+        )
+        result = _parse_tool_call(content)
+        assert result is not None
+        assert result["aspects"] == ["CAREER"]
 
     def test_nested_json(self):
         """Nested JSON structure should be parsed, returning args."""

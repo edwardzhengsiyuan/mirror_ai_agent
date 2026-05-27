@@ -187,6 +187,7 @@ def run_turn(
         "history_rounds": history_rounds or [],
         "time_context": time_context,
         "node_model_overrides": node_model_overrides,
+        "aspects": aspects,  # restrict RESPONSE context to current-round aspects
     }
     response_output, response_duration_ms, response_llm_prompt = run_response(
         profile,

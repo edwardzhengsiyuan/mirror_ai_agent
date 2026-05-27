@@ -410,6 +410,7 @@ def run_response(
     time_context = inputs.get("time_context")
     model = inputs.get("model")
     node_model_overrides = inputs.get("node_model_overrides")
+    aspects = inputs.get("aspects")
 
     started_ts = time.perf_counter()
 
@@ -419,6 +420,7 @@ def run_response(
         prompt_config=prompt_config,
         question=question,
         history_rounds=history_rounds,
+        aspects=aspects,
     )
     system_prompt = prompt.get("system_prompt", "")
     user_prompt = prompt.get("user_prompt", "")

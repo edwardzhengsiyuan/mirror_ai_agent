@@ -42,7 +42,8 @@ def test_final_prompt_includes_history() -> None:
         history_rounds=history
     )
     user_prompt = prompt["user_prompt"]
-    assert "Recent conversation" in user_prompt
+    # New layout uses a Chinese "对话历史" heading and Round-prefixed entries.
+    assert "对话历史" in user_prompt
     assert "Round 1" in user_prompt
     assert "以前的问题" in user_prompt
     assert "之前的回答" in user_prompt

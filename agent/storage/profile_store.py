@@ -8,7 +8,8 @@ from typing import Any, Dict
 
 
 def load_profile(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
+    # utf-8-sig silently strips a BOM if some editor/tool wrote one.
+    with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 

@@ -13,13 +13,16 @@ from .tools.llm_tool import llm_report_tool
 from .tools.planning_tool import planning_tool
 
 ASPECT_KEYWORDS = {
-    "CAREER": ["事业", "工作", "职业", "升职", "学业", "考试"],
-    "RELATIONSHIP": ["感情", "婚姻", "恋爱", "对象", "桃花"],
-    "HEALTH": ["健康", "身体", "疾病", "生病", "睡眠"],
+    "CAREER": [
+        "事业", "工作", "职业", "升职", "学业", "考试",
+        "创业", "跳槽", "辞职", "求职", "面试", "项目", "公司",
+    ],
+    "RELATIONSHIP": ["感情", "婚姻", "恋爱", "对象", "桃花", "结婚", "离婚", "另一半", "伴侣"],
+    "HEALTH": ["健康", "身体", "疾病", "生病", "睡眠", "病痛"],
     "GUIREN": ["贵人"],
-    "LIUQIN": ["六亲", "父母", "父亲", "母亲", "兄弟", "姐妹", "子女"],
+    "LIUQIN": ["六亲", "父母", "父亲", "母亲", "兄弟", "姐妹", "子女", "孩子"],
     "XINGGE": ["性格", "性情", "气质"],
-    "OTHER": ["财运", "性格", "运势", "综合", "总体"],
+    "OTHER": ["财运", "运势", "综合", "总体", "投资", "破财"],
 }
 
 RELATIVE_TIME = {
@@ -150,15 +153,88 @@ def _build_planner_prompt(
     return system_prompt, user_prompt
 
 
+def _extract_json_candidates(content: str) -> List[str]:
+    """Yield JSON candidate strings from raw LLM content.
+
+    Order of preference:
+    1. Markdown fenced blocks ```json ... ``` (most explicit).
+    2. Generic fenced blocks ``` ... ``` containing braces.
+    3. The first balanced object substring ``{ ... }``.
+    4. The trimmed full content.
+    """
+    if not isinstance(content, str):
+        return []
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    def _push(value: str) -> None:
+        value = value.strip()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        candidates.append(value)
+
+    fenced_json = re.findall(r"```json\s*([\s\S]*?)```", content, flags=re.IGNORECASE)
+    for block in fenced_json:
+        _push(block)
+
+    fenced_any = re.findall(r"```\s*([\s\S]*?)```", content)
+    for block in fenced_any:
+        if "{" in block and "}" in block:
+            _push(block)
+
+    # Best-effort balanced-brace scan to recover JSON embedded in prose.
+    for start in range(len(content)):
+        if content[start] != "{":
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for end in range(start, len(content)):
+            ch = content[end]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    _push(content[start : end + 1])
+                    break
+        if candidates:
+            break
+
+    _push(content)
+    return candidates
+
+
 def _parse_tool_call(content: str) -> Optional[Dict]:
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(data, dict) and data.get("tool") == "planning_tool":
-        return data.get("args") if isinstance(data.get("args"), dict) else None
-    if isinstance(data, dict) and "aspects" in data and ("time" in data or "times" in data):
-        return data
+    """Parse planner LLM content into a planning_tool args dict.
+
+    Tolerates fenced JSON blocks (```json ... ```) and JSON embedded in
+    surrounding prose. Returns ``None`` if no valid plan-shaped JSON is found.
+    """
+    for candidate in _extract_json_candidates(content):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("tool") == "planning_tool":
+            args = data.get("args")
+            if isinstance(args, dict):
+                return args
+            continue
+        if isinstance(data, dict) and "aspects" in data and ("time" in data or "times" in data):
+            return data
     return None
 
 
