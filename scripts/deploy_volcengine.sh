@@ -162,11 +162,11 @@ main() {
   log "domain: https://${DEPLOY_DOMAIN}"
   log "path: ${DEPLOY_PATH}"
 
-  local tmp_dir env_tmp caddy_snippet_tmp
+  local tmp_dir="" env_tmp="" caddy_snippet_tmp=""
   tmp_dir="$(mktemp -d)"
   env_tmp="${tmp_dir}/server.env"
   caddy_snippet_tmp="${tmp_dir}/api-caddy-snippet.Caddyfile"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  trap '[[ -n "${tmp_dir:-}" ]] && rm -rf "$tmp_dir"' EXIT
 
   write_server_env_file "$env_tmp"
   render_caddy_snippet >"$caddy_snippet_tmp"
@@ -177,8 +177,16 @@ main() {
   log "installing host dependencies (git, docker, compose plugin, sqlite3, curl)"
   ssh_remote "set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y git curl ca-certificates docker.io docker-compose-plugin sqlite3 python3
+apt-get update || true
+apt-get install -y git curl ca-certificates sqlite3 python3
+
+# Install Docker if missing
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com -o get-docker.sh
+  sh get-docker.sh
+  rm get-docker.sh
+fi
+
 systemctl enable --now docker
 docker compose version"
 
