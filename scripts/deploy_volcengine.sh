@@ -51,19 +51,20 @@ require_var() {
 ssh_args() {
   local args=()
   args+=("-p" "${DEPLOY_PORT:-22}")
-  args+=("-o" "ServerAliveInterval=30")
-  args+=("-o" "ServerAliveCountMax=6")
+  args+=("-o" "ServerAliveInterval=15")
+  args+=("-o" "ServerAliveCountMax=4")
   args+=("-o" "ConnectTimeout=20")
-  # Multiplex SSH so the user enters their password once per deploy run.
-  # The control socket lives under ~/.ssh/cm-mirror/ and persists 10 minutes
-  # after the last client exits, covering long polling loops below.
-  # If the platform (e.g. some Windows OpenSSH builds) cannot create the
-  # socket, ssh falls back to a normal connection without erroring out.
-  mkdir -p "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
-  chmod 700 "${HOME}/.ssh" "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
-  args+=("-o" "ControlMaster=auto")
-  args+=("-o" "ControlPath=${HOME}/.ssh/cm-mirror/%r@%h-%p")
-  args+=("-o" "ControlPersist=600")
+  # Optional SSH connection multiplexing. Disabled by default because some
+  # Windows OpenSSH builds cannot create Unix-domain control sockets and
+  # abort with "Failed to connect to new control master". Opt in by setting
+  # DEPLOY_USE_CONTROLMASTER=1 on Linux/macOS to reduce password prompts.
+  if [[ "${DEPLOY_USE_CONTROLMASTER:-0}" == "1" ]]; then
+    mkdir -p "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
+    chmod 700 "${HOME}/.ssh" "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
+    args+=("-o" "ControlMaster=auto")
+    args+=("-o" "ControlPath=${HOME}/.ssh/cm-mirror/%r@%h-%p")
+    args+=("-o" "ControlPersist=600")
+  fi
   if [[ -n "${SSH_KEY_PATH:-}" ]]; then
     args+=("-i" "${SSH_KEY_PATH}")
   fi
@@ -172,6 +173,9 @@ main() {
   log "target: $(remote_target)"
   log "domain: https://${DEPLOY_DOMAIN}"
   log "path: ${DEPLOY_PATH}"
+  if [[ -z "${SSH_KEY_PATH:-}" ]]; then
+    log "tip: set up SSH key auth (ssh-copy-id root@${DEPLOY_HOST}) to avoid repeated password prompts during deploy"
+  fi
 
   local tmp_dir="" env_tmp="" caddy_snippet_tmp=""
   tmp_dir="$(mktemp -d)"
@@ -203,8 +207,8 @@ apt-get install -y git curl ca-certificates sqlite3 python3"
     log "  (the install continues server-side even if our SSH session is interrupted)"
 
     # Kick off the install via setsid + nohup so it survives any SSH disconnect
-    # caused by Docker reconfiguring iptables. We then poll the host every 10s
-    # for a marker file. With ControlMaster, this is a single SSH auth.
+    # caused by Docker reconfiguring iptables. The detached process writes a
+    # marker file when it finishes; we poll for that marker from the client.
     ssh_remote 'set -e
 export DEBIAN_FRONTEND=noninteractive
 rm -f /tmp/.mirror-docker-done /tmp/.mirror-docker-failed
@@ -228,34 +232,54 @@ chmod +x /tmp/mirror-docker-install.sh
 setsid nohup bash -c "if /tmp/mirror-docker-install.sh > /var/log/mirror-docker-install.log 2>&1; then touch /tmp/.mirror-docker-done; else touch /tmp/.mirror-docker-failed; fi" </dev/null >/dev/null 2>&1 &
 echo "[remote] docker install kicked off in background, log: /var/log/mirror-docker-install.log"'
 
-    log "polling for docker install completion (up to 5 minutes)..."
-    local attempt=0
-    local installed=0
-    local marker=""
-    while (( attempt < 30 )); do
+    # Strategy: do most of the waiting on the client side so we don't hold an
+    # SSH session open while Docker reconfigures iptables (which would drop the
+    # session). Then make ONE server-side wait call to finish off.
+    log "sleeping 120s on the client while docker installs in the background..."
+    log "  (the iptables reset that previously killed our SSH happens during this window)"
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
       sleep 10
-      attempt=$((attempt + 1))
-      # Single SSH call per poll: returns "done", "failed", or empty.
-      marker="$(ssh_remote 'if [[ -f /tmp/.mirror-docker-done ]]; then echo done; elif [[ -f /tmp/.mirror-docker-failed ]]; then echo failed; fi' 2>/dev/null || true)"
-      marker="${marker//$'\r'/}"
-      marker="${marker//$'\n'/}"
-      if [[ "$marker" == "done" ]]; then
-        log "docker install completed after ~${attempt}0s"
-        installed=1
-        break
-      fi
-      if [[ "$marker" == "failed" ]]; then
-        log "docker install reported failure; dumping last 100 lines of install log:"
-        ssh_remote "tail -100 /var/log/mirror-docker-install.log" || true
-        die "docker install failed"
-      fi
-      printf '[deploy] still installing docker (%d/30)\n' "$attempt"
+      printf '[deploy] still sleeping (%d/12)\n' "$i"
     done
 
-    if (( installed == 0 )); then
-      log "docker install did not finish in time; dumping last 100 lines of install log:"
+    log "checking docker install status..."
+    local marker=""
+    marker="$(ssh_remote 'if [[ -f /tmp/.mirror-docker-done ]]; then echo done; elif [[ -f /tmp/.mirror-docker-failed ]]; then echo failed; else echo pending; fi' 2>/dev/null || echo error)"
+    marker="${marker//$'\r'/}"
+    marker="${marker//$'\n'/}"
+
+    if [[ "$marker" == "done" ]]; then
+      log "docker install completed within the initial 2-minute window"
+    elif [[ "$marker" == "failed" ]]; then
+      log "docker install reported failure; dumping last 100 lines of install log:"
       ssh_remote "tail -100 /var/log/mirror-docker-install.log" || true
-      die "docker install timed out after 5 minutes"
+      die "docker install failed"
+    else
+      log "docker install still running (marker=${marker}); doing one server-side wait (up to 4 more minutes)..."
+      # Single SSH call that waits server-side. Only one password prompt.
+      # exit 0 = done, 1 = failed (with log tail), 2 = timeout.
+      local rc=0
+      ssh_remote "for i in \$(seq 1 48); do
+  if [[ -f /tmp/.mirror-docker-done ]]; then
+    exit 0
+  fi
+  if [[ -f /tmp/.mirror-docker-failed ]]; then
+    echo '--- /var/log/mirror-docker-install.log (last 100 lines) ---'
+    tail -100 /var/log/mirror-docker-install.log
+    exit 1
+  fi
+  sleep 5
+done
+echo '--- timeout, last 100 lines of install log ---'
+tail -100 /var/log/mirror-docker-install.log
+exit 2" || rc=$?
+      case "$rc" in
+        0) log "docker install completed (after extended wait)" ;;
+        1) die "docker install failed; see log above" ;;
+        2) die "docker install did not finish in time (~6 min total)" ;;
+        *) die "could not verify docker install state (rc=$rc)" ;;
+      esac
     fi
 
     ssh_remote "systemctl enable --now docker
@@ -292,22 +316,22 @@ mkdir -p \"${DEPLOY_PATH}/storage\""
   log "building and starting API container on 127.0.0.1:8000"
   ssh_remote "cd \"${DEPLOY_PATH}\" && docker compose -f docker-compose.api-only.yml up -d --build && docker compose -f docker-compose.api-only.yml ps"
 
-  log "waiting for local API health endpoint"
-  local attempt=1
-  while (( attempt <= 30 )); do
-    if ssh_remote "curl -fsS http://127.0.0.1:8000/health >/dev/null"; then
-      break
+  log "waiting for local API health endpoint and verifying routes (single SSH session)"
+  # All checks in one server-side loop so we only prompt for the password once.
+  ssh_remote "for i in \$(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    echo '[remote] /health OK'
+    if curl -fsS http://127.0.0.1:8000/docs >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null 2>&1; then
+      echo '[remote] /docs and /openapi.json OK'
+      exit 0
     fi
-    printf '[deploy] waiting for health (%d/30)\n' "$attempt"
-    sleep 5
-    attempt=$((attempt + 1))
-  done
-  (( attempt <= 30 )) || die "http://127.0.0.1:8000/health did not become healthy on the server"
-
-  log "verifying local API routes"
-  ssh_remote "curl -fsS http://127.0.0.1:8000/health >/dev/null"
-  ssh_remote "curl -fsS http://127.0.0.1:8000/docs >/dev/null"
-  ssh_remote "curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null"
+    echo '[remote] /docs or /openapi.json failed; retrying...'
+  fi
+  sleep 5
+done
+echo '[remote] timed out waiting for API endpoints'
+docker compose -f ${DEPLOY_PATH}/docker-compose.api-only.yml logs --tail=200 || true
+exit 1" || die "local API did not become healthy on the server"
 
   if [[ "$DEPLOY_VERIFY_PUBLIC" == "1" ]]; then
     log "verifying public HTTPS routes"
