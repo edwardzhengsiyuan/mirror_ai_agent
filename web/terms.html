@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>服务条款 · BaZi Agent</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --card-bg: #ffffff;
+  --border: #e2e3e5;
+  --muted: #6c6f73;
+  --accent: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card-bg: #1f2024;
+    --border: #2c2d31;
+    --muted: #9aa0a6;
+    --accent: #60a5fa;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: inherit;
+  line-height: 1.7;
+}
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 36px;
+}
+h1 { margin: 0 0 6px; font-size: 1.6rem; }
+h2 { margin-top: 28px; font-size: 1.15rem; }
+.muted { color: var(--muted); font-size: 0.92rem; }
+a { color: var(--accent); }
+ul { padding-left: 1.2em; }
+li { margin: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>服务条款 / Terms of Service</h1>
+    <p class="muted">最后更新：请在部署前替换为实际日期。</p>
+
+    <p>欢迎使用 BaZi Agent（"本服务"）。本服务由网站经营者（以下简称"我们"）运营，提供基于大语言模型的命理咨询参考。使用本服务即表示您已阅读、理解并同意以下条款。</p>
+
+    <h2>1. 服务范围</h2>
+    <ul>
+      <li>本服务通过 API 与网页提供八字、紫微、六爻、合盘、测字等命理参考输出。</li>
+      <li>所有输出由大语言模型自动生成，仅供休闲娱乐与思考参考，<strong>不构成任何投资、医疗、法律或人生重大决策的建议</strong>。</li>
+      <li>请勿将本服务用于诈骗、违法占卜活动，或任何违反所在地法律法规的用途。</li>
+    </ul>
+
+    <h2>2. 账户与计费</h2>
+    <ul>
+      <li>用户通过自助注册获得唯一账户 ID 与初始 API Key。请妥善保管，泄漏导致的损失自行承担。</li>
+      <li>充值通过 Stripe 完成。1 元人民币 = 100 积分。各接口的实际计费见 <code>/admin/pricing</code>。</li>
+      <li>积分一旦扣除即视为消费完成，原则上不支持退款，除非出现服务器明确故障导致的扣费错误（请在 24 小时内联系客服）。</li>
+    </ul>
+
+    <h2>3. 用户行为</h2>
+    <ul>
+      <li>禁止使用脚本绕过 API 限速或合法计费。</li>
+      <li>禁止上传他人身份信息（如生辰）而未取得当事人同意。</li>
+      <li>我们保留在发现滥用、欺诈、违法行为时立即停用账户并保留余下积分的权利。</li>
+    </ul>
+
+    <h2>4. 知识产权</h2>
+    <p>本服务的网页、代码与算法版权归我们所有。命理输出文本您可自由用于个人学习与交流，但请勿伪造为权威认证使用。</p>
+
+    <h2>5. 免责声明</h2>
+    <p>本服务按"现状"提供，不对其连续性、准确性、特定用途适用性作任何明示或默示担保。在法律允许的最大范围内，您因使用本服务产生的任何直接或间接损失，我们不承担赔偿责任。</p>
+
+    <h2>6. 条款变更</h2>
+    <p>我们可能随时更新本条款，更新后将以页面顶部"最后更新"日期为准，继续使用即视为接受新条款。</p>
+
+    <h2>7. 联系方式</h2>
+    <p>如有疑问或申诉，请发送邮件至 <code>support@example.com</code>。请在部署前将此邮箱替换为实际客服地址。</p>
+
+    <p class="muted">本页面为模板，部署前请咨询本地法律顾问完成定制。Stripe 在审核生产账户时会爬取此 URL，请确保其内容真实可访问。</p>
+
+    <p><a href="/">← 返回首页</a> · <a href="/privacy.html">隐私政策</a></p>
+  </div>
+</main>
+</body>
+</html>

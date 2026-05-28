@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>隐私政策 · BaZi Agent</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --card-bg: #ffffff;
+  --border: #e2e3e5;
+  --muted: #6c6f73;
+  --accent: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card-bg: #1f2024;
+    --border: #2c2d31;
+    --muted: #9aa0a6;
+    --accent: #60a5fa;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: inherit;
+  line-height: 1.7;
+}
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 36px;
+}
+h1 { margin: 0 0 6px; font-size: 1.6rem; }
+h2 { margin-top: 28px; font-size: 1.15rem; }
+.muted { color: var(--muted); font-size: 0.92rem; }
+a { color: var(--accent); }
+ul { padding-left: 1.2em; }
+li { margin: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>隐私政策 / Privacy Policy</h1>
+    <p class="muted">最后更新：请在部署前替换为实际日期。</p>
+
+    <p>本政策说明 BaZi Agent（"本服务"）收集、使用、存储、共享与保护个人信息的规则。使用本服务即表示您同意以下安排。</p>
+
+    <h2>1. 我们收集的信息</h2>
+    <ul>
+      <li><strong>账户信息：</strong>自动生成的 <code>user_id</code>、加密后的 API Key 哈希、首次注册时间。</li>
+      <li><strong>命理资料：</strong>您主动提交的出生年月日时分、性别、姓名等用于排盘的资料。</li>
+      <li><strong>会话日志：</strong>您发送的问题、模型生成的回答、计费流水。完整 Prompt 与模型响应保存在我们的服务器以便排障与计费稽核。</li>
+      <li><strong>支付信息：</strong>由 Stripe 处理，我们仅保存 <code>checkout_session_id</code>、支付金额、支付状态，<strong>不接触</strong>您的银行卡号或微信账户。</li>
+      <li><strong>技术信息：</strong>HTTP 请求的 IP 地址、UA、时间戳，用于安全审计与限流。</li>
+    </ul>
+
+    <h2>2. 我们如何使用这些信息</h2>
+    <ul>
+      <li>响应您发起的命理咨询请求并扣除对应积分。</li>
+      <li>调用第三方大语言模型 API（如 GPTProto / 阿里 DashScope / Qwen）生成回答。您的问题与简要 Prompt 会发送给模型供应商以完成推理。</li>
+      <li>识别滥用、欺诈、限流。</li>
+      <li>排查服务故障、优化模型路由。</li>
+    </ul>
+
+    <h2>3. 我们如何共享</h2>
+    <ul>
+      <li>除以下情况外，我们不会主动向第三方共享您的个人信息：
+        <ul>
+          <li><strong>支付处理：</strong>Stripe（详见 <a href="https://stripe.com/privacy">Stripe 隐私政策</a>）。</li>
+          <li><strong>模型推理：</strong>您的命理问题与排盘摘要会传给上述模型供应商完成生成。</li>
+          <li><strong>法律要求：</strong>当我们收到符合法定程序的协助调查、监管要求时。</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h2>4. 数据保留与删除</h2>
+    <ul>
+      <li>账户、流水、会话日志在账户存续期间保留。账户停用后我们保留最长 90 天用于纠纷处理。</li>
+      <li>您可邮件 <code>support@example.com</code> 申请导出或删除全部资料。我们在收到请求后 14 个工作日内回应。</li>
+    </ul>
+
+    <h2>5. 安全</h2>
+    <ul>
+      <li>API Key 仅保存哈希，原文创建后只显示一次。</li>
+      <li>支付通道走 Stripe，HTTPS 强制启用，Webhook 由签名校验。</li>
+      <li>数据库支持每日加密备份。</li>
+    </ul>
+
+    <h2>6. 第三方服务的隐私链接</h2>
+    <ul>
+      <li>Stripe：<a href="https://stripe.com/privacy">stripe.com/privacy</a></li>
+      <li>GPTProto（OpenAI 兼容代理）：请咨询服务提供方。</li>
+      <li>阿里云通义千问：<a href="https://www.aliyun.com/policy/privacy">aliyun.com/policy/privacy</a></li>
+    </ul>
+
+    <h2>7. 联系</h2>
+    <p>隐私问题请联系 <code>privacy@example.com</code>。请在部署前替换为实际地址。</p>
+
+    <p class="muted">本页面为模板，部署前请咨询本地法律顾问完成定制（PIPL / GDPR / CCPA 等可能各有强制条款）。Stripe 在审核生产账户时会爬取此 URL，请确保其内容真实可访问。</p>
+
+    <p><a href="/">← 返回首页</a> · <a href="/terms.html">服务条款</a></p>
+  </div>
+</main>
+</body>
+</html>

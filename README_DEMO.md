@@ -62,6 +62,10 @@ The Qwen route uses DashScope's OpenAI-compatible endpoint by default: `https://
 
 ## Remote Docker Deployment
 
+> For a one-page production checklist (DNS, HTTPS, Stripe live keys, backups,
+> hardening, rotation), see [`DEPLOYMENT.md`](DEPLOYMENT.md). The notes below
+> cover the Docker layer itself.
+
 ### Pre-flight checklist
 
 - Server with Docker Engine + Docker Compose v2 installed (`docker compose version` works).
