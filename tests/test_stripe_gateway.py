@@ -145,19 +145,19 @@ def test_from_env_missing_secret_key_means_unconfigured() -> None:
     assert gw.webhook_configured is False
 
 
-def test_from_env_payment_methods_default_includes_wechat() -> None:
+def test_from_env_payment_methods_default_is_card_only() -> None:
+    """Safe default: many accounts can't legally collect WeChat Pay, so a
+    blank STRIPE_PAYMENT_METHODS env var must NOT silently opt into it."""
     gw = StripeGateway.from_env({"STRIPE_SECRET_KEY_TEST": "sk_test_x"})
-    # Default ships with both card and wechat_pay.
-    assert "card" in gw.payment_method_types
-    assert "wechat_pay" in gw.payment_method_types
+    assert gw.payment_method_types == ["card"]
 
 
-def test_from_env_payment_methods_overridable_via_env() -> None:
+def test_from_env_payment_methods_explicit_opt_in_to_wechat() -> None:
     gw = StripeGateway.from_env({
         "STRIPE_SECRET_KEY_TEST": "sk_test_x",
-        "STRIPE_PAYMENT_METHODS": "card",  # account hasn't enabled wechat_pay
+        "STRIPE_PAYMENT_METHODS": "card,wechat_pay",
     })
-    assert gw.payment_method_types == ["card"]
+    assert gw.payment_method_types == ["card", "wechat_pay"]
 
 
 def test_from_env_payment_methods_strips_whitespace() -> None:
@@ -190,7 +190,7 @@ def test_build_checkout_uses_gateway_default_methods() -> None:
 
 
 def test_build_checkout_session_calls_stripe_correctly() -> None:
-    gw = _gw()
+    gw = _gw(payment_method_types=["card", "wechat_pay"])
     fake_stripe = MagicMock()
     fake_stripe.checkout.Session.create.return_value = {
         "id": "cs_test_abc",
@@ -206,12 +206,10 @@ def test_build_checkout_session_calls_stripe_correctly() -> None:
         )
     assert result["id"] == "cs_test_abc"
     assert result["url"].startswith("https://checkout.stripe.com")
-    # Verify the kwargs we sent.
     kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
     assert kwargs["mode"] == "payment"
     assert "card" in kwargs["payment_method_types"]
     assert "wechat_pay" in kwargs["payment_method_types"]
-    # WeChat web requires this option.
     assert kwargs["payment_method_options"]["wechat_pay"]["client"] == "web"
     assert kwargs["client_reference_id"] == "u_alice"
     assert kwargs["metadata"]["user_id"] == "u_alice"

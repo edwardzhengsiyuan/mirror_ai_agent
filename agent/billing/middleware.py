@@ -33,6 +33,7 @@ the rest of the billing module. Two integration styles are supported:
 from __future__ import annotations
 
 import functools
+import os
 import uuid
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
@@ -59,6 +60,20 @@ def _bearer_token() -> str:
     if not header.startswith("Bearer "):
         return ""
     return header.removeprefix("Bearer ").strip()
+
+
+def _admin_bypass_enabled() -> bool:
+    """Return True iff the admin token is allowed to bypass billing on /v1/*.
+
+    Read each call (rather than cached at import) so tests can monkeypatch
+    the env var freely and production restarts pick up changes. Default
+    is ``True`` for backwards compatibility with existing smoke tests
+    and admin scripts.
+    """
+    raw = (os.environ.get("BILLING_ADMIN_BYPASS") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
 
 
 def _api_error(status: int, code: str, message: str, **details: Any) -> _FLASK_ERROR:
@@ -96,6 +111,13 @@ class BillingHelpers:
         admin token, the returned auth dict has ``is_admin=True`` and
         ``user_id=None`` and rate-limit/billing should be skipped by the
         caller. The default (``False``) only accepts user API keys.
+
+        The admin-bypass-on-billed-endpoints behaviour can additionally be
+        disabled at runtime by setting ``BILLING_ADMIN_BYPASS=0`` in the
+        environment. The /admin/* endpoints (which use ``require_admin``
+        instead of this method) are never affected. Recommended for any
+        production deploy where ``DEMO_API_TOKEN`` might leak — without
+        the bypass the worst a leaked token can do is touch /admin/*.
         """
         token = _bearer_token()
         if not token:
@@ -103,6 +125,13 @@ class BillingHelpers:
         if allow_admin_bypass:
             expected_admin = (self._admin_token_getter() or "").strip()
             if expected_admin and token == expected_admin:
+                if not _admin_bypass_enabled():
+                    return None, _api_error(
+                        403,
+                        "admin_bypass_disabled",
+                        "Admin token is not allowed on billed /v1/* endpoints. "
+                        "Use a user API key, or set BILLING_ADMIN_BYPASS=1 to re-enable.",
+                    )
                 return {"user_id": None, "is_admin": True, "key_hash": None}, None
         try:
             auth = self.service.authenticate(token)

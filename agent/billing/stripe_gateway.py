@@ -173,13 +173,17 @@ class StripeGateway:
         self.cancel_url = cancel_url
         self.mode = mode
         self.pack_config = pack_config or load_pack_config()
-        self.payment_method_types = list(payment_method_types or ["card", "wechat_pay"])
+        self.payment_method_types = list(payment_method_types or ["card"])
 
     # -- factories ------------------------------------------------------
 
     @classmethod
     def from_env(cls, env: Optional[Dict[str, str]] = None) -> "StripeGateway":
-        env = env or os.environ  # type: ignore[assignment]
+        # ``env is None`` falls back to the real process environment; an
+        # explicit empty dict means "ignore env vars entirely" — important
+        # for tests on machines where the developer's .env has Stripe keys.
+        if env is None:
+            env = os.environ  # type: ignore[assignment]
         mode = (env.get("STRIPE_MODE") or "test").strip().lower()
         if mode not in ("test", "live"):
             mode = "test"
@@ -187,12 +191,14 @@ class StripeGateway:
         # Comma-separated list, e.g. "card,wechat_pay" or just "card".
         # WeChat Pay must be turned on per-account in the Stripe dashboard
         # (Settings → Payment methods); listing it here when the account
-        # hasn't enabled it will make Session.create return 4xx.
+        # hasn't enabled it will make Session.create return 4xx. The default
+        # is the conservative "card" only — flip on wechat_pay explicitly
+        # in your .env after confirming the dashboard toggle is on.
         raw_methods = (env.get("STRIPE_PAYMENT_METHODS") or "").strip()
         if raw_methods:
             methods = [m.strip() for m in raw_methods.split(",") if m.strip()]
         else:
-            methods = ["card", "wechat_pay"]
+            methods = ["card"]
         return cls(
             secret_key=env.get(f"STRIPE_SECRET_KEY_{suffix}") or env.get("STRIPE_SECRET_KEY"),
             webhook_secret=env.get(f"STRIPE_WEBHOOK_SECRET_{suffix}") or env.get("STRIPE_WEBHOOK_SECRET"),

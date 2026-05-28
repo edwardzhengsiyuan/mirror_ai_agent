@@ -49,6 +49,10 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY_TEST", "pk_test_dummy")
     monkeypatch.setenv("STRIPE_SUCCESS_URL", "https://example.com/billing.html?status=success&session_id={CHECKOUT_SESSION_ID}")
     monkeypatch.setenv("STRIPE_CANCEL_URL", "https://example.com/billing.html?status=cancelled")
+    # Pin the safe default so the developer's local .env file (which may
+    # opt into wechat_pay for manual smoke tests) doesn't leak into the
+    # in-process test app via web_server.load_env_file.
+    monkeypatch.setenv("STRIPE_PAYMENT_METHODS", "card")
     return create_app(
         run_turn_func=_stub_turn,
         run_hepan_turn_func=_stub_turn,
@@ -161,9 +165,11 @@ def test_topup_packs_public_no_auth(client) -> None:
 def test_topup_packs_signals_unconfigured_stripe(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
-    monkeypatch.delenv("STRIPE_SECRET_KEY_TEST", raising=False)
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    # setenv("", "") rather than delenv so web_server.load_env_file doesn't
+    # silently repopulate from the developer's real .env on this machine.
+    monkeypatch.setenv("STRIPE_SECRET_KEY_TEST", "")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "")
+    monkeypatch.setenv("STRIPE_MODE", "")
     app = create_app(
         run_turn_func=_stub_turn,
         run_hepan_turn_func=_stub_turn,
@@ -207,11 +213,47 @@ def test_checkout_create_with_pack_id(client, stripe_module_mock) -> None:
     assert body["amount_fen"] == 3000
     assert body["credits"] == 3000
     assert body["currency"] == "cny"
-    # Verify the SDK got the right kwargs.
     kwargs = stripe_module_mock.checkout.Session.create.call_args.kwargs
     assert kwargs["client_reference_id"] == "u_alice"
     assert kwargs["metadata"]["user_id"] == "u_alice"
+    # Fixture leaves STRIPE_PAYMENT_METHODS unset, so the safe default ("card")
+    # applies. Coverage for WeChat opt-in lives in
+    # test_checkout_includes_wechat_when_opted_in below.
+    assert kwargs["payment_method_types"] == ["card"]
+
+
+def test_checkout_includes_wechat_when_opted_in(tmp_path, monkeypatch) -> None:
+    """Explicit STRIPE_PAYMENT_METHODS=card,wechat_pay turns WeChat back on."""
+    monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
+    monkeypatch.setenv("STRIPE_MODE", "test")
+    monkeypatch.setenv("STRIPE_SECRET_KEY_TEST", STRIPE_SECRET)
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET_TEST", WEBHOOK_SECRET)
+    monkeypatch.setenv("STRIPE_PAYMENT_METHODS", "card,wechat_pay")
+    app = create_app(
+        run_turn_func=_stub_turn,
+        run_hepan_turn_func=_stub_turn,
+        run_cezi_turn_func=_stub_turn,
+        run_najia_turn_func=_stub_turn,
+        run_zwds_turn_func=_stub_turn,
+        storage_root=str(tmp_path / "storage"),
+    )
+    c = app.test_client()
+    api_key = _make_user(c)
+    fake = MagicMock()
+    fake.checkout.Session.create.return_value = {"id": "cs_wp", "url": "https://x"}
+    with patch.dict(sys.modules, {"stripe": fake}):
+        resp = c.post(
+            "/v1/checkout/create",
+            headers=_user_headers(api_key),
+            json={"pack_id": "pack_10"},
+        )
+    assert resp.status_code == 200, resp.get_json()
+    kwargs = fake.checkout.Session.create.call_args.kwargs
     assert "wechat_pay" in kwargs["payment_method_types"]
+    assert kwargs["payment_method_options"]["wechat_pay"]["client"] == "web"
+    body = c.get("/v1/topup_packs").get_json()
+    assert "wechat_pay" in body["payment_methods"]
 
 
 def test_checkout_create_with_custom_yuan(client, stripe_module_mock) -> None:
@@ -294,9 +336,9 @@ def test_checkout_create_no_auth_returns_401(client, stripe_module_mock) -> None
 def test_checkout_create_503_when_stripe_unconfigured(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
-    monkeypatch.delenv("STRIPE_SECRET_KEY_TEST", raising=False)
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setenv("STRIPE_SECRET_KEY_TEST", "")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "")
+    monkeypatch.setenv("STRIPE_MODE", "")
     app = create_app(
         run_turn_func=_stub_turn,
         run_hepan_turn_func=_stub_turn,
@@ -463,9 +505,9 @@ def test_webhook_unknown_user_returns_404(client) -> None:
 def test_webhook_503_when_secret_not_configured(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET_TEST", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET_TEST", "")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("STRIPE_MODE", "")
     app = create_app(
         run_turn_func=_stub_turn,
         run_hepan_turn_func=_stub_turn,

@@ -305,6 +305,27 @@ def test_admin_bypass_does_not_charge(client) -> None:
     assert resp.headers.get("X-Charged-Credits") is None
 
 
+def test_admin_bypass_disabled_via_env_returns_403(client, monkeypatch) -> None:
+    """In production we recommend BILLING_ADMIN_BYPASS=0 so a leaked admin
+    token cannot burn LLM credits on /v1/*. Toggling it off must reject
+    the admin token on billed endpoints while /admin/* still works."""
+    monkeypatch.setenv("BILLING_ADMIN_BYPASS", "0")
+    resp = client.post(
+        "/v1/cezi/ask",
+        headers=_admin(),
+        json={
+            "user_id": "u_admin_test",
+            "question": "ok?",
+            "character": "合",
+        },
+    )
+    assert resp.status_code == 403, resp.get_json()
+    assert resp.get_json()["error"]["code"] == "admin_bypass_disabled"
+    # /admin/* still accepts the admin token regardless of this flag.
+    list_resp = client.get("/admin/users", headers=_admin())
+    assert list_resp.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # user-key flow: charge + settle on success
 # ---------------------------------------------------------------------------

@@ -39,7 +39,7 @@ All write paths use `BEGIN IMMEDIATE` to take the writer lock up front.
 
 ## Charging flow (sync endpoint)
 
-1. **Authenticate** — `BillingHelpers.authenticate_request(allow_admin_bypass=True)` resolves the bearer token to either `{user_id, key_hash, ...}` or `{is_admin: True}`. Admin requests skip steps 2–5 entirely.
+1. **Authenticate** — `BillingHelpers.authenticate_request(allow_admin_bypass=True)` resolves the bearer token to either `{user_id, key_hash, ...}` or `{is_admin: True}`. Admin requests skip steps 2–5 entirely **iff** the env var `BILLING_ADMIN_BYPASS` is not `0/false/no/off`. When the toggle is off, admin tokens on `/v1/*` endpoints return 403 with code `admin_bypass_disabled`; `/admin/*` is unaffected. Recommended setting for production is `0` so a leaked admin token cannot burn LLM credits.
 2. **Validate the payload** — return early on 4xx without touching credits.
 3. **Charge** — `service.charge(user_id, endpoint, cost, request_id)` deducts credits atomically and inserts a `pending` ledger row + an `inflight` slot. Raises `InsufficientFundsError` (→ 402, code `insufficient_funds`), `DailyLimitExceededError` (→ 402, code `daily_limit_exceeded`, computed from today's UTC charges − refunds vs. `users.daily_credits_limit`), `InflightLimitError` (→ 429), `DuplicateRequestError` (→ 409).
 4. **Run the work** through a sink wrapped by `ctx["wrap_sink"]`, which observes `llm_usage` events from `llm_tool` and aggregates `prompt_tokens` / `completion_tokens` / `node_count`.
