@@ -48,9 +48,11 @@ require_var() {
   [[ -n "$value" ]] || die "${name} is required in ${DEPLOY_ENV_FILE}"
 }
 
-ssh_args() {
+# Common -o flags that work for both ssh and scp. The port flag and ControlMaster
+# options are appended later because ssh uses -p while scp uses -P, and because
+# ControlMaster options sometimes need to vary per tool.
+_common_ssh_opts() {
   local args=()
-  args+=("-p" "${DEPLOY_PORT:-22}")
   args+=("-o" "ServerAliveInterval=15")
   args+=("-o" "ServerAliveCountMax=4")
   args+=("-o" "ConnectTimeout=20")
@@ -68,6 +70,23 @@ ssh_args() {
   if [[ -n "${SSH_KEY_PATH:-}" ]]; then
     args+=("-i" "${SSH_KEY_PATH}")
   fi
+  printf '%s\n' "${args[@]}"
+}
+
+# ssh accepts the port via lowercase -p.
+ssh_args() {
+  local args=()
+  args+=("-p" "${DEPLOY_PORT:-22}")
+  while IFS= read -r arg; do args+=("$arg"); done < <(_common_ssh_opts)
+  printf '%s\n' "${args[@]}"
+}
+
+# scp accepts the port via uppercase -P. Lowercase -p means "preserve mtimes"
+# and that bug caused the deploy to fail with `scp: stat local "22"`.
+scp_args() {
+  local args=()
+  args+=("-P" "${DEPLOY_PORT:-22}")
+  while IFS= read -r arg; do args+=("$arg"); done < <(_common_ssh_opts)
   printf '%s\n' "${args[@]}"
 }
 
@@ -89,7 +108,7 @@ scp_to_remote() {
   local target
   target="$(remote_target)"
   local args=()
-  while IFS= read -r arg; do args+=("$arg"); done < <(ssh_args)
+  while IFS= read -r arg; do args+=("$arg"); done < <(scp_args)
   scp "${args[@]}" "$src" "${target}:${dest}"
 }
 
