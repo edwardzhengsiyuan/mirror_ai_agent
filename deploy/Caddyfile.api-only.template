@@ -1,0 +1,68 @@
+{
+  email ${ACME_EMAIL}
+
+  servers {
+    timeouts {
+      read_body 5m
+      read_header 30s
+      write 10m
+      idle 10m
+    }
+  }
+}
+
+${DEPLOY_DOMAIN} {
+  encode gzip
+
+  # Public operational surfaces.
+  @docs {
+    path /docs /docs/* /openapi.json /health
+  }
+
+  # Customer-facing API and payment flow.
+  @api {
+    path /v1 /v1/* /webhooks/stripe
+  }
+
+  # Keep self-service registration/topup and Stripe-required legal pages.
+  @selfService {
+    path /register.html /billing.html /terms.html /privacy.html
+  }
+
+  handle @docs {
+    reverse_proxy bazi-agent-api:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  handle @api {
+    reverse_proxy bazi-agent-api:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  handle @selfService {
+    reverse_proxy bazi-agent-api:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  # Everything else stays private: /, /index.html, /admin.html, /admin/*,
+  # legacy /api/* web-console endpoints, and any static frontend assets not
+  # needed for the allowed pages above.
+  handle {
+    respond "Not Found" 404
+  }
+}

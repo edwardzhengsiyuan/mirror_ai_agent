@@ -4,6 +4,10 @@ One-page checklist for taking BaZi Agent from local test mode to a public
 HTTPS server taking real payments. Pair this with the long-form notes in
 `README_DEMO.md`; this file is the dense checklist.
 
+For the `api.mymirrorai.com` Volcengine deployment that exposes only API
+docs/API/self-service billing pages and hides the BaZi frontend/admin UI, see
+`DEPLOY_VOLCENGINE.md`.
+
 > The Docker image, Caddy reverse proxy, Stripe integration, billing
 > SQLite store, and admin/user APIs are already built. Everything below
 > is configuration, secrets, DNS, and policy — no code changes required.

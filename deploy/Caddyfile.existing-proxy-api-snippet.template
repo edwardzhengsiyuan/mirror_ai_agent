@@ -1,0 +1,57 @@
+# Append this site block to the host-level /etc/caddy/Caddyfile.
+# It is designed for the existing production server where Caddy already serves
+# mymirrorai.com from /var/www/html and owns ports 80/443.
+#
+# The API container must be running on 127.0.0.1:8000 via:
+#   docker compose -f docker-compose.api-only.yml up -d --build
+
+${DEPLOY_DOMAIN} {
+  encode gzip
+
+  @docs {
+    path /docs /docs/* /openapi.json /health
+  }
+
+  @api {
+    path /v1 /v1/* /webhooks/stripe
+  }
+
+  @selfService {
+    path /register.html /billing.html /terms.html /privacy.html
+  }
+
+  handle @docs {
+    reverse_proxy 127.0.0.1:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  handle @api {
+    reverse_proxy 127.0.0.1:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  handle @selfService {
+    reverse_proxy 127.0.0.1:8000 {
+      flush_interval -1
+      transport http {
+        read_timeout 10m
+        write_timeout 10m
+      }
+    }
+  }
+
+  # Keep the BaZi frontend, admin UI/API, and legacy web-console API hidden.
+  handle {
+    respond "Not Found" 404
+  }
+}

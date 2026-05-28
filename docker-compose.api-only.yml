@@ -1,0 +1,23 @@
+x-logging: &default-logging
+  # Docker's default json-file driver has no size cap, so a noisy week can
+  # fill the host disk. Cap the API container at ~250MB of logs.
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  bazi-agent-api:
+    build: .
+    container_name: bazi-agent-api
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+    restart: unless-stopped
+    # Existing-proxy deployment: the host-level Caddy already owns :80/:443
+    # for mymirrorai.com. Publish the API only on loopback and let that Caddy
+    # reverse_proxy api.mymirrorai.com to 127.0.0.1:8000.
+    ports:
+      - "127.0.0.1:8000:8000"
+    logging: *default-logging
