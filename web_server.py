@@ -57,6 +57,43 @@ def load_env_file(path: str) -> None:
                 os.environ[key] = value
 
 
+def _maybe_init_sentry() -> bool:
+    """Initialise Sentry if SENTRY_DSN is set and the SDK is installed.
+
+    No-op when ``SENTRY_DSN`` is empty (i.e. local dev / tests). When the
+    DSN is configured but ``sentry-sdk`` is not installed, we print a
+    warning rather than crashing so a half-configured production host can
+    still serve traffic. Returns ``True`` if Sentry was initialised.
+    """
+    dsn = (os.environ.get("SENTRY_DSN") or "").strip()
+    if not dsn:
+        return False
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+    except ImportError:
+        print(
+            "[sentry] SENTRY_DSN is set but sentry-sdk is not installed; "
+            "skipping. Add `sentry-sdk[flask]` to requirements.txt to enable.",
+            flush=True,
+        )
+        return False
+    environment = (os.environ.get("SENTRY_ENVIRONMENT") or os.environ.get("STRIPE_MODE") or "production").strip()
+    try:
+        traces_rate = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.05"))
+    except ValueError:
+        traces_rate = 0.05
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=environment,
+        traces_sample_rate=traces_rate,
+        integrations=[FlaskIntegration()],
+        send_default_pii=False,
+    )
+    print(f"[sentry] initialised (env={environment}, traces={traces_rate})", flush=True)
+    return True
+
+
 def create_app(
     run_turn_func: Callable = run_turn,
     run_hepan_turn_func: Callable = run_hepan_turn,
@@ -66,6 +103,7 @@ def create_app(
     storage_root: Optional[str] = None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
+    _maybe_init_sentry()
     app = Flask(__name__, static_folder="web", static_url_path="")
 
     root = storage_root or os.path.join(os.path.dirname(__file__), "storage")

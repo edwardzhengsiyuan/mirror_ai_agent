@@ -1,4 +1,8 @@
 {
+  # Required for ACME (Let's Encrypt). Replace with the real ops email
+  # before going live so renewal warnings reach a human.
+  email ops@example.com
+
   servers {
     timeouts {
       read_body 5m
@@ -9,6 +13,10 @@
   }
 }
 
+# -----------------------------------------------------------------------------
+# Default (no DNS yet): plain HTTP on :80 — fine for `curl http://server-ip/`.
+# Keep this block for first-boot smoke tests, comment it out once DNS is live.
+# -----------------------------------------------------------------------------
 :80 {
   encode gzip
 
@@ -20,3 +28,55 @@
     }
   }
 }
+
+# -----------------------------------------------------------------------------
+# Production (HTTPS with auto-renewing Let's Encrypt cert).
+#
+# To turn on:
+#   1. Comment out the `:80 { ... }` block above.
+#   2. Uncomment the block below.
+#   3. Replace demo.example.com with the real domain (must already have
+#      an A/AAAA record pointing at this server) and set the `email` at
+#      the top of this file.
+#   4. `docker compose restart caddy` — Caddy obtains and installs the
+#      certificate automatically; subsequent renewals happen in-process.
+# -----------------------------------------------------------------------------
+# demo.example.com {
+#   encode gzip
+#
+#   # Stop bots probing the admin surface; comment out if you publish admin.html.
+#   @admin path /admin/* /admin.html
+#   handle @admin {
+#     # Optional: restrict admin endpoints to your office IP.
+#     # @office remote_ip 1.2.3.4/32
+#     # handle @office {
+#     #   reverse_proxy bazi-agent-api:8000
+#     # }
+#     # respond 403
+#     reverse_proxy bazi-agent-api:8000
+#   }
+#
+#   # Optional: edge rate limit on registration so attackers can't farm accounts.
+#   # Requires `xcaddy build --with github.com/mholt/caddy-ratelimit` instead of
+#   # the stock caddy:2 image. Leaving commented; the app already enforces
+#   # BILLING_RATE_LIMIT_PER_MIN per API key, which covers most cases.
+#   # @register {
+#   #   path /v1/register
+#   #   method POST
+#   # }
+#   # rate_limit @register {
+#   #   zone register_ip {
+#   #     key {client_ip}
+#   #     events 5
+#   #     window 1h
+#   #   }
+#   # }
+#
+#   reverse_proxy bazi-agent-api:8000 {
+#     flush_interval -1
+#     transport http {
+#       read_timeout 10m
+#       write_timeout 10m
+#     }
+#   }
+# }

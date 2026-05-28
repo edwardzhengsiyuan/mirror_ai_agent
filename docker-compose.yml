@@ -1,3 +1,11 @@
+x-logging: &default-logging
+  # Docker's default json-file driver has no size cap, so a noisy week can
+  # fill the host disk. Cap each container at ~250MB of logs.
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   bazi-agent-api:
     build: .
@@ -9,6 +17,7 @@ services:
     restart: unless-stopped
     expose:
       - "8000"
+    logging: *default-logging
 
   caddy:
     image: caddy:2
@@ -23,6 +32,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   caddy_data:
