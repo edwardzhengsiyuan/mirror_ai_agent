@@ -205,9 +205,9 @@ class StripeGateway:
             publishable_key=env.get(f"STRIPE_PUBLISHABLE_KEY_{suffix}") or env.get("STRIPE_PUBLISHABLE_KEY"),
             success_url=env.get(
                 "STRIPE_SUCCESS_URL",
-                "/billing.html?status=success&session_id={CHECKOUT_SESSION_ID}",
+                "/billing?topup=success&session_id={CHECKOUT_SESSION_ID}",
             ),
-            cancel_url=env.get("STRIPE_CANCEL_URL", "/billing.html?status=cancelled"),
+            cancel_url=env.get("STRIPE_CANCEL_URL", "/billing?topup=cancel"),
             mode=mode,
             payment_method_types=methods,
         )

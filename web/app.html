@@ -1,0 +1,2062 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bazi Agent Web</title>
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+      :root {
+        --bg: #f6f4ef;
+        --panel: #ffffff;
+        --ink: #1b1b1b;
+        --muted: #6c6c6c;
+        --accent: #2c6e6c;
+        --border: #e1ded8;
+        --danger: #b04c4c;
+        --ok: #2d7a55;
+        --warn: #b2782d;
+        --sidebar-bg: #f0ede7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      /* 3-column layout */
+      .app-container {
+        display: grid;
+        grid-template-columns: 260px 1fr 340px;
+        height: 100vh;
+      }
+
+      /* Left sidebar */
+      .sidebar {
+        display: flex;
+        flex-direction: column;
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--border);
+      }
+
+      .sidebar-header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar-header h1 {
+        margin: 0 0 12px;
+        font-size: 18px;
+        letter-spacing: 1px;
+      }
+
+      #newChatBtn {
+        width: 100%;
+        padding: 10px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      #newChatBtn:hover {
+        opacity: 0.9;
+      }
+
+      .conversation-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px;
+      }
+
+      .conversation-item {
+        padding: 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-bottom: 4px;
+        transition: background 0.15s;
+      }
+
+      .conversation-item:hover {
+        background: var(--panel);
+      }
+
+      .conversation-item.active {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .conversation-item.active .conv-time {
+        color: rgba(255, 255, 255, 0.7);
+      }
+
+      .conv-preview {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-bottom: 4px;
+      }
+
+      .conv-time {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .sidebar-footer {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .user-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .user-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .user-details {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .user-name {
+        font-weight: 600;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .user-birth {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      #settingsBtn {
+        width: 100%;
+        padding: 8px;
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      #settingsBtn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      /* Main chat area */
+      .chat-area {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        background: var(--panel);
+      }
+
+      .chat-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .chat-title {
+        font-weight: 600;
+        font-size: 15px;
+      }
+
+      .model-selector {
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 13px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+        min-width: 180px;
+        max-width: 220px;
+      }
+
+      .model-selector:hover {
+        border-color: var(--accent);
+      }
+
+      .model-selector:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      .icon-btn {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+      }
+
+      .icon-btn:hover {
+        background: var(--border);
+        color: var(--ink);
+      }
+
+      .icon-btn:active {
+        transform: scale(0.95);
+      }
+
+      .icon-btn.spinning svg {
+        animation: spin 0.8s ease-in-out;
+      }
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+      }
+
+      .message {
+        padding: 12px 16px;
+        border-radius: 12px;
+        margin-bottom: 12px;
+        max-width: 85%;
+      }
+
+      .message.user {
+        background: #e7efe9;
+        margin-left: auto;
+      }
+
+      .message.assistant {
+        background: #f5efe5;
+      }
+
+      .message.assistant.streaming {
+        border: 1px solid var(--accent);
+      }
+
+      .message.tool {
+        background: #f0f4f8;
+        border-left: 3px solid var(--accent);
+        padding: 10px 14px;
+        font-size: 13px;
+      }
+
+      .message.tool.streaming {
+        border-left-color: var(--warn);
+        animation: pulse 1.5s infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+
+      .tool-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .tool-icon {
+        font-size: 14px;
+      }
+
+      .tool-name {
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .tool-status {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--warn);
+        color: #fff;
+      }
+
+      .tool-status.done {
+        background: var(--ok);
+      }
+
+      .tool-summary {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .tool-stream-content {
+        margin-top: 8px;
+        padding: 8px;
+        background: #fff;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .tool-details {
+        margin-top: 8px;
+        padding: 8px;
+        background: #fff;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+
+      .tool-details.hidden {
+        display: none;
+      }
+
+      .expand-btn {
+        padding: 2px 8px;
+        font-size: 11px;
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .expand-btn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      /* Markdown content styles */
+      .markdown-content {
+        line-height: 1.6;
+      }
+
+      .markdown-content h1,
+      .markdown-content h2,
+      .markdown-content h3 {
+        margin: 12px 0 8px;
+      }
+
+      .markdown-content h1 { font-size: 1.4em; }
+      .markdown-content h2 { font-size: 1.2em; }
+      .markdown-content h3 { font-size: 1.1em; }
+
+      .markdown-content ul,
+      .markdown-content ol {
+        margin: 8px 0;
+        padding-left: 20px;
+      }
+
+      .markdown-content li {
+        margin: 4px 0;
+      }
+
+      .markdown-content code {
+        background: #f3f3f3;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: "SF Mono", Consolas, monospace;
+        font-size: 0.9em;
+      }
+
+      .markdown-content pre {
+        background: #f3f3f3;
+        padding: 12px;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+
+      .markdown-content pre code {
+        background: none;
+        padding: 0;
+      }
+
+      .markdown-content blockquote {
+        border-left: 3px solid var(--accent);
+        padding-left: 12px;
+        margin: 8px 0;
+        color: var(--muted);
+      }
+
+      .markdown-content p {
+        margin: 8px 0;
+      }
+
+      .markdown-content p:first-child {
+        margin-top: 0;
+      }
+
+      .markdown-content p:last-child {
+        margin-bottom: 0;
+      }
+
+      .response-input {
+        margin-top: 8px;
+        padding: 10px;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 12px;
+      }
+
+      .response-input.hidden {
+        display: none;
+      }
+
+      .view-input-btn {
+        padding: 4px 10px;
+        font-size: 11px;
+        margin-top: 8px;
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .view-input-btn:hover {
+        background: var(--muted);
+        color: #fff;
+      }
+
+      .input-summary-item {
+        margin-bottom: 6px;
+      }
+
+      .input-summary-label {
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .chat-input-area {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        gap: 12px;
+      }
+
+      .chat-input-area textarea {
+        flex: 1;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 14px;
+        resize: none;
+        font-family: inherit;
+      }
+
+      .chat-input-area textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      #sendBtn {
+        padding: 10px 24px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      #sendBtn:hover {
+        opacity: 0.9;
+      }
+
+      #sendBtn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Right info panel */
+      .info-panel {
+        display: flex;
+        flex-direction: column;
+        background: var(--sidebar-bg);
+        border-left: 1px solid var(--border);
+        overflow-y: auto;
+      }
+
+      .profile-section {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .profile-section h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .profile-birth {
+        font-size: 13px;
+        margin-bottom: 8px;
+      }
+
+      .profile-gender {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .nodes-section {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+      }
+
+      .nodes-section h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .nodes details {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-bottom: 10px;
+        background: var(--panel);
+      }
+
+      .nodes summary {
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .status {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #ddd;
+      }
+
+      .status.running {
+        background: var(--warn);
+        color: #fff;
+      }
+
+      .status.done {
+        background: var(--ok);
+        color: #fff;
+      }
+
+      .status.error {
+        background: var(--danger);
+        color: #fff;
+      }
+
+      .status.cache {
+        background: #55698a;
+        color: #fff;
+      }
+
+      pre {
+        margin: 8px 0 0;
+        padding: 10px;
+        border-radius: 6px;
+        background: #f3f3f3;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 200px;
+        overflow: auto;
+        font-size: 12px;
+      }
+
+      .log-section {
+        padding: 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .log-section h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .log-list {
+        font-size: 11px;
+        color: var(--muted);
+        max-height: 120px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      /* Settings modal */
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .modal-overlay.hidden {
+        display: none;
+      }
+
+      .modal {
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 480px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+
+      .modal h2 {
+        margin: 0 0 16px;
+        font-size: 18px;
+      }
+
+      .modal h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .settings-section {
+        margin-bottom: 16px;
+      }
+
+      .settings-divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 20px 0;
+      }
+
+      .modal-close {
+        float: right;
+        background: none;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: var(--muted);
+      }
+
+      .form-group {
+        margin-bottom: 16px;
+      }
+
+      .form-group label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .form-group input,
+      .form-group select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+      }
+
+      .inline-group {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+
+      .node-model-list {
+        display: grid;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+
+      .node-model-row {
+        display: grid;
+        grid-template-columns: minmax(110px, 1fr) minmax(160px, 1.4fr);
+        gap: 10px;
+        align-items: center;
+      }
+
+      .node-model-row label {
+        margin: 0;
+        font-size: 12px;
+        color: var(--ink);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .node-model-row select {
+        width: 100%;
+      }
+
+      .settings-note {
+        font-size: 11px;
+        color: var(--muted);
+        margin: -6px 0 12px;
+        line-height: 1.45;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
+        margin-top: 20px;
+      }
+
+      .modal-actions button {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+      }
+
+      .btn-secondary {
+        background: var(--border);
+        color: var(--ink);
+        border: none;
+      }
+
+      /* Responsive design */
+      @media (max-width: 1024px) {
+        .app-container {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar,
+        .info-panel {
+          display: none;
+        }
+
+        .chat-header {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Left sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>Bazi Agent</h1>
+          <button id="newChatBtn">+ 新对话</button>
+        </div>
+        <div class="conversation-list" id="conversationList"></div>
+        <div class="sidebar-footer">
+          <div class="user-info" id="userInfo">
+            <div class="user-avatar">?</div>
+            <div class="user-details">
+              <div class="user-name">未选择用户</div>
+              <div class="user-birth"></div>
+            </div>
+          </div>
+          <button id="settingsBtn">设置</button>
+        </div>
+      </aside>
+
+      <!-- Main chat area -->
+      <main class="chat-area">
+        <div class="chat-header">
+          <select id="modelSelect" class="model-selector" title="选择模型"></select>
+          <div class="chat-title">对话</div>
+          <button id="refreshBtn" class="icon-btn" title="刷新">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 4v6h-6"/>
+              <path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
+        <div class="messages" id="messages"></div>
+        <div class="chat-input-area">
+          <textarea id="question" rows="3" placeholder="输入问题..."></textarea>
+          <button id="sendBtn">发送</button>
+        </div>
+      </main>
+
+      <!-- Right info panel -->
+      <aside class="info-panel">
+        <div class="profile-section" id="profileSection">
+          <h3>用户档案</h3>
+          <div class="profile-birth">-</div>
+          <div class="profile-gender">-</div>
+        </div>
+        <div class="nodes-section">
+          <h3>节点输出</h3>
+          <div id="nodes" class="nodes"></div>
+        </div>
+        <div class="log-section">
+          <h3>事件日志</h3>
+          <div id="eventLog" class="log-list"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay hidden" id="settingsModal">
+      <div class="modal">
+        <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
+        <h2>设置</h2>
+
+        <!-- User Selection Section -->
+        <div class="settings-section">
+          <h3>当前用户</h3>
+          <div class="form-group">
+            <label>选择用户</label>
+            <select id="userSelect"></select>
+          </div>
+          <div class="form-group">
+            <label>历史轮数 (Response prompt)</label>
+            <input id="historyN" type="number" min="0" value="5" />
+          </div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="bypassCacheCheckbox" style="width:auto;" />
+            <label for="bypassCacheCheckbox" style="margin:0;">绕过缓存</label>
+          </div>
+          <p style="font-size:11px;color:var(--muted);margin-top:-8px;">开启后所有分析节点将重新运行，不使用缓存结果</p>
+        </div>
+
+        <hr class="settings-divider" />
+
+        <div class="settings-section">
+          <h3>Node Models</h3>
+          <p class="settings-note">Overrides here take priority over node defaults and the global model selector.</p>
+          <div id="nodeModelOverrides" class="node-model-list"></div>
+        </div>
+
+        <hr class="settings-divider" />
+
+        <!-- Create User Section -->
+        <div class="settings-section">
+          <h3>创建新用户</h3>
+          <div class="form-group">
+            <label>用户 ID</label>
+            <input id="newUserId" placeholder="user_id" />
+          </div>
+          <div class="form-group">
+            <label>出生日期</label>
+            <div class="inline-group">
+              <input id="birthYear" type="number" placeholder="年" />
+              <input id="birthMonth" type="number" placeholder="月" />
+              <input id="birthDay" type="number" placeholder="日" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>出生时间</label>
+            <div class="inline-group">
+              <input id="birthHour" type="number" placeholder="时" />
+              <input id="birthMinute" type="number" placeholder="分" />
+              <input id="birthSecond" type="number" placeholder="秒" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>性别</label>
+            <select id="gender">
+              <option value="male">男 (male)</option>
+              <option value="female">女 (female)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>时辰</label>
+            <select id="timeUnknown">
+              <option value="false">已知时辰</option>
+              <option value="true">未知时辰</option>
+            </select>
+          </div>
+          <button class="btn-primary" id="createUserBtn" style="width: 100%;">创建用户</button>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-primary" onclick="closeSettingsModal()">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Chinese node names mapping
+      const NODE_NAMES_ZH = {
+        "PAIPAN": "排盘",
+        "OVERALL": "整体分析",
+        "SHISHEN": "十神分析",
+        "GEJU_ROUTER": "格局识别",
+        "GEJU_ANALYSIS": "格局分析",
+        "GEJU_LEVEL": "格局层次",
+        "WUXING_PREFS": "五行喜忌",
+        "CAREER": "事业",
+        "RELATIONSHIP": "感情",
+        "HEALTH": "健康",
+        "GUIREN": "贵人",
+        "LIUQIN": "六亲",
+        "XINGGE": "性格",
+        "OTHER": "其他",
+        "PLANNER": "规划分析维度和时间",
+        "TIME_CONTEXT": "获取大运流年流月",
+        "RESPONSE": "回答生成"
+      };
+
+      // Tool name to node name mapping (backend uses different names)
+      const TOOL_TO_NODE = {
+        "planner": "PLANNER",
+        "time_context_tool": "TIME_CONTEXT"
+      };
+
+      function getChineseNodeName(node) {
+        return NODE_NAMES_ZH[node?.toUpperCase()] || node;
+      }
+
+      function getChineseToolName(tool) {
+        // Map tool names to node names, then get Chinese name
+        const nodeName = TOOL_TO_NODE[tool] || tool?.toUpperCase();
+        return NODE_NAMES_ZH[nodeName] || tool;
+      }
+
+      // Markdown rendering
+      function renderMarkdown(text) {
+        if (!text) return "";
+        if (typeof marked !== "undefined") {
+          marked.setOptions({ breaks: true, gfm: true });
+          return marked.parse(text);
+        }
+        // Fallback: escape HTML and convert newlines
+        return escapeHtml(text).replace(/\n/g, "<br>");
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text || "";
+        return div.innerHTML;
+      }
+
+      // Persistent nodes only - PLANNER, TIME_CONTEXT, FINAL removed (now tools/response)
+      const nodeOrder = [
+        "PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL", "WUXING_PREFS",
+        "CAREER", "RELATIONSHIP", "HEALTH", "GUIREN", "LIUQIN", "XINGGE", "OTHER"
+      ];
+
+      // Conversation-level tools (displayed inline in chat)
+      const CONVERSATION_TOOLS = ["PLANNER", "TIME_CONTEXT"];
+
+      // State management
+      let currentTurnTools = [];
+      let currentStreamingTool = null;
+      let currentResponseMessage = null;
+      const nodes = new Map();
+
+      // DOM elements
+      const messagesEl = document.getElementById("messages");
+      const eventLogEl = document.getElementById("eventLog");
+      const nodesEl = document.getElementById("nodes");
+      const userSelect = document.getElementById("userSelect");
+      const modelSelect = document.getElementById("modelSelect");
+      const conversationListEl = document.getElementById("conversationList");
+      const nodeModelOverridesEl = document.getElementById("nodeModelOverrides");
+      let currentSessionId = null;
+      let availableModels = [];
+      let defaultModel = "gemini-3.1-pro-preview";
+      let configurableModelNodes = [];
+      let nodeModelOverrides = {};
+
+      function logEvent(text) {
+        const line = document.createElement("div");
+        line.textContent = text;
+        eventLogEl.appendChild(line);
+        eventLogEl.scrollTop = eventLogEl.scrollHeight;
+      }
+
+      function appendMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `message ${role}`;
+        if (role === "assistant") {
+          div.innerHTML = `<div class="markdown-content">${renderMarkdown(text)}</div>`;
+        } else {
+          div.textContent = text;
+        }
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      // Streaming tool card functions
+      function createStreamingToolCard(evt) {
+        const div = document.createElement("div");
+        div.className = "message tool streaming";
+        const toolName = getChineseToolName(evt.tool);
+        div.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status">处理中...</span>
+          </div>
+          <div class="tool-stream-content"></div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return {
+          element: div,
+          content: "",
+          contentEl: div.querySelector(".tool-stream-content"),
+          statusEl: div.querySelector(".tool-status")
+        };
+      }
+
+      function appendToToolStream(toolCard, delta) {
+        if (!toolCard || !delta) return;
+        toolCard.content += delta;
+        toolCard.contentEl.textContent = toolCard.content;
+        toolCard.contentEl.scrollTop = toolCard.contentEl.scrollHeight;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function finalizeToolCard(toolCard, evt) {
+        if (!toolCard) return;
+        toolCard.element.classList.remove("streaming");
+        toolCard.statusEl.textContent = "完成";
+        toolCard.statusEl.classList.add("done");
+
+        // Update with final output
+        const toolName = getChineseToolName(evt.tool);
+        const summary = formatToolSummary(evt);
+
+        toolCard.element.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status done">完成</span>
+            <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
+          </div>
+          <div class="tool-summary">${summary}</div>
+          <div class="tool-details hidden">
+            <div><strong>输入:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <div><strong>输出:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
+          </div>
+        `;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function toggleToolDetails(btn) {
+        const details = btn.closest(".message").querySelector(".tool-details");
+        details.classList.toggle("hidden");
+        btn.textContent = details.classList.contains("hidden") ? "展开" : "收起";
+      }
+
+      function renderToolInvocation(evt) {
+        const div = document.createElement("div");
+        div.className = "message tool";
+        const toolName = getChineseToolName(evt.tool);
+        div.innerHTML = `
+          <div class="tool-header">
+            <span class="tool-icon">&#x1F527;</span>
+            <span class="tool-name">${toolName}</span>
+            <span class="tool-status done">完成</span>
+            <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
+          </div>
+          <div class="tool-summary">${formatToolSummary(evt)}</div>
+          <div class="tool-details hidden">
+            <div><strong>输入:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <div><strong>输出:</strong></div>
+            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
+          </div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function formatToolSummary(evt) {
+        if (evt.tool === "PLANNER" || evt.tool === "planner") {
+          const aspects = evt.output?.aspects || [];
+          const times = evt.output?.times || [];
+          const years = times.filter(t => t.year).map(t => t.year).join(", ");
+          return `方面: [${aspects.join(", ")}]${years ? `, 年份: ${years}` : ""}`;
+        }
+        if (evt.tool === "TIME_CONTEXT" || evt.tool === "time_context_tool") {
+          const yearData = evt.output?.year_data || [];
+          const years = yearData.map(yd => yd.year).join(", ");
+          return years ? `${years}年` : "无年份数据";
+        }
+        return JSON.stringify(evt.output).slice(0, 60) + "...";
+      }
+
+      // Streaming response functions
+      function createStreamingResponseMessage() {
+        const div = document.createElement("div");
+        div.className = "message assistant streaming";
+        div.innerHTML = `<div class="markdown-content"></div>`;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return {
+          element: div,
+          content: "",
+          textEl: div.querySelector(".markdown-content")
+        };
+      }
+
+      function finalizeResponseMessage(respMsg, evt) {
+        if (!respMsg) return;
+        respMsg.element.classList.remove("streaming");
+
+        let inputSummaryHtml = "";
+        if (evt.input_summary) {
+          const summary = evt.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${evt.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(evt.llm_prompt.system_prompt || "")}\n\n${escapeHtml(evt.llm_prompt.user_prompt || "")}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        respMsg.element.innerHTML = `
+          <div class="markdown-content">${renderMarkdown(evt.text || respMsg.content)}</div>
+          <button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>
+          ${inputSummaryHtml}
+        `;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function renderResponse(evt) {
+        const div = document.createElement("div");
+        div.className = "message assistant";
+
+        let inputSummaryHtml = "";
+        if (evt.input_summary) {
+          const summary = evt.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${evt.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(evt.llm_prompt.system_prompt || "")}\n\n${escapeHtml(evt.llm_prompt.user_prompt || "")}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        div.innerHTML = `
+          <div class="markdown-content">${renderMarkdown(evt.text || "")}</div>
+          <button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>
+          ${inputSummaryHtml}
+        `;
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function createNodeCards() {
+        nodesEl.innerHTML = "";
+        nodes.clear();
+        nodeOrder.forEach((node) => {
+          const detail = document.createElement("details");
+          detail.dataset.node = node;
+          const summary = document.createElement("summary");
+          const title = document.createElement("span");
+          title.textContent = getChineseNodeName(node);
+          const status = document.createElement("span");
+          status.className = "status";
+          status.textContent = "idle";
+          summary.appendChild(title);
+          summary.appendChild(status);
+          const promptDetail = document.createElement("details");
+          const promptSummary = document.createElement("summary");
+          promptSummary.textContent = "输入";
+          const promptPre = document.createElement("pre");
+          promptPre.textContent = "";
+          promptDetail.appendChild(promptSummary);
+          promptDetail.appendChild(promptPre);
+          const pre = document.createElement("pre");
+          pre.textContent = "";
+          detail.appendChild(summary);
+          detail.appendChild(promptDetail);
+          detail.appendChild(pre);
+          nodesEl.appendChild(detail);
+          nodes.set(node, { detail, status, pre, promptPre });
+        });
+      }
+
+      function setNodeStatus(node, status) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.status.className = `status ${status}`;
+        entry.status.textContent = status;
+      }
+
+      function appendNodeOutput(node, text) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.pre.textContent += text;
+      }
+
+      function setNodeInput(node, systemPrompt, userPrompt) {
+        const entry = nodes.get(node);
+        if (!entry || !entry.promptPre) return;
+        entry.promptPre.textContent = `SYSTEM:\n${systemPrompt || ""}\n\nUSER:\n${userPrompt || ""}`;
+      }
+
+      function setNodeOutput(node, text) {
+        const entry = nodes.get(node);
+        if (!entry) return;
+        entry.pre.textContent = text;
+      }
+
+      function formatOutput(node, output) {
+        if (!output) return "";
+        if (node === "PAIPAN") {
+          return [output.paipan_results, output.liupan_results, output.guji_results]
+            .filter(Boolean)
+            .join("\n");
+        }
+        if (node === "TIME_CONTEXT") {
+          return JSON.stringify(output, null, 2);
+        }
+        if (output.content) return output.content;
+        return JSON.stringify(output, null, 2);
+      }
+
+      function handleEvent(evt) {
+        if (!evt || !evt.type) return;
+        switch (evt.type) {
+          case "session":
+            if (evt.session_id) {
+              currentSessionId = evt.session_id;
+              loadConversationList();
+            }
+            currentTurnTools = [];
+            break;
+
+          case "plan":
+            logEvent(`plan: ${JSON.stringify(evt.plan)}`);
+            break;
+
+          case "plan_update":
+            logEvent(`plan_update: ${JSON.stringify(evt.plan)}`);
+            break;
+
+          case "tool_call":
+            // Immediate display of tool card when tool starts
+            if (evt.tool === "planner" || evt.tool === "time_context_tool") {
+              currentStreamingTool = createStreamingToolCard(evt);
+            }
+            logEvent(`tool_call: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
+            break;
+
+          case "tool_result":
+            logEvent(`tool_result: ${evt.tool} (${evt.node || evt.invocation_id || ""})`);
+            break;
+
+          case "tool_invocation":
+            // Finalize streaming tool card or render new one
+            if (currentStreamingTool &&
+                (evt.tool === "PLANNER" || evt.tool === "planner" ||
+                 evt.tool === "TIME_CONTEXT" || evt.tool === "time_context_tool")) {
+              finalizeToolCard(currentStreamingTool, evt);
+              currentStreamingTool = null;
+            } else {
+              renderToolInvocation(evt);
+            }
+            currentTurnTools.push(evt);
+            logEvent(`tool_invocation: ${evt.tool} (${evt.invocation_id})`);
+            break;
+
+          case "llm_prompt": {
+            const entry = nodes.get(evt.node);
+            if (entry && entry.promptPre) {
+              entry.promptPre.textContent = `SYSTEM:\n${evt.system_prompt || ""}\n\nUSER:\n${evt.user_prompt || ""}`;
+            }
+            logEvent(`input: ${evt.node}`);
+            break;
+          }
+
+          case "node_start":
+            setNodeStatus(evt.node, "running");
+            setNodeOutput(evt.node, "");
+            break;
+
+          case "node_cache_hit":
+            setNodeStatus(evt.node, "cache");
+            if (evt.output) {
+              setNodeOutput(evt.node, formatOutput(evt.node, evt.output));
+            }
+            break;
+
+          case "node_delta":
+            // Stream to node panel
+            if (evt.delta) appendNodeOutput(evt.node, evt.delta);
+            // Also stream to tool card if it's PLANNER
+            if (evt.node === "PLANNER" && currentStreamingTool) {
+              appendToToolStream(currentStreamingTool, evt.delta);
+            }
+            break;
+
+          case "response_delta":
+            // Streaming response display
+            if (!currentResponseMessage) {
+              currentResponseMessage = createStreamingResponseMessage();
+            }
+            currentResponseMessage.content += evt.delta || "";
+            currentResponseMessage.textEl.innerHTML = renderMarkdown(currentResponseMessage.content);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            logEvent(`response_delta: ${(evt.delta || "").slice(0, 20)}...`);
+            break;
+
+          case "node_end":
+            if (evt.output && evt.output.error) {
+              setNodeStatus(evt.node, "error");
+            } else if (evt.cached) {
+              setNodeStatus(evt.node, "cache");
+            } else {
+              setNodeStatus(evt.node, "done");
+            }
+            if (evt.output) {
+              const formatted = formatOutput(evt.node, evt.output);
+              const nodeEntry = nodes.get(evt.node);
+              if (formatted && nodeEntry && !nodeEntry.pre.textContent) {
+                setNodeOutput(evt.node, formatted);
+              }
+            }
+            break;
+
+          case "response":
+            // Finalize streaming response or render new one
+            if (currentResponseMessage) {
+              finalizeResponseMessage(currentResponseMessage, evt);
+              currentResponseMessage = null;
+            } else {
+              renderResponse(evt);
+            }
+            currentTurnTools = [];
+            logEvent(`response: 完成 (${evt.duration_ms || 0}ms)`);
+            break;
+
+          case "assistant_final":
+            // Legacy: only handle if no response event was received
+            if (!evt._handled_by_response) {
+              appendMessage("assistant", evt.text || "");
+            }
+            break;
+
+          case "user_message":
+            appendMessage("user", evt.text || "");
+            currentTurnTools = [];
+            break;
+
+          case "time_context":
+            logEvent("time_context: " + (evt.value ? "matched" : "none"));
+            break;
+
+          case "server_error":
+            logEvent("server_error: " + evt.error);
+            break;
+        }
+      }
+
+      async function fetchJson(url, options = {}) {
+        const resp = await fetch(url, options);
+        if (!resp.ok) {
+          throw new Error(await resp.text());
+        }
+        return resp.json();
+      }
+
+      // Conversation list functions
+      function formatSessionTime(timestamp) {
+        if (!timestamp) return "";
+        // Format: 20240115T143022.jsonl -> 2024-01-15 14:30
+        const clean = timestamp.replace(".jsonl", "");
+        const match = clean.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
+        if (match) {
+          return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
+        }
+        return timestamp;
+      }
+
+      async function loadConversationList() {
+        const userId = userSelect.value;
+        if (!userId) return;
+
+        try {
+          const data = await fetchJson(`/api/session_metadata?user_id=${encodeURIComponent(userId)}`);
+          conversationListEl.innerHTML = "";
+
+          if (data.sessions && data.sessions.length > 0) {
+            data.sessions.forEach(session => {
+              const item = document.createElement("div");
+              const isActive = session.session_id === currentSessionId;
+              item.className = "conversation-item" + (isActive ? " active" : "");
+              item.innerHTML = `
+                <div class="conv-preview">${escapeHtml(session.preview || "新对话")}</div>
+                <div class="conv-time">${formatSessionTime(session.timestamp)}</div>
+              `;
+              item.onclick = () => selectSession(session.session_id);
+              conversationListEl.appendChild(item);
+            });
+          } else {
+            conversationListEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">暂无对话历史</div>';
+          }
+        } catch (err) {
+          logEvent("加载对话列表失败: " + err.message);
+        }
+      }
+
+      async function selectSession(sessionId) {
+        currentSessionId = sessionId;
+        await loadConversationList();
+        await loadHistory();
+      }
+
+      async function loadModels() {
+        try {
+          const data = await fetchJson("/api/models");
+          availableModels = data.models || [];
+          defaultModel = data.default || "gemini-3.1-pro-preview";
+          configurableModelNodes = data.configurable_nodes || [];
+          modelSelect.innerHTML = "";
+          availableModels.forEach((model) => {
+            const opt = document.createElement("option");
+            opt.value = model;
+            opt.textContent = model;
+            modelSelect.appendChild(opt);
+          });
+          modelSelect.value = defaultModel;
+          renderNodeModelOverrides(nodeModelOverrides);
+        } catch (err) {
+          logEvent("load models error: " + err.message);
+        }
+      }
+
+      async function updateProfileModel(model) {
+        const userId = userSelect.value;
+        if (!userId) return;
+        try {
+          await fetchJson("/api/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId, llm_model: model }),
+          });
+          logEvent("model updated: " + model);
+        } catch (err) {
+          logEvent("update model error: " + err.message);
+        }
+      }
+
+      function renderNodeModelOverrides(overrides = {}) {
+        if (!nodeModelOverridesEl) return;
+        nodeModelOverridesEl.innerHTML = "";
+        if (!configurableModelNodes.length || !availableModels.length) {
+          nodeModelOverridesEl.innerHTML = '<div class="settings-note">No configurable nodes.</div>';
+          return;
+        }
+        configurableModelNodes.forEach((node) => {
+          const row = document.createElement("div");
+          row.className = "node-model-row";
+
+          const label = document.createElement("label");
+          label.textContent = getChineseNodeName(node);
+          label.title = node;
+
+          const select = document.createElement("select");
+          select.dataset.node = node;
+          const defaultOpt = document.createElement("option");
+          defaultOpt.value = "";
+          defaultOpt.textContent = "Use route default";
+          select.appendChild(defaultOpt);
+          availableModels.forEach((model) => {
+            const opt = document.createElement("option");
+            opt.value = model;
+            opt.textContent = model;
+            select.appendChild(opt);
+          });
+          select.value = overrides[node] || "";
+          select.addEventListener("change", async () => {
+            const next = { ...nodeModelOverrides };
+            if (select.value) {
+              next[node] = select.value;
+            } else {
+              delete next[node];
+            }
+            await updateNodeModelOverrides(next);
+          });
+
+          row.appendChild(label);
+          row.appendChild(select);
+          nodeModelOverridesEl.appendChild(row);
+        });
+      }
+
+      async function updateNodeModelOverrides(overrides) {
+        const userId = userSelect.value;
+        nodeModelOverrides = overrides || {};
+        renderNodeModelOverrides(nodeModelOverrides);
+        if (!userId) return;
+        try {
+          await fetchJson("/api/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId, node_model_overrides: nodeModelOverrides }),
+          });
+          logEvent("node model overrides updated");
+        } catch (err) {
+          logEvent("update node models error: " + err.message);
+          await loadUserInfo();
+        }
+      }
+
+      async function updateBypassCache(bypass) {
+        const userId = userSelect.value;
+        if (!userId) return;
+        try {
+          await fetchJson("/api/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId, bypass_cache: bypass }),
+          });
+          logEvent("bypass_cache updated: " + bypass);
+        } catch (err) {
+          logEvent("update bypass_cache error: " + err.message);
+        }
+      }
+
+      async function loadUsers(preferredUserId = null) {
+        const data = await fetchJson("/api/users");
+        userSelect.innerHTML = "";
+        data.users.forEach((uid) => {
+          const opt = document.createElement("option");
+          opt.value = uid;
+          opt.textContent = uid;
+          userSelect.appendChild(opt);
+        });
+        if (data.users.length) {
+          userSelect.value = preferredUserId && data.users.includes(preferredUserId) ? preferredUserId : data.users[0];
+        }
+        await loadSessions();
+        await loadProfileCache();
+        await loadUserInfo();
+        await loadConversationList();
+        await loadHistory();
+      }
+
+      async function loadSessions() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const data = await fetchJson(`/api/sessions?user_id=${encodeURIComponent(userId)}`);
+        if (data.sessions.length) {
+          currentSessionId = data.sessions[0];
+        } else {
+          currentSessionId = null;
+        }
+      }
+
+      async function loadUserInfo() {
+        const userId = userSelect.value;
+        if (!userId) {
+          document.getElementById("userInfo").innerHTML = `
+            <div class="user-avatar">?</div>
+            <div class="user-details">
+              <div class="user-name">未选择用户</div>
+              <div class="user-birth"></div>
+            </div>
+          `;
+          return;
+        }
+
+        try {
+          const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+          const birth = profile.birth || {};
+          const userInfoEl = document.getElementById("userInfo");
+          userInfoEl.innerHTML = `
+            <div class="user-avatar">${userId.charAt(0).toUpperCase()}</div>
+            <div class="user-details">
+              <div class="user-name">${escapeHtml(userId)}</div>
+              <div class="user-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日</div>
+            </div>
+          `;
+
+          // Update profile section in right panel
+          const profileSection = document.getElementById("profileSection");
+          const genderText = profile.gender === "male" ? "男" : profile.gender === "female" ? "女" : profile.gender;
+          profileSection.innerHTML = `
+            <h3>用户档案</h3>
+            <div class="profile-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日 ${birth.hour || 0}时${birth.minute || 0}分</div>
+            <div class="profile-gender">性别: ${genderText}${profile.birth_time_unknown ? " (时辰未知)" : ""}</div>
+          `;
+
+          // Update model selector from profile
+          const profileModel = profile.llm_model || defaultModel;
+          if (availableModels.includes(profileModel)) {
+            modelSelect.value = profileModel;
+          } else {
+            modelSelect.value = defaultModel;
+          }
+
+          nodeModelOverrides = profile.node_model_overrides || {};
+          renderNodeModelOverrides(nodeModelOverrides);
+
+          // Update bypass cache checkbox from profile
+          document.getElementById("bypassCacheCheckbox").checked = !!profile.bypass_cache;
+        } catch (err) {
+          logEvent("加载用户信息失败: " + err.message);
+        }
+      }
+
+      async function loadProfileCache() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+        createNodeCards();
+        if (profile.node_cache) {
+          Object.entries(profile.node_cache).forEach(([node, entry]) => {
+            if (CONVERSATION_TOOLS.includes(node) || node === "FINAL") {
+              return;
+            }
+            if (entry.output) {
+              setNodeStatus(node, "cache");
+              setNodeOutput(node, formatOutput(node, entry.output));
+            }
+          });
+        }
+      }
+
+      async function loadHistory() {
+        messagesEl.innerHTML = "";
+        const userId = userSelect.value;
+        if (!userId || !currentSessionId) return;
+        try {
+          const data = await fetchJson(
+            `/api/history?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(currentSessionId)}&include_inputs=1`
+          );
+          // Render events in order (includes messages and tool invocations)
+          if (data.events) {
+            data.events.forEach((evt) => {
+              if (evt.type === "message") {
+                const msg = evt.data;
+                if (msg.role === "assistant" && msg.input_summary) {
+                  // Render response with input summary
+                  renderResponseFromHistory(msg);
+                } else {
+                  appendMessage(msg.role, msg.text);
+                }
+              } else if (evt.type === "tool_invocation") {
+                renderToolInvocation(evt.data);
+              }
+            });
+          } else {
+            // Fallback to old format
+            data.messages.forEach((msg) => appendMessage(msg.role, msg.text));
+          }
+          if (data.llm_prompts) {
+            Object.entries(data.llm_prompts).forEach(([node, prompt]) => {
+              setNodeInput(node, prompt.system_prompt, prompt.user_prompt);
+            });
+          }
+        } catch (err) {
+          logEvent("history: " + err.message);
+        }
+      }
+
+      // Render response from history with input summary
+      function renderResponseFromHistory(msg) {
+        const div = document.createElement("div");
+        div.className = "message assistant";
+
+        let inputSummaryHtml = "";
+        if (msg.input_summary) {
+          const summary = msg.input_summary;
+          inputSummaryHtml = `
+            <div class="response-input hidden">
+              <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
+              ${summary.node_summaries ? `
+                <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
+                <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                </ul>
+              ` : ""}
+              ${msg.llm_prompt ? `
+                <details style="margin-top:8px;">
+                  <summary style="cursor:pointer;font-size:11px;color:var(--muted);">查看完整 Prompt</summary>
+                  <pre style="margin-top:4px;max-height:200px;font-size:10px;">${escapeHtml(msg.llm_prompt.system_prompt || "")}\n\n${escapeHtml(msg.llm_prompt.user_prompt || "")}</pre>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+
+        div.innerHTML = `
+          <div class="markdown-content">${renderMarkdown(msg.text || "")}</div>
+          ${msg.input_summary ? `<button class="view-input-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent === '查看输入' ? '隐藏输入' : '查看输入';">查看输入</button>` : ""}
+          ${inputSummaryHtml}
+        `;
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      async function createUser() {
+        const payload = {
+          user_id: document.getElementById("newUserId").value,
+          birth: {
+            year: Number(document.getElementById("birthYear").value || 0),
+            month: Number(document.getElementById("birthMonth").value || 0),
+            day: Number(document.getElementById("birthDay").value || 0),
+            hour: Number(document.getElementById("birthHour").value || 0),
+            minute: Number(document.getElementById("birthMinute").value || 0),
+            second: Number(document.getElementById("birthSecond").value || 0),
+          },
+          gender: document.getElementById("gender").value,
+          birth_time_unknown: document.getElementById("timeUnknown").value === "true",
+          prompt_config: "lingyun_cat",
+          llm_model: modelSelect.value || defaultModel,
+          node_model_overrides: nodeModelOverrides,
+        };
+        await fetchJson("/api/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        closeSettingsModal();
+        await loadUsers();
+      }
+
+      async function createSession() {
+        const userId = userSelect.value;
+        if (!userId) return;
+        const data = await fetchJson("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+        });
+        currentSessionId = data.session_id;
+        await loadConversationList();
+        await loadHistory();
+      }
+
+      function inferProfileFromQuestion(text) {
+        const normalized = (text || "").replace(/\s+/g, "");
+        const dateMatch = normalized.match(/(\d{4})年(\d{1,2})月(\d{1,2})[日号]?/);
+        if (!dateMatch) return null;
+
+        const timeMatch = normalized.match(/(\d{1,2})(?:点|时)(?:(\d{1,2})分?)?/);
+        const gender = /女/.test(normalized) && !/男女/.test(normalized) ? "female" : "male";
+        const birth = {
+          year: Number(dateMatch[1]),
+          month: Number(dateMatch[2]),
+          day: Number(dateMatch[3]),
+          hour: timeMatch ? Number(timeMatch[1]) : 0,
+          minute: timeMatch && timeMatch[2] ? Number(timeMatch[2]) : 0,
+          second: 0,
+        };
+
+        if (
+          birth.year < 1900 ||
+          birth.month < 1 ||
+          birth.month > 12 ||
+          birth.day < 1 ||
+          birth.day > 31 ||
+          birth.hour < 0 ||
+          birth.hour > 23 ||
+          birth.minute < 0 ||
+          birth.minute > 59
+        ) {
+          return null;
+        }
+        return { birth, gender };
+      }
+
+      function buildAutoUserId(profile) {
+        const pad2 = (value) => String(value).padStart(2, "0");
+        const birth = profile.birth;
+        return [
+          "auto",
+          birth.year,
+          pad2(birth.month),
+          pad2(birth.day),
+          pad2(birth.hour),
+          pad2(birth.minute),
+          profile.gender,
+          Date.now().toString(36),
+        ].join("_");
+      }
+
+      function isSameProfile(a, b) {
+        if (!a || !b) return false;
+        const ab = a.birth || {};
+        const bb = b.birth || {};
+        return (
+          Number(ab.year) === Number(bb.year) &&
+          Number(ab.month) === Number(bb.month) &&
+          Number(ab.day) === Number(bb.day) &&
+          Number(ab.hour || 0) === Number(bb.hour || 0) &&
+          Number(ab.minute || 0) === Number(bb.minute || 0) &&
+          (a.gender || "male") === (b.gender || "male")
+        );
+      }
+
+      async function findUserByProfile(target) {
+        const data = await fetchJson("/api/users");
+        for (const uid of data.users || []) {
+          try {
+            const profile = await fetchJson(`/api/profile?user_id=${encodeURIComponent(uid)}`);
+            if (isSameProfile(profile, target)) {
+              return uid;
+            }
+          } catch (err) {
+            logEvent("skip profile lookup: " + uid);
+          }
+        }
+        return "";
+      }
+
+      async function currentSelectedProfile() {
+        const userId = userSelect.value;
+        if (!userId) return null;
+        try {
+          return await fetchJson(`/api/profile?user_id=${encodeURIComponent(userId)}`);
+        } catch (err) {
+          return null;
+        }
+      }
+
+      async function createProfileFromQuestion(inferred) {
+        const existingUserId = await findUserByProfile(inferred);
+        if (existingUserId) {
+          await loadUsers(existingUserId);
+          logEvent("switched user: " + existingUserId);
+          return existingUserId;
+        }
+
+        const userId = buildAutoUserId(inferred);
+        await fetchJson("/api/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: userId,
+            birth: inferred.birth,
+            gender: inferred.gender,
+            birth_time_unknown: false,
+            prompt_config: "lingyun_cat",
+            llm_model: modelSelect.value || defaultModel,
+            node_model_overrides: nodeModelOverrides,
+          }),
+        });
+        await loadUsers(userId);
+        logEvent("auto-created user: " + userId);
+        return userId;
+      }
+
+      async function ensureUserForQuestion(question) {
+        const inferred = inferProfileFromQuestion(question);
+        if (inferred) {
+          const selectedProfile = await currentSelectedProfile();
+          if (!selectedProfile || !isSameProfile(selectedProfile, inferred)) {
+            return createProfileFromQuestion(inferred);
+          }
+          return userSelect.value;
+        }
+
+        if (userSelect.value) return userSelect.value;
+
+        appendMessage("assistant", "请先在设置里创建用户档案，或在问题中写明出生年月日、时辰和性别。");
+        openSettingsModal();
+        return "";
+      }
+
+      async function askStream() {
+        const question = document.getElementById("question").value.trim();
+        const historyValue = Number(document.getElementById("historyN").value || 5);
+        const historyN = Number.isFinite(historyValue) ? Math.max(0, Math.floor(historyValue)) : 5;
+        if (!question) return;
+
+        let userId = "";
+        try {
+          userId = await ensureUserForQuestion(question);
+        } catch (err) {
+          appendMessage("assistant", "创建用户档案失败：" + err.message);
+          logEvent("create profile error: " + err.message);
+          return;
+        }
+        if (!userId) return;
+
+        document.getElementById("question").value = "";
+        const sendBtn = document.getElementById("sendBtn");
+        sendBtn.disabled = true;
+        appendMessage("user", question);
+
+        try {
+          const resp = await fetch("/api/ask_stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: userId,
+              question,
+              session_id: currentSessionId,
+              history_n: historyN
+            }),
+          });
+          if (!resp.ok) {
+            throw new Error(await resp.text());
+          }
+          if (!resp.body) {
+            throw new Error("stream response body missing");
+          }
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            parts.forEach((chunk) => {
+              const lines = chunk.split("\n");
+              lines.forEach((line) => {
+                if (line.startsWith("data:")) {
+                  const payload = line.replace("data:", "").trim();
+                  if (!payload) return;
+                  try {
+                    handleEvent(JSON.parse(payload));
+                  } catch (err) {
+                    logEvent("parse error: " + err.message);
+                  }
+                }
+              });
+            });
+          }
+        } catch (err) {
+          appendMessage("assistant", "发送失败：" + err.message);
+          logEvent("send error: " + err.message);
+        } finally {
+          sendBtn.disabled = false;
+        }
+      }
+
+      // Settings modal functions
+      function openSettingsModal() {
+        document.getElementById("settingsModal").classList.remove("hidden");
+      }
+
+      function closeSettingsModal() {
+        document.getElementById("settingsModal").classList.add("hidden");
+      }
+
+      // Event listeners
+      document.getElementById("sendBtn").addEventListener("click", askStream);
+      document.getElementById("question").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          askStream();
+        }
+      });
+      document.getElementById("refreshBtn").addEventListener("click", async () => {
+        const btn = document.getElementById("refreshBtn");
+        btn.classList.add("spinning");
+        try {
+          await loadUsers();
+          await loadHistory();
+        } finally {
+          setTimeout(() => btn.classList.remove("spinning"), 800);
+        }
+      });
+      document.getElementById("newChatBtn").addEventListener("click", createSession);
+      document.getElementById("settingsBtn").addEventListener("click", openSettingsModal);
+      document.getElementById("createUserBtn").addEventListener("click", createUser);
+      userSelect.addEventListener("change", async () => {
+        await loadSessions();
+        await loadProfileCache();
+        await loadUserInfo();
+        await loadConversationList();
+        await loadHistory();
+      });
+      modelSelect.addEventListener("change", async () => {
+        await updateProfileModel(modelSelect.value);
+      });
+      document.getElementById("bypassCacheCheckbox").addEventListener("change", async (e) => {
+        await updateBypassCache(e.target.checked);
+      });
+
+      // Initialize
+      createNodeCards();
+      loadModels().then(() => {
+        loadUsers().catch((err) => logEvent("init error: " + err.message));
+      }).catch((err) => logEvent("init error: " + err.message));
+    </script>
+  </body>
+</html>

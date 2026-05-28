@@ -1,35 +1,64 @@
-# Append this site block to the host-level /etc/caddy/Caddyfile.
-# It is designed for the existing production server where Caddy already serves
-# mymirrorai.com from /var/www/html and owns ports 80/443.
+# ---------------------------------------------------------------------------
+# Caddy site block for the Mirror AI developer portal.
 #
-# The API container must be running on 127.0.0.1:8000 via:
+# Append this to the host-level /etc/caddy/Caddyfile on the existing
+# production server where Caddy already serves mymirrorai.com from
+# /var/www/html and owns ports 80/443.
+#
+# Prerequisite: the API container is running on 127.0.0.1:8000 via
 #   docker compose -f docker-compose.api-only.yml up -d --build
+#
+# Public surface (what we expose at https://${DEPLOY_DOMAIN}):
+#   /                       landing page (web/index.html)
+#   /login /register        auth pages (clean URLs + .html aliases)
+#   /dashboard /billing     authed dashboard pages
+#   /docs                   developer-portal docs (NOT Swagger UI)
+#   /portal.css /portal.js  shared static assets used by all pages
+#   /terms.html /privacy.html  legal
+#   /v1/*                   public API
+#   /webhooks/stripe        Stripe webhook receiver (signed by Stripe)
+#   /health                 readiness probe
+#
+# Explicitly hidden (returns 404 even though the upstream serves them):
+#   /app.html              legacy BaZi divination UI (was /index.html)
+#   /admin.html            admin console UI
+#   /admin/*               admin API
+#   /openapi.json          raw OpenAPI spec (internal only)
+#   /_swagger              Swagger UI (kept for internal probes via SSH tunnel)
+# ---------------------------------------------------------------------------
 
 ${DEPLOY_DOMAIN} {
   encode gzip
 
-  @docs {
-    path /docs /docs/* /openapi.json /health
+  # Anything in this matcher is the public B2B surface; everything else
+  # falls through to the catch-all 404 below.
+  @public {
+    path  /
+    path  /login   /register   /dashboard   /billing   /docs
+    path  /login.html /register.html /dashboard.html /billing.html /docs.html
+    path  /portal.css /portal.js
+    path  /terms.html /privacy.html
+    path  /favicon.ico /robots.txt
+    path  /health
   }
 
   @api {
-    path /v1 /v1/* /webhooks/stripe
+    path /v1   /v1/*   /webhooks/stripe
   }
 
-  @selfService {
-    path /register.html /billing.html /terms.html /privacy.html
-  }
-
-  handle @docs {
+  # Static developer-portal pages + shared assets.
+  handle @public {
     reverse_proxy 127.0.0.1:8000 {
       flush_interval -1
       transport http {
-        read_timeout 10m
-        write_timeout 10m
+        read_timeout 30s
+        write_timeout 30s
       }
     }
   }
 
+  # The API — long timeouts because /v1/ask_stream is SSE and /v1/ask can
+  # spend a few minutes inside the orchestrator on big questions.
   handle @api {
     reverse_proxy 127.0.0.1:8000 {
       flush_interval -1
@@ -40,17 +69,9 @@ ${DEPLOY_DOMAIN} {
     }
   }
 
-  handle @selfService {
-    reverse_proxy 127.0.0.1:8000 {
-      flush_interval -1
-      transport http {
-        read_timeout 10m
-        write_timeout 10m
-      }
-    }
-  }
-
-  # Keep the BaZi frontend, admin UI/API, and legacy web-console API hidden.
+  # Catch-all: hides app.html / admin.html / admin/* / openapi.json /
+  # _swagger / anything unknown. Returning 404 instead of 403 because we
+  # don't want to advertise the existence of those internal paths.
   handle {
     respond "Not Found" 404
   }

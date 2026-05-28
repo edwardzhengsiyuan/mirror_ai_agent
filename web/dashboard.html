@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard · Mirror AI</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <style>
+      .balance-display {
+        font-size: 28px;
+        font-weight: 600;
+        font-family: var(--font-mono);
+        color: var(--ink);
+        letter-spacing: -0.01em;
+      }
+      .key-warning {
+        font-size: 12px;
+        color: var(--warn);
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topnav">
+      <a href="/dashboard" class="brand">
+        <span class="brand-dot"></span>
+        Mirror AI
+      </a>
+      <nav>
+        <a href="/dashboard" class="active">Dashboard</a>
+        <a href="/billing">Billing</a>
+        <a href="/docs">Docs</a>
+      </nav>
+      <div class="user-block">
+        <span id="user-email" class="muted"></span>
+        <button id="logout-btn" class="btn btn-ghost btn-sm">登出</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <div id="welcome-banner" class="banner banner-ok hidden">
+        🎉 账号创建成功！下面是你的 API key，复制保存好；可以随时回来重置。
+      </div>
+
+      <div id="banner" class="banner hidden"></div>
+
+      <h1 id="hello">Dashboard</h1>
+      <p class="text-muted" id="hello-sub">概览你的余额、API key 和最近调用。</p>
+
+      <div class="grid cols-2 mt-6">
+        <!-- Balance card -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">账户余额</div>
+              <div class="card-subtitle">credits</div>
+            </div>
+            <a href="/billing" class="btn btn-secondary btn-sm">充值</a>
+          </div>
+          <div class="balance-display" id="balance">—</div>
+          <div class="text-muted mt-2" id="balance-sub">每次 API 调用扣除相应 credits。</div>
+        </div>
+
+        <!-- Quick start card -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">10 秒上手</div>
+              <div class="card-subtitle">用你的 API key 发出第一个请求</div>
+            </div>
+            <a href="/docs" class="btn btn-secondary btn-sm">完整文档</a>
+          </div>
+          <pre id="quickstart-snippet"><code>curl https://open.mymirrorai.com/v1/balance \
+  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
+        </div>
+      </div>
+
+      <!-- API key card -->
+      <div class="card mt-6">
+        <div class="card-header">
+          <div>
+            <div class="card-title">API Key</div>
+            <div class="card-subtitle">用作所有 /v1/* 请求的 Bearer token</div>
+          </div>
+          <button id="rotate-btn" class="btn btn-danger btn-sm">重置 Key</button>
+        </div>
+        <div class="code-field">
+          <code id="api-key-display">—</code>
+          <button id="copy-key-btn" class="btn btn-ghost btn-sm">复制</button>
+        </div>
+        <div id="key-warning" class="key-warning hidden">
+          ⚠ 这把 key 是用旧版接口生成的，明文未存储。
+          点击「重置 Key」生成可显示的新 key（旧 key 同时失效）。
+        </div>
+        <div class="text-muted mt-2" style="font-size: 13px;">
+          重置会立即吊销当前 key，新 key 一次性生成。重置后请更新所有集成。
+        </div>
+      </div>
+
+      <!-- Recent usage -->
+      <div class="card mt-6">
+        <div class="card-header">
+          <div>
+            <div class="card-title">最近调用</div>
+            <div class="card-subtitle">最近 20 条扣费记录</div>
+          </div>
+          <button id="refresh-usage-btn" class="btn btn-ghost btn-sm">刷新</button>
+        </div>
+        <table class="table" id="usage-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>Endpoint</th>
+              <th>类型</th>
+              <th>变动</th>
+              <th>余额</th>
+            </tr>
+          </thead>
+          <tbody id="usage-body">
+            <tr>
+              <td colspan="5" class="table-empty">加载中…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <script src="/portal.js"></script>
+    <script>
+      (function () {
+        const state = {
+          me: null,
+          apiKey: null,
+        };
+
+        const els = {
+          banner: document.getElementById("banner"),
+          welcome: document.getElementById("welcome-banner"),
+          userEmail: document.getElementById("user-email"),
+          hello: document.getElementById("hello"),
+          helloSub: document.getElementById("hello-sub"),
+          balance: document.getElementById("balance"),
+          balanceSub: document.getElementById("balance-sub"),
+          quickstart: document.getElementById("quickstart-snippet"),
+          apiKeyDisplay: document.getElementById("api-key-display"),
+          keyWarning: document.getElementById("key-warning"),
+          copyBtn: document.getElementById("copy-key-btn"),
+          rotateBtn: document.getElementById("rotate-btn"),
+          logoutBtn: document.getElementById("logout-btn"),
+          refreshUsageBtn: document.getElementById("refresh-usage-btn"),
+          usageBody: document.getElementById("usage-body"),
+        };
+
+        function renderMe(me) {
+          state.me = me;
+          state.apiKey = (me.api_key && me.api_key.plaintext) || null;
+          els.userEmail.textContent = me.user.email || me.user.user_id;
+          const greet = me.user.display_name || me.user.email || "Developer";
+          els.hello.textContent = "你好，" + greet + " 👋";
+          els.balance.textContent = (me.user.balance_credits ?? 0).toLocaleString();
+
+          if (state.apiKey) {
+            els.apiKeyDisplay.textContent = state.apiKey;
+            els.keyWarning.classList.add("hidden");
+            els.copyBtn.disabled = false;
+            els.quickstart.innerHTML =
+              "<code>curl https://open.mymirrorai.com/v1/balance \\\n" +
+              '  -H "Authorization: Bearer ' +
+              escapeHtml(state.apiKey) +
+              '"</code>';
+          } else if (me.api_key && me.api_key.has_active_key) {
+            els.apiKeyDisplay.textContent = "(隐藏 — 重置以查看完整 key)";
+            els.keyWarning.classList.remove("hidden");
+            els.copyBtn.disabled = true;
+          } else {
+            els.apiKeyDisplay.textContent = "(无可用 key — 点击重置生成)";
+            els.keyWarning.classList.add("hidden");
+            els.copyBtn.disabled = true;
+          }
+        }
+
+        function escapeHtml(s) {
+          return s
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        async function loadUsage() {
+          if (!state.apiKey) {
+            els.usageBody.innerHTML =
+              '<tr><td colspan="5" class="table-empty">没有可用 API key，无法查询使用记录。</td></tr>';
+            return;
+          }
+          els.usageBody.innerHTML =
+            '<tr><td colspan="5" class="table-empty">加载中…</td></tr>';
+          try {
+            const out = await Portal.apiCallWithKey("GET", "/v1/usage?limit=20", state.apiKey);
+            const rows = out.rows || [];
+            if (!rows.length) {
+              els.usageBody.innerHTML =
+                '<tr><td colspan="5" class="table-empty">还没有调用记录。前往 <a href="/docs">文档</a> 试试第一个请求。</td></tr>';
+              return;
+            }
+            els.usageBody.innerHTML = rows
+              .map((r) => {
+                const sign = r.amount_credits > 0 ? "+" : "";
+                const cls =
+                  r.kind === "topup"
+                    ? "color:var(--ok);"
+                    : r.kind === "refund"
+                    ? "color:var(--accent);"
+                    : "color:var(--ink-2);";
+                return (
+                  "<tr>" +
+                  "<td class='mono' style='font-size:12px;'>" +
+                  Portal.formatTs(r.ts) +
+                  "</td>" +
+                  "<td class='mono' style='font-size:12px;'>" +
+                  (r.endpoint || "—") +
+                  "</td>" +
+                  "<td>" +
+                  r.kind +
+                  "</td>" +
+                  "<td class='mono' style='" +
+                  cls +
+                  "'>" +
+                  sign +
+                  r.amount_credits +
+                  "</td>" +
+                  "<td class='mono'>" +
+                  r.balance_after +
+                  "</td>" +
+                  "</tr>"
+                );
+              })
+              .join("");
+          } catch (err) {
+            els.usageBody.innerHTML =
+              '<tr><td colspan="5" class="table-empty" style="color:var(--danger);">加载失败：' +
+              (err.message || err) +
+              "</td></tr>";
+          }
+        }
+
+        async function refreshBalance() {
+          if (!state.apiKey) return;
+          try {
+            const out = await Portal.apiCallWithKey("GET", "/v1/balance", state.apiKey);
+            els.balance.textContent = (out.balance_credits ?? 0).toLocaleString();
+          } catch (_) {
+            // ignore; the /v1/me balance is authoritative for first paint
+          }
+        }
+
+        async function rotateKey() {
+          if (
+            !confirm(
+              "重置 API key 会立即吊销当前 key，所有正在使用的客户端都需要更新。继续？"
+            )
+          )
+            return;
+          els.rotateBtn.disabled = true;
+          els.rotateBtn.textContent = "重置中…";
+          try {
+            const out = await Portal.apiCall("POST", "/v1/me/api_key/rotate");
+            renderMe(out);
+            Portal.showOk(els.banner, "已生成新 key，请立即复制保存。");
+            await loadUsage();
+          } catch (err) {
+            Portal.showError(els.banner, err.message || "重置失败");
+          } finally {
+            els.rotateBtn.disabled = false;
+            els.rotateBtn.textContent = "重置 Key";
+          }
+        }
+
+        els.copyBtn.addEventListener("click", () => {
+          if (state.apiKey) Portal.copyToClipboard(state.apiKey, els.copyBtn);
+        });
+        els.rotateBtn.addEventListener("click", rotateKey);
+        els.logoutBtn.addEventListener("click", Portal.logout);
+        els.refreshUsageBtn.addEventListener("click", async () => {
+          await refreshBalance();
+          await loadUsage();
+        });
+
+        (async () => {
+          const me = await Portal.requireSession();
+          renderMe(me);
+          if (new URLSearchParams(window.location.search).get("welcome") === "1") {
+            els.welcome.classList.remove("hidden");
+          }
+          await loadUsage();
+        })();
+      })();
+    </script>
+  </body>
+</html>

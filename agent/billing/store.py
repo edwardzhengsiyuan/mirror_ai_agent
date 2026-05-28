@@ -33,7 +33,10 @@ CREATE TABLE IF NOT EXISTS users (
     status               TEXT NOT NULL DEFAULT 'active',
     daily_credits_limit  INTEGER,
     created_at           TEXT NOT NULL,
-    updated_at           TEXT NOT NULL
+    updated_at           TEXT NOT NULL,
+    email                TEXT,
+    password_hash        TEXT,
+    verified_at          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -43,6 +46,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at     TEXT NOT NULL,
     last_seen_at   TEXT,
     revoked        INTEGER NOT NULL DEFAULT 0,
+    plaintext      TEXT,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
@@ -79,6 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_rate_events_scope_ts ON rate_events(scope, ts_epo
 """
 
 
+# Indexes that reference columns added by ``_migrate_post_release_columns``.
+# These must run AFTER migration on an old database (otherwise the indexed
+# column does not exist yet). Safe to re-run; CREATE INDEX IF NOT EXISTS is
+# a no-op once the index is present.
+POST_MIGRATION_SQL = """
+-- Partial unique index so legacy users (email IS NULL) do not collide.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+    ON users(email) WHERE email IS NOT NULL;
+"""
+
+
 def _now_iso() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -93,14 +108,70 @@ def generate_api_key() -> str:
     return secrets.token_urlsafe(32)
 
 
+class EmailAlreadyRegisteredError(ValueError):
+    """Raised when create_user is called with an email that already exists.
+
+    The service / endpoint layer maps this to a 409 ``email_taken`` error.
+    """
+
+    def __init__(self, email: str) -> None:
+        super().__init__(f"email already registered: {email}")
+        self.email = email
+
+
+# Columns added after the initial SCHEMA_SQL release. For each table we list
+# (column_name, DDL fragment used in ALTER TABLE). The migration step at startup
+# inspects the live database with PRAGMA table_info and adds any missing column.
+# All new columns must be nullable (or have a default) because SQLite cannot add
+# a NOT NULL column without a default to a table that already has rows.
+_POST_RELEASE_COLUMNS: Dict[str, List[Tuple[str, str]]] = {
+    "users": [
+        ("email", "TEXT"),
+        ("password_hash", "TEXT"),
+        ("verified_at", "TEXT"),
+    ],
+    "api_keys": [
+        ("plaintext", "TEXT"),
+    ],
+}
+
+
 class BillingStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         with self._connect() as conn:
+            # Order matters: SCHEMA_SQL handles fresh databases and any old
+            # tables that still need standalone CREATE TABLE statements;
+            # _migrate_post_release_columns ALTERs old tables to add the new
+            # columns; only then is POST_MIGRATION_SQL safe to run because
+            # its indexes reference the migrated columns.
             conn.executescript(SCHEMA_SQL)
+            self._migrate_post_release_columns(conn)
+            conn.executescript(POST_MIGRATION_SQL)
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
+
+    def _migrate_post_release_columns(self, conn: sqlite3.Connection) -> None:
+        """Add columns that were introduced after the initial SCHEMA_SQL.
+
+        SQLite has no ``ALTER TABLE IF COLUMN EXISTS`` so we look at
+        ``PRAGMA table_info`` and issue ``ALTER TABLE ADD COLUMN`` per missing
+        column. Safe to run repeatedly; no-op once everything is present.
+        """
+        for table, columns in _POST_RELEASE_COLUMNS.items():
+            existing = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not existing:
+                # Table itself does not exist yet — SCHEMA_SQL above would have
+                # created it on a fresh database, so this branch only fires if
+                # someone removed the CREATE TABLE statement. Skip.
+                continue
+            for col_name, col_ddl in columns:
+                if col_name in existing:
+                    continue
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}")
 
     # ------------------------------------------------------------------
     # connection helpers
@@ -132,21 +203,47 @@ class BillingStore:
     # users
     # ------------------------------------------------------------------
 
+    _USER_COLUMNS = (
+        "user_id, display_name, balance_credits, status,"
+        " daily_credits_limit, created_at, updated_at,"
+        " email, password_hash, verified_at"
+    )
+
     def create_user(
         self,
         user_id: str,
         display_name: Optional[str] = None,
         initial_credits: int = 0,
         daily_credits_limit: Optional[int] = None,
+        email: Optional[str] = None,
+        password_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = _now_iso()
-        with self.transaction() as conn:
-            conn.execute(
-                "INSERT INTO users (user_id, display_name, balance_credits, status,"
-                " daily_credits_limit, created_at, updated_at)"
-                " VALUES (?, ?, ?, 'active', ?, ?, ?)",
-                (user_id, display_name, int(initial_credits), daily_credits_limit, now, now),
-            )
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO users (user_id, display_name, balance_credits, status,"
+                    " daily_credits_limit, created_at, updated_at, email, password_hash)"
+                    " VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+                    (
+                        user_id,
+                        display_name,
+                        int(initial_credits),
+                        daily_credits_limit,
+                        now,
+                        now,
+                        email,
+                        password_hash,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            # Surface a clearer error so callers can distinguish duplicate
+            # user_id from duplicate email. Service layer relies on
+            # exception message to map to API error codes.
+            msg = str(exc).lower()
+            if "users.email" in msg or "idx_users_email" in msg:
+                raise EmailAlreadyRegisteredError(email or "") from exc
+            raise
         user = self.get_user(user_id)
         if user is None:
             # Should never happen: row was just inserted in same transaction.
@@ -156,18 +253,25 @@ class BillingStore:
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT user_id, display_name, balance_credits, status,"
-                " daily_credits_limit, created_at, updated_at"
-                " FROM users WHERE user_id = ?",
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE user_id = ?",
                 (user_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        if not email:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE email = ?",
+                (email,),
             ).fetchone()
         return dict(row) if row else None
 
     def list_users(self, limit: int = 200) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT user_id, display_name, balance_credits, status,"
-                " daily_credits_limit, created_at, updated_at"
+                f"SELECT {self._USER_COLUMNS}"
                 " FROM users ORDER BY created_at DESC LIMIT ?",
                 (max(1, int(limit)),),
             ).fetchall()
@@ -182,23 +286,44 @@ class BillingStore:
                 (status, _now_iso(), user_id),
             )
 
+    def update_user_password(self, user_id: str, password_hash: str) -> bool:
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+                (password_hash, _now_iso(), user_id),
+            )
+            return cur.rowcount > 0
+
     # ------------------------------------------------------------------
     # api keys
     # ------------------------------------------------------------------
 
-    def issue_api_key(self, user_id: str, label: Optional[str] = None) -> Tuple[str, str]:
+    def issue_api_key(
+        self,
+        user_id: str,
+        label: Optional[str] = None,
+        store_plaintext: bool = False,
+    ) -> Tuple[str, str]:
         """Issue a fresh key. Returns ``(plaintext, key_hash)``.
 
-        The plaintext value is the **only** time the user can see it.
+        Args:
+            user_id: owner.
+            label: human-readable name (e.g. ``"primary"``).
+            store_plaintext: when True, persist the plaintext on the row so
+                the dashboard can re-display it later. When False (legacy
+                /v1/register flow, /v1/api_keys [POST]), the plaintext is
+                only returned to the caller once and never stored.
         """
         plaintext = generate_api_key()
         key_hash = hash_api_key(plaintext)
         now = _now_iso()
+        stored = plaintext if store_plaintext else None
         with self.transaction() as conn:
             conn.execute(
-                "INSERT INTO api_keys (api_key_hash, user_id, label, created_at, last_seen_at, revoked)"
-                " VALUES (?, ?, ?, ?, NULL, 0)",
-                (key_hash, user_id, label, now),
+                "INSERT INTO api_keys (api_key_hash, user_id, label, created_at,"
+                " last_seen_at, revoked, plaintext)"
+                " VALUES (?, ?, ?, ?, NULL, 0, ?)",
+                (key_hash, user_id, label, now, stored),
             )
         return plaintext, key_hash
 
@@ -227,19 +352,49 @@ class BillingStore:
     def revoke_api_key(self, key_hash: str) -> bool:
         with self.transaction() as conn:
             cur = conn.execute(
-                "UPDATE api_keys SET revoked = 1 WHERE api_key_hash = ? AND revoked = 0",
+                "UPDATE api_keys SET revoked = 1, plaintext = NULL"
+                " WHERE api_key_hash = ? AND revoked = 0",
                 (key_hash,),
             )
             return cur.rowcount > 0
 
+    def revoke_all_user_api_keys(self, user_id: str) -> int:
+        """Revoke every non-revoked key for ``user_id``. Returns count revoked.
+
+        Used by /v1/me/api_key/rotate so the dashboard's single-key UX has a
+        clean slate before issuing the replacement.
+        """
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE api_keys SET revoked = 1, plaintext = NULL"
+                " WHERE user_id = ? AND revoked = 0",
+                (user_id,),
+            )
+            return cur.rowcount
+
     def list_api_keys(self, user_id: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT api_key_hash, label, created_at, last_seen_at, revoked"
+                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, plaintext"
                 " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_current_user_api_key(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent non-revoked key row for ``user_id``.
+
+        Includes ``plaintext`` when persisted (auth-flow keys). The dashboard
+        shows it directly; legacy keys (curl-only registration) show as masked.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, plaintext"
+                " FROM api_keys WHERE user_id = ? AND revoked = 0"
+                " ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     # ------------------------------------------------------------------
     # ledger writes (low level — service.py builds higher-level flows)

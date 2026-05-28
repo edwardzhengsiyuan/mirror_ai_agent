@@ -16,7 +16,7 @@ from .errors import (
 )
 from .pricing import Pricing
 from .service import BillingService, ChargeReceipt
-from .store import BillingStore
+from .store import BillingStore, EmailAlreadyRegisteredError
 from .stripe_gateway import (
     StripeGateway,
     StripeNotConfiguredError,
@@ -45,4 +45,5 @@ __all__ = [
     "DuplicateRequestError",
     "InflightLimitError",
     "RateLimitError",
+    "EmailAlreadyRegisteredError",
 ]

@@ -1,422 +1,386 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>账户与计费 · BaZi Agent</title>
-<style>
-:root {
-  color-scheme: light dark;
-  --bg: #f6f6f7;
-  --card-bg: #ffffff;
-  --border: #e2e3e5;
-  --muted: #6c6f73;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --danger: #c43d3d;
-  --shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161618;
-    --card-bg: #1f2024;
-    --border: #2c2d31;
-    --muted: #9aa0a6;
-    --accent: #60a5fa;
-    --accent-hover: #93c5fd;
-    --shadow: 0 1px 3px rgba(0,0,0,0.4);
-  }
-}
-* { box-sizing: border-box; }
-body {
-  font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
-  margin: 0;
-  background: var(--bg);
-  color: inherit;
-  line-height: 1.5;
-}
-.wrap { max-width: 920px; margin: 0 auto; padding: 24px 18px 48px; }
-h1 { margin: 0 0 4px; font-size: 22px; }
-.sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
-.card {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
-  margin-bottom: 18px;
-  box-shadow: var(--shadow);
-}
-.card h2 { margin: 0 0 12px; font-size: 16px; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-input, button, select {
-  font: inherit;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: inherit;
-}
-input { flex: 1; min-width: 200px; }
-button {
-  background: var(--accent); color: white; border-color: var(--accent);
-  cursor: pointer; padding: 8px 14px;
-}
-button:hover { background: var(--accent-hover); }
-button.ghost { background: transparent; color: inherit; border-color: var(--border); }
-button.danger { background: var(--danger); border-color: var(--danger); }
-button[disabled] { opacity: 0.5; cursor: not-allowed; }
-.balance-big { font-size: 32px; font-weight: 600; }
-.balance-sub { font-size: 13px; color: var(--muted); }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; }
-.kind-charge { color: #b45309; }
-.kind-refund { color: #15803d; }
-.kind-topup  { color: #2563eb; }
-.muted { color: var(--muted); }
-.status-msg { font-size: 13px; padding: 8px 10px; border-radius: 6px; margin-top: 10px; }
-.status-ok { background: rgba(34,197,94,0.12); color: #15803d; }
-.status-err { background: rgba(196,61,61,0.12); color: var(--danger); }
-.kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: rgba(127,127,127,0.12); padding: 1px 5px; border-radius: 4px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>账户与计费</h1>
-  <div class="sub">输入你的 API key 查看余额、用量与密钥；密钥本身保存在浏览器 <span class="kbd">localStorage</span>，不会上传到任何第三方。还没有账户？<a href="/register.html">点这里 30 秒开通</a>。</div>
-
-  <div class="card">
-    <h2>API Key</h2>
-    <div class="row">
-      <input id="apiKey" type="password" placeholder="粘贴你的 API key"/>
-      <button id="btnSaveKey">保存</button>
-      <button id="btnReveal" class="ghost">显示</button>
-      <button id="btnClearKey" class="ghost">清除</button>
-    </div>
-    <div id="keyStatus" class="status-msg muted" style="display:none"></div>
-  </div>
-
-  <div class="card">
-    <h2>余额</h2>
-    <div class="balance-big"><span id="balance">--</span> credits</div>
-    <div class="balance-sub">用户 ID: <span id="userId" class="kbd">未登录</span> · 1 元 = 100 credits</div>
-    <div class="row" style="margin-top: 10px;">
-      <button id="btnRefreshBal" class="ghost">刷新余额</button>
-    </div>
-    <div id="balStatus" class="status-msg" style="display:none"></div>
-  </div>
-
-  <div class="card" id="topupCard">
-    <h2>充值</h2>
-    <div id="topupBanner" class="status-msg" style="display:none"></div>
-    <div id="packGrid" class="row" style="gap:10px; margin-bottom: 10px;">
-      <span class="muted">加载套餐中…</span>
-    </div>
-    <div class="row" style="margin-top: 10px;">
-      <input id="customYuan" type="number" min="1" max="9999" placeholder="自定义金额（元，1-9999）"/>
-      <button id="btnCustomPay">充值</button>
-    </div>
-    <div id="topupHint" class="muted" style="font-size:12px;margin-top:6px;">付款由 Stripe 处理；BaZi Agent 不会接触你的卡号。</div>
-    <div id="stripeStatus" class="muted" style="font-size:12px;margin-top:4px;"></div>
-  </div>
-
-  <div class="card">
-    <h2>最近用量 <span class="muted" style="font-weight:normal;font-size:12px;">(最多 30 条)</span></h2>
-    <div class="row">
-      <button id="btnRefreshUsage" class="ghost">刷新</button>
-    </div>
-    <table id="usageTable" style="margin-top: 10px;">
-      <thead>
-        <tr><th>时间</th><th>类型</th><th>endpoint</th><th>金额</th><th>余额后</th><th>状态</th></tr>
-      </thead>
-      <tbody><tr><td colspan="6" class="muted">未加载</td></tr></tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>API Keys</h2>
-    <table id="keysTable">
-      <thead>
-        <tr><th>label</th><th>key_id</th><th>创建</th><th>最近使用</th><th>状态</th><th></th></tr>
-      </thead>
-      <tbody><tr><td colspan="6" class="muted">未加载</td></tr></tbody>
-    </table>
-    <div class="row" style="margin-top: 12px;">
-      <input id="newKeyLabel" placeholder="新 key label (可选，例如 'phone-app')"/>
-      <button id="btnIssueKey">签发新 key</button>
-    </div>
-    <div id="keyIssueResult" class="status-msg" style="display:none"></div>
-  </div>
-</div>
-
-<script>
-const STORAGE_KEY = "bazi_billing_api_key";
-const $ = (id) => document.getElementById(id);
-
-function getKey() { return localStorage.getItem(STORAGE_KEY) || ""; }
-function setKey(k) {
-  if (k) localStorage.setItem(STORAGE_KEY, k);
-  else localStorage.removeItem(STORAGE_KEY);
-}
-
-function fmt(text, ok=true) {
-  const el = $("balStatus");
-  el.style.display = "block";
-  el.textContent = text;
-  el.className = "status-msg " + (ok ? "status-ok" : "status-err");
-}
-
-async function api(path, opts = {}) {
-  const key = getKey();
-  if (!key) { throw new Error("请先填写并保存 API key"); }
-  opts.headers = Object.assign({}, opts.headers || {}, {
-    "Authorization": "Bearer " + key,
-    "Content-Type": "application/json"
-  });
-  const r = await fetch(path, opts);
-  const text = await r.text();
-  let body = null;
-  try { body = JSON.parse(text); } catch { body = text; }
-  if (!r.ok) {
-    const msg = (body && body.error && body.error.message) || ("HTTP " + r.status);
-    const err = new Error(msg);
-    err.status = r.status;
-    err.body = body;
-    throw err;
-  }
-  return body;
-}
-
-async function refreshBalance() {
-  try {
-    const d = await api("/v1/balance");
-    $("balance").textContent = d.balance_credits;
-    $("userId").textContent = d.user_id;
-    fmt("余额已更新", true);
-  } catch (e) {
-    fmt(e.message || String(e), false);
-    $("balance").textContent = "--";
-    $("userId").textContent = "未登录";
-  }
-}
-
-async function refreshUsage() {
-  try {
-    const d = await api("/v1/usage?limit=30");
-    const tbody = $("usageTable").querySelector("tbody");
-    if (!d.rows || d.rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>';
-      return;
-    }
-    tbody.innerHTML = d.rows.map(r => `
-      <tr>
-        <td>${(r.ts || "").replace("T", " ").slice(0, 19)}</td>
-        <td class="kind-${r.kind}">${r.kind}</td>
-        <td>${r.endpoint || "-"}</td>
-        <td>${r.amount_credits}</td>
-        <td>${r.balance_after}</td>
-        <td>${r.status}</td>
-      </tr>
-    `).join("");
-  } catch (e) {
-    fmt(e.message, false);
-  }
-}
-
-async function refreshKeys() {
-  try {
-    const d = await api("/v1/api_keys");
-    const tbody = $("keysTable").querySelector("tbody");
-    if (!d.api_keys || d.api_keys.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">暂无 key</td></tr>';
-      return;
-    }
-    tbody.innerHTML = d.api_keys.map(k => `
-      <tr>
-        <td>${k.label || "<i class='muted'>(无)</i>"}</td>
-        <td><span class="kbd">${k.key_id}…</span></td>
-        <td>${(k.created_at || "").slice(0, 19).replace("T", " ")}</td>
-        <td>${(k.last_seen_at || "").slice(0, 19).replace("T", " ") || "-"}</td>
-        <td>${k.revoked ? "<span class='kind-refund'>已吊销</span>" : "active"}</td>
-        <td>${k.revoked ? "" : `<button class="danger" data-key="${k.key_id}">吊销</button>`}</td>
-      </tr>
-    `).join("");
-    tbody.querySelectorAll("button[data-key]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        if (!confirm("确认吊销此 key？吊销后无法恢复。")) return;
-        try {
-          await api("/v1/api_keys/" + btn.dataset.key, { method: "DELETE" });
-          fmt("已吊销", true);
-          refreshKeys();
-        } catch (e) { fmt(e.message, false); }
-      });
-    });
-  } catch (e) { fmt(e.message, false); }
-}
-
-async function issueKey() {
-  const label = $("newKeyLabel").value.trim() || null;
-  try {
-    const d = await api("/v1/api_keys", {
-      method: "POST",
-      body: JSON.stringify({ label })
-    });
-    const out = $("keyIssueResult");
-    out.style.display = "block";
-    out.className = "status-msg status-ok";
-    out.innerHTML = `新 key: <span class="kbd">${d.api_key}</span><br><small class="muted">立即保存——刷新页面后将无法再看到。</small>`;
-    $("newKeyLabel").value = "";
-    refreshKeys();
-  } catch (e) {
-    const out = $("keyIssueResult");
-    out.style.display = "block";
-    out.className = "status-msg status-err";
-    out.textContent = e.message;
-  }
-}
-
-async function loadPacks() {
-  try {
-    const r = await fetch("/v1/topup_packs");
-    const d = await r.json();
-    const grid = $("packGrid");
-    if (!d.packs || !d.packs.length) {
-      grid.innerHTML = '<span class="muted">未配置套餐。</span>';
-    } else {
-      grid.innerHTML = d.packs.map(p =>
-        `<button class="pack-btn" data-pack="${p.id}" style="display:flex;flex-direction:column;align-items:flex-start;padding:10px 14px;line-height:1.3;">
-           <span style="font-size:15px;font-weight:600;">¥${p.amount_yuan}</span>
-           <span style="font-size:12px;opacity:0.85;">${p.credits} credits · ${p.label}</span>
-           <span style="font-size:11px;opacity:0.7;">${p.description || ""}</span>
-         </button>`
-      ).join("");
-      grid.querySelectorAll("button[data-pack]").forEach(btn => {
-        btn.addEventListener("click", () => startCheckout({ pack_id: btn.dataset.pack }));
-      });
-    }
-    if (d.stripe_configured === false) {
-      $("stripeStatus").textContent = "⚠ 服务端未配置 Stripe，付款功能暂不可用";
-      $("stripeStatus").style.color = "var(--danger)";
-      $("packGrid").querySelectorAll("button").forEach(b => b.disabled = true);
-      $("btnCustomPay").disabled = true;
-    } else {
-      const methods = (d.payment_methods || []);
-      const labelMap = { card: "银行卡", wechat_pay: "微信支付", alipay: "支付宝" };
-      const labels = methods.map(m => labelMap[m] || m).join(" / ");
-      const hint = $("topupHint");
-      hint.textContent = (labels ? "支持 " + labels + "。" : "") + "付款由 Stripe 处理；BaZi Agent 不会接触你的卡号。";
-      if (d.stripe_mode === "test") {
-        const tips = ["测试模式 — 卡号 4242 4242 4242 4242 / 任意未过期日期 / 任意 CVC"];
-        if (methods.includes("wechat_pay")) {
-          tips.push("微信测试：用手机自带相机扫码（不要用真实微信 App），跳到 Stripe 沙盒页点 Authorize。");
-        }
-        $("stripeStatus").textContent = tips.join(" · ");
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Billing · Mirror AI</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <style>
+      .pack-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px;
       }
-    }
-  } catch (e) {
-    $("packGrid").innerHTML = '<span class="muted">套餐加载失败：' + (e.message || e) + '</span>';
-  }
-}
+      .pack {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-2);
+        padding: 16px;
+        cursor: pointer;
+        transition: border-color 0.1s, box-shadow 0.1s, transform 0.05s;
+      }
+      .pack:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+      }
+      .pack:active {
+        transform: translateY(1px);
+      }
+      .pack .pack-name {
+        font-weight: 600;
+        font-size: 15px;
+        color: var(--ink);
+      }
+      .pack .pack-price {
+        font-size: 22px;
+        font-weight: 600;
+        font-family: var(--font-mono);
+        margin-top: 6px;
+        color: var(--ink);
+      }
+      .pack .pack-credits {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .pack .pack-badge {
+        display: inline-block;
+        font-size: 11px;
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-top: 8px;
+        font-weight: 500;
+      }
+      .custom-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .custom-row input {
+        max-width: 180px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topnav">
+      <a href="/dashboard" class="brand">
+        <span class="brand-dot"></span>
+        Mirror AI
+      </a>
+      <nav>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/billing" class="active">Billing</a>
+        <a href="/docs">Docs</a>
+      </nav>
+      <div class="user-block">
+        <span id="user-email" class="muted"></span>
+        <button id="logout-btn" class="btn btn-ghost btn-sm">登出</button>
+      </div>
+    </header>
 
-async function startCheckout(payload) {
-  if (!getKey()) {
-    fmtTopup("请先填 API key 再充值", false);
-    return;
-  }
-  fmtTopup("正在跳转到 Stripe…", true);
-  try {
-    const d = await api("/v1/checkout/create", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    if (d.checkout_url) {
-      window.location.href = d.checkout_url;
-    } else {
-      fmtTopup("Stripe 没有返回支付链接，请稍后重试", false);
-    }
-  } catch (e) {
-    fmtTopup(e.message || String(e), false);
-  }
-}
+    <main class="page">
+      <h1>充值</h1>
+      <p class="text-muted">为账户增加 credits — 每次 API 调用按 endpoint 价格扣费。</p>
 
-function fmtTopup(text, ok) {
-  const el = $("topupBanner");
-  el.style.display = "block";
-  el.textContent = text;
-  el.className = "status-msg " + (ok ? "status-ok" : "status-err");
-}
+      <div id="banner" class="banner hidden"></div>
 
-function handleStripeReturn() {
-  const params = new URLSearchParams(location.search);
-  const status = params.get("status");
-  if (status === "success") {
-    fmtTopup("支付成功！正在确认到账…", true);
-    // Stripe webhook can take a beat; poll balance up to 5 seconds.
-    let tries = 0;
-    const before = parseInt(($("balance").textContent || "").replace(/\D/g, ""), 10) || 0;
-    const tick = async () => {
-      tries++;
-      try {
-        const d = await api("/v1/balance");
-        $("balance").textContent = d.balance_credits;
-        if (d.balance_credits > before || tries >= 10) {
-          if (d.balance_credits > before) {
-            fmtTopup("✓ 已到账。当前余额 " + d.balance_credits + " credits。", true);
-            refreshUsage();
-          } else {
-            fmtTopup("已收到回跳，但余额尚未变更。Stripe webhook 可能延迟，几分钟后刷新即可。", true);
+      <div class="grid cols-2 mt-6">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">当前余额</div>
+              <div class="card-subtitle">credits</div>
+            </div>
+            <button id="refresh-balance-btn" class="btn btn-ghost btn-sm">刷新</button>
+          </div>
+          <div
+            id="balance"
+            style="font-size:28px;font-weight:600;font-family:var(--font-mono);"
+          >
+            —
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">支付方式</div>
+          </div>
+          <div id="payment-info" class="muted" style="font-size:13px;">
+            加载中…
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-6">
+        <div class="card-header">
+          <div>
+            <div class="card-title">充值套餐</div>
+            <div class="card-subtitle">点击套餐跳转 Stripe Checkout</div>
+          </div>
+        </div>
+        <div id="pack-grid" class="pack-grid">
+          <div class="text-muted">加载套餐…</div>
+        </div>
+        <div class="mt-6">
+          <h4 style="margin-bottom: 8px;">自定义金额</h4>
+          <div class="custom-row">
+            <input
+              type="number"
+              id="custom-yuan"
+              placeholder="¥ (1–9999)"
+              min="1"
+              max="9999"
+            />
+            <button id="custom-btn" class="btn btn-primary">充值</button>
+          </div>
+          <small class="text-muted">汇率：1 元 = 100 credits（实际比率以服务器配置为准）</small>
+        </div>
+      </div>
+
+      <div class="card mt-6">
+        <div class="card-header">
+          <div>
+            <div class="card-title">最近账单</div>
+            <div class="card-subtitle">充值与扣费明细</div>
+          </div>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>Endpoint</th>
+              <th>类型</th>
+              <th>变动</th>
+              <th>余额</th>
+            </tr>
+          </thead>
+          <tbody id="ledger-body">
+            <tr>
+              <td colspan="5" class="table-empty">加载中…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <script src="/portal.js"></script>
+    <script>
+      (function () {
+        const state = {
+          me: null,
+          apiKey: null,
+          packs: [],
+          currency: "cny",
+          stripeConfigured: false,
+        };
+        const els = {
+          banner: document.getElementById("banner"),
+          balance: document.getElementById("balance"),
+          paymentInfo: document.getElementById("payment-info"),
+          userEmail: document.getElementById("user-email"),
+          packGrid: document.getElementById("pack-grid"),
+          customYuan: document.getElementById("custom-yuan"),
+          customBtn: document.getElementById("custom-btn"),
+          ledgerBody: document.getElementById("ledger-body"),
+          refreshBalanceBtn: document.getElementById("refresh-balance-btn"),
+          logoutBtn: document.getElementById("logout-btn"),
+        };
+
+        async function refreshBalance() {
+          if (!state.apiKey) {
+            els.balance.textContent =
+              state.me.user.balance_credits.toLocaleString();
+            return;
           }
-          // Clean the URL so a refresh doesn't re-trigger.
-          history.replaceState({}, "", location.pathname);
-          return;
+          try {
+            const out = await Portal.apiCallWithKey("GET", "/v1/balance", state.apiKey);
+            els.balance.textContent = (out.balance_credits ?? 0).toLocaleString();
+          } catch (err) {
+            Portal.showError(els.banner, "刷新余额失败：" + err.message);
+          }
         }
-      } catch {}
-      setTimeout(tick, 500);
-    };
-    tick();
-  } else if (status === "cancelled") {
-    fmtTopup("已取消支付，未扣款。", false);
-    history.replaceState({}, "", location.pathname);
-  }
-}
 
-function refreshAll() { refreshBalance(); refreshUsage(); refreshKeys(); }
+        async function loadPacks() {
+          try {
+            const out = await Portal.apiCall("GET", "/v1/topup_packs");
+            state.packs = out.packs || [];
+            state.currency = out.currency || "cny";
+            state.stripeConfigured = !!out.stripe_configured;
+            if (!state.stripeConfigured) {
+              els.paymentInfo.innerHTML =
+                '<span style="color:var(--warn);">⚠ Stripe 暂未配置 — 联系运营开通后再充值。</span>';
+            } else {
+              const methods = (out.payment_methods || []).join(", ") || "card";
+              els.paymentInfo.textContent =
+                "支付方式：" + methods + "（mode: " + out.stripe_mode + "）";
+            }
+            renderPacks();
+          } catch (err) {
+            els.packGrid.innerHTML =
+              '<span class="text-muted">加载套餐失败：' + err.message + "</span>";
+          }
+        }
 
-// init
-$("apiKey").value = getKey();
-$("btnSaveKey").addEventListener("click", () => {
-  const v = $("apiKey").value.trim();
-  setKey(v);
-  const el = $("keyStatus");
-  el.style.display = "block";
-  el.textContent = v ? "已保存到 localStorage" : "已清除";
-  el.className = "status-msg " + (v ? "status-ok" : "muted");
-  refreshAll();
-});
-$("btnReveal").addEventListener("click", () => {
-  const inp = $("apiKey");
-  inp.type = inp.type === "password" ? "text" : "password";
-});
-$("btnClearKey").addEventListener("click", () => {
-  setKey("");
-  $("apiKey").value = "";
-  refreshAll();
-});
-$("btnRefreshBal").addEventListener("click", refreshBalance);
-$("btnRefreshUsage").addEventListener("click", refreshUsage);
-$("btnIssueKey").addEventListener("click", issueKey);
-$("btnCustomPay").addEventListener("click", () => {
-  const yuan = parseInt($("customYuan").value || "0", 10);
-  if (!yuan || yuan < 1 || yuan > 9999) {
-    fmtTopup("请输入 1–9999 之间的整数金额", false);
-    return;
-  }
-  startCheckout({ custom_yuan: yuan });
-});
+        function renderPacks() {
+          if (!state.packs.length) {
+            els.packGrid.innerHTML =
+              '<span class="text-muted">暂无预设套餐。试试下面的自定义金额。</span>';
+            return;
+          }
+          els.packGrid.innerHTML = state.packs
+            .map((p) => {
+              const badge = p.most_popular
+                ? '<div class="pack-badge">最受欢迎</div>'
+                : p.best_value
+                ? '<div class="pack-badge">超值</div>'
+                : "";
+              return (
+                '<div class="pack" data-pack-id="' +
+                p.id +
+                '">' +
+                '<div class="pack-name">' +
+                (p.name || p.id) +
+                "</div>" +
+                '<div class="pack-price">' +
+                Portal.formatYuan(p.amount_fen) +
+                "</div>" +
+                '<div class="pack-credits">' +
+                p.credits.toLocaleString() +
+                " credits</div>" +
+                badge +
+                "</div>"
+              );
+            })
+            .join("");
+          Array.from(els.packGrid.querySelectorAll(".pack")).forEach((node) => {
+            node.addEventListener("click", () => {
+              checkout({ pack_id: node.dataset.packId });
+            });
+          });
+        }
 
-loadPacks();
-if (getKey()) refreshAll();
-handleStripeReturn();
-</script>
-</body>
+        async function checkout(body) {
+          if (!state.apiKey) {
+            Portal.showError(
+              els.banner,
+              "缺少 API key — 回 Dashboard 点「重置 Key」生成一个。"
+            );
+            return;
+          }
+          if (!state.stripeConfigured) {
+            Portal.showError(els.banner, "Stripe 尚未配置。");
+            return;
+          }
+          Portal.clearBanner(els.banner);
+          try {
+            const out = await Portal.apiCallWithKey(
+              "POST",
+              "/v1/checkout/create",
+              state.apiKey,
+              body
+            );
+            window.location.href = out.checkout_url;
+          } catch (err) {
+            Portal.showError(els.banner, err.message || "创建支付会话失败");
+          }
+        }
+
+        els.customBtn.addEventListener("click", () => {
+          const val = parseInt(els.customYuan.value, 10);
+          if (!val || val < 1 || val > 9999) {
+            Portal.showError(els.banner, "请输入 1–9999 之间的整数元数");
+            return;
+          }
+          checkout({ custom_yuan: val });
+        });
+        els.refreshBalanceBtn.addEventListener("click", async () => {
+          await refreshBalance();
+          await loadLedger();
+        });
+        els.logoutBtn.addEventListener("click", Portal.logout);
+
+        async function loadLedger() {
+          if (!state.apiKey) {
+            els.ledgerBody.innerHTML =
+              '<tr><td colspan="5" class="table-empty">缺少 API key — 重置后可看历史账单。</td></tr>';
+            return;
+          }
+          try {
+            const out = await Portal.apiCallWithKey(
+              "GET",
+              "/v1/usage?limit=30",
+              state.apiKey
+            );
+            const rows = out.rows || [];
+            if (!rows.length) {
+              els.ledgerBody.innerHTML =
+                '<tr><td colspan="5" class="table-empty">还没有账单记录。</td></tr>';
+              return;
+            }
+            els.ledgerBody.innerHTML = rows
+              .map((r) => {
+                const sign = r.amount_credits > 0 ? "+" : "";
+                const cls =
+                  r.kind === "topup"
+                    ? "color:var(--ok);"
+                    : r.kind === "refund"
+                    ? "color:var(--accent);"
+                    : "color:var(--ink-2);";
+                return (
+                  "<tr>" +
+                  "<td class='mono' style='font-size:12px;'>" +
+                  Portal.formatTs(r.ts) +
+                  "</td>" +
+                  "<td class='mono' style='font-size:12px;'>" +
+                  (r.endpoint || "—") +
+                  "</td>" +
+                  "<td>" +
+                  r.kind +
+                  "</td>" +
+                  "<td class='mono' style='" +
+                  cls +
+                  "'>" +
+                  sign +
+                  r.amount_credits +
+                  "</td>" +
+                  "<td class='mono'>" +
+                  r.balance_after +
+                  "</td>" +
+                  "</tr>"
+                );
+              })
+              .join("");
+          } catch (err) {
+            els.ledgerBody.innerHTML =
+              '<tr><td colspan="5" class="table-empty" style="color:var(--danger);">加载失败：' +
+              err.message +
+              "</td></tr>";
+          }
+        }
+
+        (async () => {
+          const me = await Portal.requireSession();
+          state.me = me;
+          state.apiKey = (me.api_key && me.api_key.plaintext) || null;
+          els.userEmail.textContent = me.user.email || me.user.user_id;
+          els.balance.textContent = (me.user.balance_credits ?? 0).toLocaleString();
+          // Stripe redirect handling. New STRIPE_SUCCESS_URL uses ``topup=``;
+          // older deployments may still use ``status=`` — we handle both so
+          // we don't surprise existing customers when they redeploy.
+          const params = new URLSearchParams(window.location.search);
+          const topup = params.get("topup") || params.get("status");
+          if (topup === "success") {
+            Portal.showOk(
+              els.banner,
+              "支付成功！credits 会在收到 Stripe webhook 后入账，几秒钟刷新一下看看。"
+            );
+          } else if (topup === "cancel" || topup === "cancelled") {
+            Portal.showWarn(els.banner, "支付已取消。");
+          }
+          await Promise.all([loadPacks(), refreshBalance(), loadLedger()]);
+        })();
+      })();
+    </script>
+  </body>
 </html>

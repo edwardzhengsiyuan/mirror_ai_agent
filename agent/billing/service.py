@@ -418,20 +418,39 @@ class BillingService:
         daily_credits_limit: Optional[int] = None,
         issue_first_key: bool = True,
         key_label: Optional[str] = None,
+        email: Optional[str] = None,
+        password_hash: Optional[str] = None,
+        store_first_key_plaintext: bool = False,
     ) -> Dict[str, Any]:
-        """Create a user, optionally with an initial topup and first API key."""
+        """Create a user, optionally with an initial topup and first API key.
+
+        Args:
+            email / password_hash: optional auth credentials. Passed through to
+                the store, which enforces the partial UNIQUE index on email.
+            store_first_key_plaintext: when True, persist the first issued
+                API key's plaintext on the row so the dashboard can re-display
+                it. Defaults to False to preserve the historical behaviour of
+                the curl-only ``/v1/register`` endpoint.
+        """
         existing = self.store.get_user(user_id)
         if existing is not None:
             raise ValueError(f"user {user_id} already exists")
+        # Note: the store raises EmailAlreadyRegisteredError on collision.
         user = self.store.create_user(
             user_id=user_id,
             display_name=display_name,
             initial_credits=0,
             daily_credits_limit=daily_credits_limit,
+            email=email,
+            password_hash=password_hash,
         )
         plaintext_key: Optional[str] = None
         if issue_first_key:
-            plaintext_key, _ = self.store.issue_api_key(user_id, key_label or "primary")
+            plaintext_key, _ = self.store.issue_api_key(
+                user_id,
+                key_label or "primary",
+                store_plaintext=store_first_key_plaintext,
+            )
         if initial_credits > 0:
             receipt = self.topup(
                 user_id,
@@ -443,6 +462,38 @@ class BillingService:
             "user": user,
             "api_key_plaintext": plaintext_key,
         }
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        return self.store.get_user_by_email(email)
+
+    def update_password(self, user_id: str, password_hash: str) -> None:
+        if self.store.get_user(user_id) is None:
+            raise UnknownUserError(user_id)
+        self.store.update_user_password(user_id, password_hash)
+
+    def rotate_user_api_key(
+        self,
+        user_id: str,
+        label: Optional[str] = None,
+    ) -> str:
+        """Revoke every existing key for ``user_id`` and mint a fresh one.
+
+        Used by the dashboard's "reset API key" button. The plaintext is
+        stored on the new row so the dashboard can re-display it later.
+        Returns the new plaintext key (only readable here at issue time).
+        """
+        if self.store.get_user(user_id) is None:
+            raise UnknownUserError(user_id)
+        self.store.revoke_all_user_api_keys(user_id)
+        plaintext, _ = self.store.issue_api_key(
+            user_id,
+            label or "primary",
+            store_plaintext=True,
+        )
+        return plaintext
+
+    def get_current_user_api_key(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return self.store.get_current_user_api_key(user_id)
 
     def issue_api_key(self, user_id: str, label: Optional[str] = None) -> str:
         if self.store.get_user(user_id) is None:

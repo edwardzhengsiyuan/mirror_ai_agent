@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API 文档 · Mirror AI</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <style>
+      .docs-layout {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 32px;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .docs-sidebar {
+        position: sticky;
+        top: 80px;
+        align-self: start;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+      }
+      .docs-sidebar h4 {
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 18px 0 6px 0;
+        font-weight: 600;
+      }
+      .docs-sidebar h4:first-child {
+        margin-top: 0;
+      }
+      .docs-sidebar a {
+        display: block;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: var(--ink-2);
+        border-radius: 5px;
+        text-decoration: none;
+      }
+      .docs-sidebar a:hover {
+        background: var(--surface-2);
+        color: var(--ink);
+        text-decoration: none;
+      }
+      .docs-sidebar a.active {
+        color: var(--accent);
+        background: var(--accent-soft);
+      }
+      .docs-content {
+        min-width: 0;
+      }
+      .docs-content h1 {
+        font-size: 32px;
+        margin-bottom: 8px;
+      }
+      .docs-content h2 {
+        font-size: 22px;
+        margin-top: 48px;
+        margin-bottom: 4px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+        scroll-margin-top: 80px;
+      }
+      .docs-content h3 {
+        font-size: 17px;
+        margin-top: 32px;
+        margin-bottom: 8px;
+        scroll-margin-top: 80px;
+      }
+      .docs-content p {
+        font-size: 14px;
+      }
+      .docs-lead {
+        font-size: 15px;
+        color: var(--ink-2);
+        margin-bottom: 24px;
+      }
+      .endpoint-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 24px;
+        margin-bottom: 4px;
+        font-family: var(--font-mono);
+        font-size: 14px;
+      }
+      .endpoint-method {
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 3px 6px;
+        border-radius: 4px;
+        color: #fff;
+      }
+      .method-GET {
+        background: #16a34a;
+      }
+      .method-POST {
+        background: #2563eb;
+      }
+      .method-DELETE {
+        background: #dc2626;
+      }
+      .endpoint-path {
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .endpoint-cost {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-family: var(--font-sans);
+      }
+      .code-tabs {
+        margin-top: 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-2);
+        overflow: hidden;
+      }
+      .tab-buttons {
+        display: flex;
+        background: var(--surface-2);
+        border-bottom: 1px solid var(--border);
+      }
+      .tab-btn {
+        background: transparent;
+        border: 0;
+        font: inherit;
+        padding: 8px 14px;
+        font-size: 13px;
+        color: var(--muted);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+      }
+      .tab-btn.active {
+        color: var(--ink);
+        background: var(--surface);
+        border-bottom-color: var(--accent);
+        font-weight: 500;
+      }
+      .code-tabs pre {
+        border-radius: 0;
+        margin: 0;
+      }
+      .params-table {
+        margin-top: 8px;
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .params-table th,
+      .params-table td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      .params-table th {
+        font-weight: 500;
+        font-size: 12px;
+        color: var(--muted);
+        background: var(--surface-2);
+      }
+      .params-table code {
+        font-size: 12px;
+      }
+      .params-table .pname {
+        color: var(--ink);
+        font-weight: 500;
+      }
+      .params-table .ptype {
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+      .params-table .preq {
+        color: var(--danger);
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .api-key-banner {
+        background: var(--accent-soft);
+        border: 1px solid #c7d2fe;
+        border-radius: var(--r-2);
+        padding: 12px 16px;
+        margin-bottom: 24px;
+        font-size: 13px;
+        color: #3730a3;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .api-key-banner code {
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--ink);
+      }
+      @media (max-width: 800px) {
+        .docs-layout {
+          grid-template-columns: 1fr;
+        }
+        .docs-sidebar {
+          position: static;
+          max-height: none;
+          padding-bottom: 16px;
+          border-bottom: 1px solid var(--border);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topnav">
+      <a href="/" class="brand">
+        <span class="brand-dot"></span>
+        Mirror AI
+      </a>
+      <nav>
+        <a href="/dashboard" id="nav-dashboard" class="hidden">Dashboard</a>
+        <a href="/billing" id="nav-billing" class="hidden">Billing</a>
+        <a href="/docs" class="active">Docs</a>
+      </nav>
+      <div class="user-block">
+        <a href="/login" id="nav-login" class="btn btn-secondary btn-sm">登录</a>
+        <a href="/register" id="nav-register" class="btn btn-primary btn-sm">注册</a>
+        <span id="user-email" class="muted hidden"></span>
+        <button id="logout-btn" class="btn btn-ghost btn-sm hidden">登出</button>
+      </div>
+    </header>
+
+    <div class="docs-layout">
+      <aside class="docs-sidebar">
+        <h4>Getting Started</h4>
+        <a href="#quickstart">Quickstart</a>
+        <a href="#authentication">Authentication</a>
+        <a href="#errors">错误码与计费头</a>
+
+        <h4>Account</h4>
+        <a href="#account-me">GET /v1/me</a>
+        <a href="#account-balance">GET /v1/balance</a>
+        <a href="#account-usage">GET /v1/usage</a>
+        <a href="#account-rotate">POST /v1/me/api_key/rotate</a>
+
+        <h4>BaZi 八字</h4>
+        <a href="#bazi-ask">POST /v1/ask</a>
+        <a href="#bazi-stream">POST /v1/ask_stream</a>
+
+        <h4>HePan 合盘</h4>
+        <a href="#hepan-ask">POST /v1/hepan/ask</a>
+
+        <h4>CeZi 测字</h4>
+        <a href="#cezi-ask">POST /v1/cezi/ask</a>
+
+        <h4>NaJia 纳甲</h4>
+        <a href="#najia-ask">POST /v1/najia/ask</a>
+
+        <h4>ZWDS 紫微斗数</h4>
+        <a href="#zwds-ask">POST /v1/zwds/ask</a>
+
+        <h4>Billing</h4>
+        <a href="#billing-packs">GET /v1/topup_packs</a>
+        <a href="#billing-checkout">POST /v1/checkout/create</a>
+      </aside>
+
+      <main class="docs-content">
+        <h1>API 文档</h1>
+        <p class="docs-lead">
+          Mirror AI 提供基于 HTTP + JSON 的玄学计算接口：八字、合盘、测字、纳甲、紫微斗数。
+          所有 <code>/v1/*</code> 请求使用 Bearer 鉴权，按 endpoint 价格扣除 credits。
+        </p>
+
+        <div id="api-key-banner" class="api-key-banner hidden">
+          ✓ 已登录，文档示例中的 <code>YOUR_API_KEY</code> 已自动替换为你的真实 key。
+        </div>
+
+        <!-- =================================================== Quickstart -->
+        <h2 id="quickstart">Quickstart</h2>
+        <p>
+          1. 在
+          <a href="/register">/register</a>
+          注册账号，登录后从
+          <a href="/dashboard">Dashboard</a>
+          复制 API key。
+        </p>
+        <p>
+          2. 在
+          <a href="/billing">/billing</a>
+          通过 Stripe 充值，每次调用按下方价格扣除 credits。
+        </p>
+        <p>
+          3. 用 Bearer token 调任意 endpoint。下面这个调用查询当前余额：
+        </p>
+
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/balance \
+  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
+          <pre data-lang="python" class="hidden"><code>import requests
+
+resp = requests.get(
+    "https://open.mymirrorai.com/v1/balance",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    timeout=30,
+)
+resp.raise_for_status()
+print(resp.json())</code></pre>
+          <pre data-lang="node" class="hidden"><code>const resp = await fetch("https://open.mymirrorai.com/v1/balance", {
+  headers: { Authorization: "Bearer YOUR_API_KEY" },
+});
+if (!resp.ok) throw new Error(await resp.text());
+console.log(await resp.json());</code></pre>
+        </div>
+
+        <p class="mt-4">响应：</p>
+        <pre><code>{
+  "user_id": "u_a1b2c3d4",
+  "balance_credits": 1000,
+  "daily_credits_limit": null
+}</code></pre>
+
+        <!-- =================================================== Authentication -->
+        <h2 id="authentication">Authentication</h2>
+        <p>
+          所有 <code>/v1/*</code> 接口走 <code>Authorization: Bearer &lt;api_key&gt;</code>。
+          key 在 <a href="/dashboard">Dashboard</a> 一处展示和重置。
+        </p>
+        <ul>
+          <li>key 在 Dashboard 重置后会立即吊销，所有正在使用旧 key 的客户端会得到 <code>401</code>。</li>
+          <li>请求体里如果带 <code>user_id</code>，必须跟 key 绑定的 user_id 一致，否则 <code>403</code>。多数 endpoint 可以省略 <code>user_id</code>，让服务器从 key 推断。</li>
+          <li>同一时刻同一 user 在飞的请求数有上限（默认 2），超出返 <code>429 inflight_limit</code>。</li>
+          <li>每用户每分钟请求数有上限（默认 10），超出返 <code>429 rate_limited</code>。</li>
+        </ul>
+
+        <!-- =================================================== Errors / Headers -->
+        <h2 id="errors">错误码与计费头</h2>
+        <p>错误统一形如：</p>
+        <pre><code>{
+  "error": {
+    "code": "insufficient_funds",
+    "message": "Balance 50 is below endpoint cost 200."
+  }
+}</code></pre>
+        <p>常见错误：</p>
+        <table class="params-table">
+          <thead><tr><th>HTTP</th><th>code</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td>401</td><td><code>unauthorized</code></td><td>缺失 / 无效 / 已吊销的 Bearer key</td></tr>
+            <tr><td>402</td><td><code>insufficient_funds</code></td><td>余额不足以支付本次调用</td></tr>
+            <tr><td>403</td><td><code>user_id_mismatch</code></td><td>body 中 user_id 与 key 绑定的 user 不一致</td></tr>
+            <tr><td>400</td><td><code>invalid_request</code> 等</td><td>请求体校验失败</td></tr>
+            <tr><td>429</td><td><code>rate_limited</code> / <code>inflight_limit</code></td><td>QPS / 并发上限</td></tr>
+            <tr><td>503</td><td><code>stripe_not_configured</code></td><td>服务端尚未配置 Stripe</td></tr>
+          </tbody>
+        </table>
+
+        <p class="mt-4">所有计费 endpoint 的成功响应都带上以下 header：</p>
+        <table class="params-table">
+          <thead><tr><th>Header</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>X-Charged-Credits</code></td><td>本次调用扣的 credits（admin 旁路时为 0）</td></tr>
+            <tr><td><code>X-Balance-After</code></td><td>扣费后的账户余额</td></tr>
+            <tr><td><code>X-Request-Id</code></td><td>对账用 request_id，可在 <code>/v1/usage</code> 找回</td></tr>
+          </tbody>
+        </table>
+
+        <!-- =================================================== Account group -->
+        <h2 id="account">1. Account</h2>
+        <p>查余额、查使用记录、查 / 重置 API key。</p>
+
+        <div class="endpoint-head" id="account-me">
+          <span class="endpoint-method method-GET">GET</span>
+          <span class="endpoint-path">/v1/me</span>
+          <span class="endpoint-cost">cookie auth · 免费</span>
+        </div>
+        <p>返回当前登录账号的概览（user_id / email / 余额 / 当前 API key）。鉴权方式：浏览器 session cookie（不是 Bearer）。Dashboard 用这个 endpoint 拉数据。</p>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code># /v1/me 用 session cookie，正常通过浏览器调；命令行不常用
+curl https://open.mymirrorai.com/v1/me --cookie "mirror_session=…"</code></pre>
+          <pre data-lang="python" class="hidden"><code>import requests
+s = requests.Session()
+s.post("https://open.mymirrorai.com/v1/auth/login",
+       json={"email": "you@example.com", "password": "..."})
+print(s.get("https://open.mymirrorai.com/v1/me").json())</code></pre>
+          <pre data-lang="node" class="hidden"><code>// /v1/me uses session cookie; in a browser, just call fetch with credentials.
+const r = await fetch("https://open.mymirrorai.com/v1/me", {
+  credentials: "include",
+});
+console.log(await r.json());</code></pre>
+        </div>
+
+        <div class="endpoint-head" id="account-balance">
+          <span class="endpoint-method method-GET">GET</span>
+          <span class="endpoint-path">/v1/balance</span>
+          <span class="endpoint-cost">免费</span>
+        </div>
+        <p>查询当前账号的 credits 余额。</p>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/balance \
+  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.get(
+    "https://open.mymirrorai.com/v1/balance",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+)
+print(r.json())  # {"user_id":"u_…","balance_credits":1000}</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/balance", {
+  headers: { Authorization: "Bearer YOUR_API_KEY" },
+});
+console.log(await r.json());</code></pre>
+        </div>
+
+        <div class="endpoint-head" id="account-usage">
+          <span class="endpoint-method method-GET">GET</span>
+          <span class="endpoint-path">/v1/usage?limit=50</span>
+          <span class="endpoint-cost">免费</span>
+        </div>
+        <p>列出最近的扣费 / 充值 / 退款记录。<code>limit</code> 默认 50，最大 500。</p>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl "https://open.mymirrorai.com/v1/usage?limit=20" \
+  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.get(
+    "https://open.mymirrorai.com/v1/usage",
+    params={"limit": 20},
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+)
+for row in r.json()["rows"]:
+    print(row["ts"], row["endpoint"], row["amount_credits"])</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/usage?limit=20", {
+  headers: { Authorization: "Bearer YOUR_API_KEY" },
+});
+const { rows } = await r.json();
+for (const row of rows) console.log(row.ts, row.endpoint, row.amount_credits);</code></pre>
+        </div>
+
+        <div class="endpoint-head" id="account-rotate">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/me/api_key/rotate</span>
+          <span class="endpoint-cost">cookie auth · 免费</span>
+        </div>
+        <p>一键吊销当前 key 并生成新的。Dashboard 上「重置 Key」就是调用这个。响应的 <code>new_api_key</code> 是新 key 的明文，**只在这一次返回**，但同时存进库里供 Dashboard 重新展示。</p>
+
+        <!-- =================================================== BaZi group -->
+        <h2 id="bazi">2. BaZi · 八字</h2>
+        <p>基于公历生日 + 出生时间排盘，AI 解读人生主题、年运、性格等。</p>
+
+        <div class="endpoint-head" id="bazi-ask">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/ask</span>
+          <span class="endpoint-cost">200 credits</span>
+        </div>
+        <p>同步返回完整答案。可不带 <code>user_id</code>，服务端会从 API key 推断。</p>
+        <h4 class="mt-4">请求体</h4>
+        <table class="params-table">
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pname">question</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>自然语言问题</td></tr>
+            <tr><td><span class="pname">birth</span></td><td><span class="ptype">object</span></td><td><code>{year, month, day, hour?, minute?}</code> · 阳历</td></tr>
+            <tr><td><span class="pname">gender</span></td><td><span class="ptype">male | female</span></td><td>默认 <code>male</code></td></tr>
+            <tr><td><span class="pname">session_id</span></td><td><span class="ptype">string</span></td><td>用于多轮对话上下文记忆</td></tr>
+            <tr><td><span class="pname">llm_model</span></td><td><span class="ptype">string</span></td><td>可选模型覆盖；默认 <code>gemini-3.1-pro-preview</code></td></tr>
+          </tbody>
+        </table>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/ask \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "今年事业怎么样？",
+    "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10},
+    "gender": "male"
+  }'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/ask",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={
+        "question": "今年事业怎么样？",
+        "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10},
+        "gender": "male",
+    },
+    timeout=180,
+)
+data = r.json()
+print(data["answer"])
+print("charged:", r.headers["X-Charged-Credits"])</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/ask", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "今年事业怎么样？",
+    birth: { year: 1990, month: 5, day: 12, hour: 10 },
+    gender: "male",
+  }),
+});
+const data = await r.json();
+console.log(data.answer);</code></pre>
+        </div>
+
+        <div class="endpoint-head" id="bazi-stream">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/ask_stream</span>
+          <span class="endpoint-cost">200 credits</span>
+        </div>
+        <p>同样的请求体，返回 <code>text/event-stream</code> 流。事件类型包括 <code>plan</code>、<code>node_status</code>、<code>response_delta</code>、<code>response</code>、<code>billing</code>。</p>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl -N https://open.mymirrorai.com/v1/ask_stream \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"今年事业怎么样？","birth":{"year":1990,"month":5,"day":12}}'</code></pre>
+          <pre data-lang="python" class="hidden"><code>with requests.post(
+    "https://open.mymirrorai.com/v1/ask_stream",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={"question": "今年事业怎么样？",
+          "birth": {"year": 1990, "month": 5, "day": 12}},
+    stream=True,
+    timeout=180,
+) as r:
+    for line in r.iter_lines(decode_unicode=True):
+        if line.startswith("data:"):
+            print(line)</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/ask_stream", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "今年事业怎么样？",
+    birth: { year: 1990, month: 5, day: 12 },
+  }),
+});
+const reader = r.body.getReader();
+const dec = new TextDecoder();
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  process.stdout.write(dec.decode(value));
+}</code></pre>
+        </div>
+
+        <!-- =================================================== HePan -->
+        <h2 id="hepan">3. HePan · 合盘</h2>
+        <p>两人八字合盘，分析关系兼容度、相处建议等。</p>
+
+        <div class="endpoint-head" id="hepan-ask">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/hepan/ask</span>
+          <span class="endpoint-cost">100 credits</span>
+        </div>
+        <h4 class="mt-4">请求体</h4>
+        <table class="params-table">
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pname">question</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>关系类问题</td></tr>
+            <tr><td><span class="pname">person_a</span> <span class="preq">必填</span></td><td><span class="ptype">object</span></td><td><code>{name?, gender, birth, birth_time_unknown?}</code></td></tr>
+            <tr><td><span class="pname">person_b</span> <span class="preq">必填</span></td><td><span class="ptype">object</span></td><td>同上</td></tr>
+          </tbody>
+        </table>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/hepan/ask \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "我们适合长期发展吗？",
+    "person_a": {"name": "A", "gender": "male",
+                  "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10}},
+    "person_b": {"name": "B", "gender": "female",
+                  "birth": {"year": 1992, "month": 8, "day": 20, "hour": 14}}
+  }'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/hepan/ask",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={
+        "question": "我们适合长期发展吗？",
+        "person_a": {"name": "A", "gender": "male",
+                     "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10}},
+        "person_b": {"name": "B", "gender": "female",
+                     "birth": {"year": 1992, "month": 8, "day": 20, "hour": 14}},
+    },
+    timeout=180,
+)
+print(r.json()["answer"])</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/hepan/ask", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "我们适合长期发展吗？",
+    person_a: { name: "A", gender: "male",
+                birth: { year: 1990, month: 5, day: 12, hour: 10 } },
+    person_b: { name: "B", gender: "female",
+                birth: { year: 1992, month: 8, day: 20, hour: 14 } },
+  }),
+});
+console.log((await r.json()).answer);</code></pre>
+        </div>
+
+        <!-- =================================================== CeZi -->
+        <h2 id="cezi">4. CeZi · 测字</h2>
+        <p>用户给一个汉字 + 问题，AI 基于字形 / 五行解读。最便宜的 endpoint，适合做 smoke test。</p>
+
+        <div class="endpoint-head" id="cezi-ask">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/cezi/ask</span>
+          <span class="endpoint-cost">30 credits</span>
+        </div>
+        <h4 class="mt-4">请求体</h4>
+        <table class="params-table">
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pname">question</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>问题</td></tr>
+            <tr><td><span class="pname">character</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>一个汉字</td></tr>
+          </tbody>
+        </table>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/cezi/ask \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"这个项目合作能不能成？","character":"合"}'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/cezi/ask",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={"question": "这个项目合作能不能成？", "character": "合"},
+    timeout=120,
+)
+print(r.json()["answer"])</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/cezi/ask", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "这个项目合作能不能成？",
+    character: "合",
+  }),
+});
+console.log((await r.json()).answer);</code></pre>
+        </div>
+
+        <!-- =================================================== NaJia -->
+        <h2 id="najia">5. NaJia · 纳甲 / 六爻</h2>
+        <p>六爻起卦后基于纳甲法 + AI 给出判词。可让服务端摇卦，也可自行传入 6 爻数值。</p>
+
+        <div class="endpoint-head" id="najia-ask">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/najia/ask</span>
+          <span class="endpoint-cost">50 credits（paraphrase=true 时 80）</span>
+        </div>
+        <h4 class="mt-4">请求体</h4>
+        <table class="params-table">
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pname">question</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>问题</td></tr>
+            <tr><td><span class="pname">yao_values</span></td><td><span class="ptype">int[6] (0–7)</span></td><td>6 爻数值；不传则服务端随机摇卦</td></tr>
+            <tr><td><span class="pname">paraphrase</span></td><td><span class="ptype">boolean</span></td><td>是否额外跑一轮 LLM 把卦盘转写成更人话</td></tr>
+          </tbody>
+        </table>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/najia/ask \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "这个项目三个月内能不能推进成功？",
+    "yao_values": [0, 1, 2, 3, 4, 5]
+  }'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/najia/ask",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={
+        "question": "这个项目三个月内能不能推进成功？",
+        "yao_values": [0, 1, 2, 3, 4, 5],
+    },
+    timeout=150,
+)
+out = r.json()
+print(out["answer"])
+print(out["gua"])  # 排好的卦盘 dict</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/najia/ask", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "这个项目三个月内能不能推进成功？",
+    yao_values: [0, 1, 2, 3, 4, 5],
+  }),
+});
+console.log((await r.json()).answer);</code></pre>
+        </div>
+
+        <!-- =================================================== ZWDS -->
+        <h2 id="zwds">6. ZWDS · 紫微斗数</h2>
+        <p>排紫微命盘 + 流年流月解读。<code>include_star_gong=true</code> 会注入约 973 KB 的星耀宫位查表，价格翻倍。</p>
+
+        <div class="endpoint-head" id="zwds-ask">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/zwds/ask</span>
+          <span class="endpoint-cost">80 credits（include_star_gong=true 时 150）</span>
+        </div>
+        <h4 class="mt-4">请求体</h4>
+        <table class="params-table">
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pname">question</span> <span class="preq">必填</span></td><td><span class="ptype">string</span></td><td>问题</td></tr>
+            <tr><td><span class="pname">birth</span> <span class="preq">必填</span></td><td><span class="ptype">object</span></td><td><code>{year, month, day, hour?}</code></td></tr>
+            <tr><td><span class="pname">gender</span></td><td><span class="ptype">male | female</span></td><td>默认 <code>male</code></td></tr>
+            <tr><td><span class="pname">target_years</span></td><td><span class="ptype">int[]</span></td><td>要分析的流年，默认当前年</td></tr>
+            <tr><td><span class="pname">include_star_gong</span></td><td><span class="ptype">boolean</span></td><td>注入星耀宫位大表（更精准但更贵）</td></tr>
+          </tbody>
+        </table>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/zwds/ask \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "今年我的事业和感情运势如何？",
+    "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10},
+    "gender": "male",
+    "target_years": [2026]
+  }'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/zwds/ask",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={
+        "question": "今年我的事业和感情运势如何？",
+        "birth": {"year": 1990, "month": 5, "day": 12, "hour": 10},
+        "gender": "male",
+        "target_years": [2026],
+    },
+    timeout=180,
+)
+print(r.json()["answer"])</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/zwds/ask", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    question: "今年我的事业和感情运势如何？",
+    birth: { year: 1990, month: 5, day: 12, hour: 10 },
+    gender: "male",
+    target_years: [2026],
+  }),
+});
+console.log((await r.json()).answer);</code></pre>
+        </div>
+
+        <!-- =================================================== Billing -->
+        <h2 id="billing-section">7. Billing</h2>
+        <p>充值通过 Stripe Checkout 完成。Stripe webhook 自动入账。</p>
+
+        <div class="endpoint-head" id="billing-packs">
+          <span class="endpoint-method method-GET">GET</span>
+          <span class="endpoint-path">/v1/topup_packs</span>
+          <span class="endpoint-cost">公开 · 免费</span>
+        </div>
+        <p>列出充值套餐和 Stripe 配置状态。无需鉴权，前端可直接拉。</p>
+
+        <div class="endpoint-head" id="billing-checkout">
+          <span class="endpoint-method method-POST">POST</span>
+          <span class="endpoint-path">/v1/checkout/create</span>
+          <span class="endpoint-cost">免费</span>
+        </div>
+        <p>创建 Stripe Checkout Session。请求体二选一：<code>pack_id</code>（套餐 ID）或 <code>custom_yuan</code>（自定义元数，1–9999）。返回 <code>checkout_url</code>，重定向用户的浏览器到这个 URL 即可。</p>
+        <div class="code-tabs" data-tabs>
+          <div class="tab-buttons">
+            <button class="tab-btn active" data-lang="curl">curl</button>
+            <button class="tab-btn" data-lang="python">Python</button>
+            <button class="tab-btn" data-lang="node">Node.js</button>
+          </div>
+          <pre data-lang="curl"><code>curl https://open.mymirrorai.com/v1/checkout/create \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"custom_yuan": 50}'</code></pre>
+          <pre data-lang="python" class="hidden"><code>r = requests.post(
+    "https://open.mymirrorai.com/v1/checkout/create",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={"custom_yuan": 50},
+)
+print(r.json()["checkout_url"])  # redirect the user here</code></pre>
+          <pre data-lang="node" class="hidden"><code>const r = await fetch("https://open.mymirrorai.com/v1/checkout/create", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ custom_yuan: 50 }),
+});
+const { checkout_url } = await r.json();
+window.location.href = checkout_url;</code></pre>
+        </div>
+
+        <p class="mt-6 text-muted">
+          完整的 OpenAPI schema 由 Mirror AI 内部维护，所有 v1 endpoint 一向后兼容；如果你需要更深入的字段说明或者集成示例，
+          直接联系运营同学。
+        </p>
+      </main>
+    </div>
+
+    <script src="/portal.js"></script>
+    <script>
+      // ---- Tab switcher (event delegation) ----
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-tabs] .tab-btn");
+        if (!btn) return;
+        const container = btn.closest("[data-tabs]");
+        const lang = btn.dataset.lang;
+        container.querySelectorAll(".tab-btn").forEach((b) => {
+          b.classList.toggle("active", b.dataset.lang === lang);
+        });
+        container.querySelectorAll("pre[data-lang]").forEach((p) => {
+          p.classList.toggle("hidden", p.dataset.lang !== lang);
+        });
+      });
+
+      // ---- Active section highlight in sidebar ----
+      const links = Array.from(document.querySelectorAll(".docs-sidebar a"));
+      const observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              links.forEach((a) =>
+                a.classList.toggle(
+                  "active",
+                  a.getAttribute("href") === "#" + entry.target.id
+                )
+              );
+            }
+          }
+        },
+        { rootMargin: "-80px 0px -70% 0px" }
+      );
+      document
+        .querySelectorAll(".docs-content [id]")
+        .forEach((el) => observer.observe(el));
+
+      // ---- Optional: replace YOUR_API_KEY with the logged-in user's key ----
+      Portal.fetchMe()
+        .then((me) => {
+          document.getElementById("nav-login").classList.add("hidden");
+          document.getElementById("nav-register").classList.add("hidden");
+          document.getElementById("nav-dashboard").classList.remove("hidden");
+          document.getElementById("nav-billing").classList.remove("hidden");
+          document.getElementById("logout-btn").classList.remove("hidden");
+          const ue = document.getElementById("user-email");
+          ue.textContent = me.user.email || me.user.user_id;
+          ue.classList.remove("hidden");
+          document.getElementById("logout-btn").addEventListener("click", Portal.logout);
+
+          const key = me.api_key && me.api_key.plaintext;
+          if (key) {
+            document.getElementById("api-key-banner").classList.remove("hidden");
+            document.querySelectorAll("pre code").forEach((node) => {
+              node.innerHTML = node.innerHTML.split("YOUR_API_KEY").join(
+                '<span style="color:#fbbf24;">' + key + "</span>"
+              );
+            });
+          }
+        })
+        .catch(() => {
+          /* not logged in — show login/register nav */
+        });
+    </script>
+  </body>
+</html>

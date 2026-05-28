@@ -7,3 +7,9 @@ storage/users
 storage/logs
 storage/conversations
 *.pyc
+
+# Legacy internal UIs — kept in the repo for local dev / demos but excluded
+# from the production image so Flask's static handler can't serve them even
+# if Caddy ever mis-routes. Caddy still 404's these paths as belt+suspenders.
+web/app.html
+web/admin.html

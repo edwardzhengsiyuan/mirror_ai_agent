@@ -14,9 +14,17 @@ from typing import Any, Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from agent.auth import (
+    SessionManager,
+    current_user_id,
+    hash_password,
+    login_required,
+    verify_password,
+)
 from agent.billing import (
     BillingService,
     BillingStore,
+    EmailAlreadyRegisteredError,
     Pricing,
     StripeGateway,
     StripeNotConfiguredError,
@@ -291,6 +299,33 @@ def create_app(
     )
 
     stripe_gateway = StripeGateway.from_env()
+
+    # ------------------------------------------------------------------
+    # session / auth wiring (Phase 1: email + password dashboard login)
+    # ------------------------------------------------------------------
+    app_secret = (os.environ.get("APP_SECRET_KEY") or "").strip()
+    if not app_secret:
+        # Dev fallback: generate a one-time random secret so the app starts.
+        # All previously-issued cookies are invalidated on every restart,
+        # which is fine for local dev but disastrous for prod — log loudly.
+        import secrets as _secrets
+        app_secret = _secrets.token_urlsafe(48)
+        print(
+            "[auth] WARNING: APP_SECRET_KEY is unset; generated an ephemeral"
+            " secret. All dashboard sessions reset on restart. Set"
+            " APP_SECRET_KEY in production .env.",
+            flush=True,
+        )
+    cookie_secure_env = (os.environ.get("APP_COOKIE_SECURE") or "").strip().lower()
+    # Default to secure cookies in prod. Local dev / tests opt out via
+    # APP_COOKIE_SECURE=0 so the dashboard works over http://localhost.
+    cookie_secure = cookie_secure_env not in {"0", "false", "no"}
+    session_manager = SessionManager(
+        secret_key=app_secret,
+        cookie_secure=cookie_secure,
+    )
+    session_manager.install(app)
+    app.secret_key = app_secret  # also feeds Flask's signing helpers
 
     def _annotate_billing(response, charge, balance_after: Optional[int] = None):
         """Attach X-Charged-Credits / X-Balance-After / X-Request-Id headers."""
@@ -1546,14 +1581,22 @@ def create_app(
     def openapi_json() -> Response:
         return jsonify(openapi_spec())
 
+    # The developer-portal docs page replaces the Swagger UI for the public
+    # ``/docs`` URL. The Swagger spec itself is still served at
+    # ``/openapi.json`` (and exposed at ``/_swagger`` for internal use; Caddy
+    # blocks both publicly).
     @app.route("/docs", methods=["GET"])
+    def portal_docs() -> Response:
+        return send_from_directory(app.static_folder, "docs.html")
+
+    @app.route("/_swagger", methods=["GET"])
     def swagger_docs() -> Response:
         html = """<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BaZi Agent Demo API Docs</title>
+    <title>Mirror AI · OpenAPI (internal)</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
     <style>
       body { margin: 0; background: #f7f7f7; }
@@ -1579,6 +1622,26 @@ def create_app(
     @app.route("/")
     def index() -> Response:
         return send_from_directory(app.static_folder, "index.html")
+
+    # Clean URLs for the developer portal — each just serves the matching
+    # static HTML so users land at ``/login`` instead of ``/login.html``.
+    # The same files are also reachable via their ``.html`` paths through
+    # Flask's static handler; Caddy routes both forms identically.
+    @app.route("/login")
+    def portal_login() -> Response:
+        return send_from_directory(app.static_folder, "login.html")
+
+    @app.route("/register")
+    def portal_register() -> Response:
+        return send_from_directory(app.static_folder, "register.html")
+
+    @app.route("/dashboard")
+    def portal_dashboard() -> Response:
+        return send_from_directory(app.static_folder, "dashboard.html")
+
+    @app.route("/billing")
+    def portal_billing() -> Response:
+        return send_from_directory(app.static_folder, "billing.html")
 
     @app.route("/v1/users", methods=["POST"])
     def v1_upsert_user() -> Response:
@@ -2530,6 +2593,248 @@ def create_app(
         return jsonify({"user_id": auth["user_id"], "key_id": key_id, "revoked": bool(revoked)})
 
     # --- self-service registration ---------------------------------------
+
+    # ------------------------------------------------------------------
+    # auth: email + password (Phase 1) — used by dashboard UI
+    # ------------------------------------------------------------------
+
+    _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    _PASSWORD_MIN_LEN = 8
+
+    def _validate_email(value: object) -> Optional[str]:
+        """Return ``None`` if ``value`` is a usable email, else an error code."""
+        if not isinstance(value, str):
+            return "email required"
+        candidate = value.strip().lower()
+        if not candidate:
+            return "email required"
+        if len(candidate) > 254:  # RFC 5321 ceiling
+            return "email too long"
+        if not _EMAIL_RE.match(candidate):
+            return "email invalid"
+        return None
+
+    def _validate_password(value: object) -> Optional[str]:
+        if not isinstance(value, str):
+            return "password required"
+        if len(value) < _PASSWORD_MIN_LEN:
+            return f"password too short (min {_PASSWORD_MIN_LEN} chars)"
+        if len(value) > 256:
+            return "password too long"
+        return None
+
+    def _serialize_me(user: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the JSON body returned by /v1/me and friends.
+
+        We expose:
+          - identity (user_id, email, display_name, status, created_at)
+          - balance_credits
+          - api_key.plaintext when the row stored it (auth-flow keys); else null
+            so the dashboard can prompt the user to rotate.
+        """
+        current_key = billing_service.get_current_user_api_key(user["user_id"])
+        api_key_block: Dict[str, Any] = {
+            "plaintext": None,
+            "label": None,
+            "created_at": None,
+            "last_seen_at": None,
+            "has_active_key": False,
+        }
+        if current_key is not None:
+            api_key_block.update(
+                {
+                    "plaintext": current_key.get("plaintext"),
+                    "label": current_key.get("label"),
+                    "created_at": current_key.get("created_at"),
+                    "last_seen_at": current_key.get("last_seen_at"),
+                    "has_active_key": True,
+                }
+            )
+        return {
+            "user": {
+                "user_id": user["user_id"],
+                "email": user.get("email"),
+                "display_name": user.get("display_name"),
+                "status": user.get("status"),
+                "balance_credits": user.get("balance_credits", 0),
+                "created_at": user.get("created_at"),
+                "verified_at": user.get("verified_at"),
+            },
+            "api_key": api_key_block,
+        }
+
+    def _new_user_id() -> str:
+        return "u_" + uuid.uuid4().hex[:8]
+
+    @app.route("/v1/auth/register", methods=["POST"])
+    def v1_auth_register() -> Response:
+        """Sign up with email + password. On success: sets session cookie.
+
+        Request body (JSON):
+            email          required, validated against a permissive regex
+            password       required, min 8 chars
+            display_name   optional
+
+        Response (201): same shape as GET /v1/me, plus the response carries
+        the session cookie so the client is immediately logged in.
+        """
+        data = request.get_json(force=True, silent=True) or {}
+        raw_email = data.get("email")
+        password = data.get("password")
+        display_name = data.get("display_name")
+
+        email_err = _validate_email(raw_email)
+        if email_err:
+            return api_error(400, "invalid_email", email_err)
+        pw_err = _validate_password(password)
+        if pw_err:
+            return api_error(400, "weak_password", pw_err)
+
+        email = raw_email.strip().lower()  # type: ignore[union-attr]
+        # Cheap pre-check to surface the friendlier "email_taken" error before
+        # we burn a uuid + hash. The store still enforces uniqueness at INSERT
+        # time, which catches the race between this check and create_user.
+        if billing_service.get_user_by_email(email) is not None:
+            return api_error(409, "email_taken", "Email already registered.")
+
+        try:
+            password_hash_value = hash_password(password)  # type: ignore[arg-type]
+        except ValueError as exc:
+            return api_error(400, "weak_password", str(exc))
+
+        try:
+            initial = int(os.environ.get("REGISTER_INITIAL_CREDITS", "0"))
+        except ValueError:
+            initial = 0
+        if initial < 0:
+            initial = 0
+
+        created: Optional[Dict[str, Any]] = None
+        for attempt in range(5):
+            user_id = _new_user_id()
+            try:
+                created = billing_service.create_user(
+                    user_id=user_id,
+                    display_name=(display_name.strip() if isinstance(display_name, str) and display_name.strip() else None),
+                    initial_credits=initial,
+                    issue_first_key=True,
+                    key_label="primary",
+                    email=email,
+                    password_hash=password_hash_value,
+                    store_first_key_plaintext=True,
+                )
+                break
+            except EmailAlreadyRegisteredError:
+                # Lost the race against another concurrent registration.
+                return api_error(409, "email_taken", "Email already registered.")
+            except ValueError:
+                # user_id collision; retry with a fresh uuid.
+                if attempt == 4:
+                    return api_error(
+                        503,
+                        "register_collision",
+                        "could not allocate a fresh user_id; try again",
+                    )
+                continue
+        if created is None:
+            return api_error(500, "register_failed", "registration failed unexpectedly")
+
+        user_row = billing_service.store.get_user(created["user"]["user_id"])
+        if user_row is None:
+            return api_error(500, "register_failed", "user not found after creation")
+
+        body = _serialize_me(user_row)
+        response = jsonify(body)
+        response.status_code = 201
+        session_manager.set_cookie(response, user_row["user_id"])
+        return response
+
+    @app.route("/v1/auth/login", methods=["POST"])
+    def v1_auth_login() -> Response:
+        """Email + password login. On success: sets session cookie + returns /me body."""
+        data = request.get_json(force=True, silent=True) or {}
+        email_err = _validate_email(data.get("email"))
+        if email_err:
+            return api_error(401, "invalid_credentials", "Invalid email or password.")
+        pw_err = _validate_password(data.get("password"))
+        if pw_err:
+            # Note: we deliberately return 401 (not 400) for short/missing
+            # passwords too so the endpoint behaves uniformly w.r.t. timing
+            # and message regardless of why credentials are wrong.
+            return api_error(401, "invalid_credentials", "Invalid email or password.")
+
+        email = data["email"].strip().lower()
+        user_row = billing_service.get_user_by_email(email)
+        if user_row is None or not user_row.get("password_hash"):
+            return api_error(401, "invalid_credentials", "Invalid email or password.")
+        if user_row.get("status") == "disabled":
+            return api_error(403, "account_disabled", "Account is disabled.")
+        if not verify_password(data["password"], user_row["password_hash"]):
+            return api_error(401, "invalid_credentials", "Invalid email or password.")
+
+        body = _serialize_me(user_row)
+        response = jsonify(body)
+        session_manager.set_cookie(response, user_row["user_id"])
+        return response
+
+    @app.route("/v1/auth/logout", methods=["POST"])
+    def v1_auth_logout() -> Response:
+        response = jsonify({"ok": True})
+        session_manager.clear_cookie(response)
+        return response
+
+    @app.route("/v1/me", methods=["GET"])
+    @login_required
+    def v1_me() -> Response:
+        user_id = current_user_id()  # populated by login_required
+        user_row = billing_service.store.get_user(user_id) if user_id else None
+        if user_row is None:
+            # Cookie is valid but the user vanished (deleted by admin?).
+            # Force re-login.
+            response = jsonify({"error": {"code": "unauthorized", "message": "Account no longer exists."}})
+            response.status_code = 401
+            session_manager.clear_cookie(response)
+            return response
+        return jsonify(_serialize_me(user_row))
+
+    @app.route("/v1/me/api_key/rotate", methods=["POST"])
+    @login_required
+    def v1_me_rotate_key() -> Response:
+        user_id = current_user_id()
+        if not user_id:
+            return api_error(401, "unauthorized", "Login required.")
+        try:
+            new_plaintext = billing_service.rotate_user_api_key(user_id)
+        except UnknownUserError:
+            return api_error(401, "unauthorized", "Account no longer exists.")
+        user_row = billing_service.store.get_user(user_id)
+        body = _serialize_me(user_row) if user_row else {}
+        # The api_key.plaintext field in _serialize_me already shows it,
+        # but we also surface it at the top level so clients can grab it
+        # without parsing the nested structure.
+        body["new_api_key"] = new_plaintext
+        return jsonify(body)
+
+    @app.route("/v1/me/password", methods=["POST"])
+    @login_required
+    def v1_me_change_password() -> Response:
+        data = request.get_json(force=True, silent=True) or {}
+        user_id = current_user_id()
+        if not user_id:
+            return api_error(401, "unauthorized", "Login required.")
+        user_row = billing_service.store.get_user(user_id)
+        if user_row is None or not user_row.get("password_hash"):
+            return api_error(401, "unauthorized", "Account state invalid.")
+
+        old_password = data.get("old_password")
+        new_password = data.get("new_password")
+        if not isinstance(old_password, str) or not verify_password(old_password, user_row["password_hash"]):
+            return api_error(401, "invalid_credentials", "Current password is incorrect.")
+        pw_err = _validate_password(new_password)
+        if pw_err:
+            return api_error(400, "weak_password", pw_err)
+        billing_service.update_password(user_id, hash_password(new_password))  # type: ignore[arg-type]
+        return jsonify({"ok": True})
 
     @app.route("/v1/register", methods=["POST"])
     def v1_register() -> Response:

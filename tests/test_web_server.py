@@ -260,7 +260,15 @@ def test_v1_docs_and_auth(tmp_path, monkeypatch) -> None:
     assert "/v1/cezi/ask" in spec["paths"]
     assert "/v1/najia/ask" in spec["paths"]
 
+    # ``/docs`` now serves the developer-portal documentation page (the
+    # human-readable one), not Swagger UI. Swagger lives behind ``/_swagger``
+    # (Caddy blocks it publicly; internal probes still work).
     resp = client.get("/docs")
+    assert resp.status_code == 200
+    assert b"Mirror AI" in resp.data
+    assert b"Quickstart" in resp.data
+
+    resp = client.get("/_swagger")
     assert resp.status_code == 200
     assert b"SwaggerUIBundle" in resp.data
 

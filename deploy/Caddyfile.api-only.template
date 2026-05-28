@@ -11,30 +11,39 @@
   }
 }
 
+# ---------------------------------------------------------------------------
+# Standalone Caddy in front of the Mirror AI developer portal.
+# Used when this server is the *only* host for ${DEPLOY_DOMAIN} (no
+# pre-existing site block at /var/www/html). For coexistence with an
+# existing static site, use Caddyfile.existing-proxy-api-snippet.template
+# instead.
+# ---------------------------------------------------------------------------
+
 ${DEPLOY_DOMAIN} {
   encode gzip
 
-  # Public operational surfaces.
-  @docs {
-    path /docs /docs/* /openapi.json /health
+  # Public B2B portal pages + shared static assets.
+  @public {
+    path  /
+    path  /login   /register   /dashboard   /billing   /docs
+    path  /login.html /register.html /dashboard.html /billing.html /docs.html
+    path  /portal.css /portal.js
+    path  /terms.html /privacy.html
+    path  /favicon.ico /robots.txt
+    path  /health
   }
 
-  # Customer-facing API and payment flow.
+  # Customer-facing API and Stripe webhook.
   @api {
-    path /v1 /v1/* /webhooks/stripe
+    path /v1   /v1/*   /webhooks/stripe
   }
 
-  # Keep self-service registration/topup and Stripe-required legal pages.
-  @selfService {
-    path /register.html /billing.html /terms.html /privacy.html
-  }
-
-  handle @docs {
+  handle @public {
     reverse_proxy bazi-agent-api:8000 {
       flush_interval -1
       transport http {
-        read_timeout 10m
-        write_timeout 10m
+        read_timeout 30s
+        write_timeout 30s
       }
     }
   }
@@ -49,19 +58,9 @@ ${DEPLOY_DOMAIN} {
     }
   }
 
-  handle @selfService {
-    reverse_proxy bazi-agent-api:8000 {
-      flush_interval -1
-      transport http {
-        read_timeout 10m
-        write_timeout 10m
-      }
-    }
-  }
-
-  # Everything else stays private: /, /index.html, /admin.html, /admin/*,
-  # legacy /api/* web-console endpoints, and any static frontend assets not
-  # needed for the allowed pages above.
+  # Catch-all 404 hides /app.html, /admin.html, /admin/*, /openapi.json,
+  # /_swagger and any other internal path. We respond 404 (not 403) so the
+  # existence of those paths is not advertised to scanners.
   handle {
     respond "Not Found" 404
   }

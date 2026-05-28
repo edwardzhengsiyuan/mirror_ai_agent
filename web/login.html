@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>注册 · Mirror AI</title>
+    <title>登录 · Mirror AI</title>
     <link rel="stylesheet" href="/portal.css" />
   </head>
   <body>
@@ -15,12 +15,12 @@
             Mirror AI
           </span>
         </a>
-        <h1>注册开发者账号</h1>
-        <p class="auth-sub">注册后立即获得 API key，按调用次数计费</p>
+        <h1>登录</h1>
+        <p class="auth-sub">使用注册时的邮箱登录开发者后台</p>
 
         <div id="banner" class="banner hidden"></div>
 
-        <form id="register-form" novalidate>
+        <form id="login-form" novalidate>
           <div class="form-row">
             <label for="email">邮箱</label>
             <input
@@ -38,26 +38,15 @@
               type="password"
               id="password"
               name="password"
-              autocomplete="new-password"
-              minlength="8"
+              autocomplete="current-password"
               required
             />
-            <small class="text-muted">至少 8 位</small>
           </div>
-          <div class="form-row">
-            <label for="display_name">公司 / 项目名 <span class="text-muted">（可选）</span></label>
-            <input
-              type="text"
-              id="display_name"
-              name="display_name"
-              placeholder="Acme Inc."
-            />
-          </div>
-          <button type="submit" id="submit-btn" class="btn btn-primary btn-block">创建账号</button>
+          <button type="submit" id="submit-btn" class="btn btn-primary btn-block">登录</button>
         </form>
 
         <div class="auth-footer">
-          已有账号？ <a href="/login">登录</a>
+          还没有账号？ <a href="/register">注册</a>
         </div>
       </div>
     </div>
@@ -65,38 +54,36 @@
     <script src="/portal.js"></script>
     <script>
       (function () {
-        const form = document.getElementById("register-form");
+        const form = document.getElementById("login-form");
         const btn = document.getElementById("submit-btn");
         const banner = document.getElementById("banner");
 
-        // If already logged in, skip ahead.
+        // If already logged in, skip the form and go to dashboard / next.
         Portal.fetchMe()
           .then(() => {
-            window.location.href = "/dashboard";
+            const next = new URLSearchParams(window.location.search).get("next") || "/dashboard";
+            window.location.href = next;
           })
-          .catch(() => {});
+          .catch(() => {
+            /* expected — not logged in yet */
+          });
 
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
           Portal.clearBanner(banner);
-          const password = document.getElementById("password").value;
-          if (password.length < 8) {
-            Portal.showError(banner, "密码至少 8 位");
-            return;
-          }
           btn.disabled = true;
-          btn.textContent = "创建中…";
+          btn.textContent = "登录中…";
           try {
-            await Portal.apiCall("POST", "/v1/auth/register", {
+            await Portal.apiCall("POST", "/v1/auth/login", {
               email: document.getElementById("email").value.trim(),
-              password: password,
-              display_name: document.getElementById("display_name").value.trim() || undefined,
+              password: document.getElementById("password").value,
             });
-            window.location.href = "/dashboard?welcome=1";
+            const next = new URLSearchParams(window.location.search).get("next") || "/dashboard";
+            window.location.href = next;
           } catch (err) {
-            Portal.showError(banner, err.message || "注册失败");
+            Portal.showError(banner, err.message || "登录失败");
             btn.disabled = false;
-            btn.textContent = "创建账号";
+            btn.textContent = "登录";
           }
         });
       })();
