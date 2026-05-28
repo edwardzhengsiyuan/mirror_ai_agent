@@ -53,6 +53,17 @@ ssh_args() {
   args+=("-p" "${DEPLOY_PORT:-22}")
   args+=("-o" "ServerAliveInterval=30")
   args+=("-o" "ServerAliveCountMax=6")
+  args+=("-o" "ConnectTimeout=20")
+  # Multiplex SSH so the user enters their password once per deploy run.
+  # The control socket lives under ~/.ssh/cm-mirror/ and persists 10 minutes
+  # after the last client exits, covering long polling loops below.
+  # If the platform (e.g. some Windows OpenSSH builds) cannot create the
+  # socket, ssh falls back to a normal connection without erroring out.
+  mkdir -p "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
+  chmod 700 "${HOME}/.ssh" "${HOME}/.ssh/cm-mirror" 2>/dev/null || true
+  args+=("-o" "ControlMaster=auto")
+  args+=("-o" "ControlPath=${HOME}/.ssh/cm-mirror/%r@%h-%p")
+  args+=("-o" "ControlPersist=600")
   if [[ -n "${SSH_KEY_PATH:-}" ]]; then
     args+=("-i" "${SSH_KEY_PATH}")
   fi
@@ -174,21 +185,82 @@ main() {
   log "checking SSH connectivity"
   ssh_remote "echo connected: \$(hostname)"
 
-  log "installing host dependencies (git, docker, compose plugin, sqlite3, curl)"
-  ssh_remote "set -euo pipefail
+  log "installing base host dependencies (git, sqlite3, curl, python3)"
+  # apt-get update can emit a non-fatal warning about the host's Caddy apt repo
+  # (expired GPG key on the existing mymirrorai.com server). We ignore it because
+  # we only need base packages here and never install Caddy via apt ourselves.
+  ssh_remote "set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update || true
-apt-get install -y git curl ca-certificates sqlite3 python3
+apt-get install -y git curl ca-certificates sqlite3 python3"
 
-# Install Docker if missing
-if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com -o get-docker.sh
-  sh get-docker.sh
-  rm get-docker.sh
-fi
+  if ssh_remote "command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1"; then
+    log "docker + compose already installed on host, skipping bootstrap"
+    ssh_remote "systemctl enable --now docker"
+  else
+    log "docker missing on host; installing via get.docker.com in a detached background process"
+    log "  (the install briefly reconfigures iptables which is known to drop SSH on Volcengine ECS)"
+    log "  (the install continues server-side even if our SSH session is interrupted)"
 
+    # Kick off the install via setsid + nohup so it survives any SSH disconnect
+    # caused by Docker reconfiguring iptables. We then poll the host every 10s
+    # for a marker file. With ControlMaster, this is a single SSH auth.
+    ssh_remote 'set -e
+export DEBIAN_FRONTEND=noninteractive
+rm -f /tmp/.mirror-docker-done /tmp/.mirror-docker-failed
+cat > /tmp/mirror-docker-install.sh <<"BOOTSTRAP"
+#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+# If a previous run was interrupted (e.g. SSH disconnect mid apt-install),
+# dpkg may have half-configured packages on disk. Heal that first.
+dpkg --configure -a || true
+apt-get install -f -y || true
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+sh /tmp/get-docker.sh
+rm -f /tmp/get-docker.sh
 systemctl enable --now docker
+docker compose version
+BOOTSTRAP
+chmod +x /tmp/mirror-docker-install.sh
+# setsid detaches from the SSH session; nohup ignores SIGHUP; redirects ensure
+# no terminal i/o keeps us tied to the parent shell.
+setsid nohup bash -c "if /tmp/mirror-docker-install.sh > /var/log/mirror-docker-install.log 2>&1; then touch /tmp/.mirror-docker-done; else touch /tmp/.mirror-docker-failed; fi" </dev/null >/dev/null 2>&1 &
+echo "[remote] docker install kicked off in background, log: /var/log/mirror-docker-install.log"'
+
+    log "polling for docker install completion (up to 5 minutes)..."
+    local attempt=0
+    local installed=0
+    local marker=""
+    while (( attempt < 30 )); do
+      sleep 10
+      attempt=$((attempt + 1))
+      # Single SSH call per poll: returns "done", "failed", or empty.
+      marker="$(ssh_remote 'if [[ -f /tmp/.mirror-docker-done ]]; then echo done; elif [[ -f /tmp/.mirror-docker-failed ]]; then echo failed; fi' 2>/dev/null || true)"
+      marker="${marker//$'\r'/}"
+      marker="${marker//$'\n'/}"
+      if [[ "$marker" == "done" ]]; then
+        log "docker install completed after ~${attempt}0s"
+        installed=1
+        break
+      fi
+      if [[ "$marker" == "failed" ]]; then
+        log "docker install reported failure; dumping last 100 lines of install log:"
+        ssh_remote "tail -100 /var/log/mirror-docker-install.log" || true
+        die "docker install failed"
+      fi
+      printf '[deploy] still installing docker (%d/30)\n' "$attempt"
+    done
+
+    if (( installed == 0 )); then
+      log "docker install did not finish in time; dumping last 100 lines of install log:"
+      ssh_remote "tail -100 /var/log/mirror-docker-install.log" || true
+      die "docker install timed out after 5 minutes"
+    fi
+
+    ssh_remote "systemctl enable --now docker
 docker compose version"
+  fi
 
   log "cloning/updating repo"
   ssh_remote "set -euo pipefail
