@@ -151,8 +151,12 @@ def check_stripe(env: Dict[str, str]) -> List[CheckResult]:
     if mode == "live":
         if not secret_live:
             issues.append(("error", "STRIPE_MODE=live but STRIPE_SECRET_KEY_LIVE is empty."))
-        elif not secret_live.startswith("sk_live_"):
-            issues.append(("error", "STRIPE_SECRET_KEY_LIVE does not start with sk_live_ — wrong mode?"))
+        elif not (secret_live.startswith("sk_live_") or secret_live.startswith("rk_live_")):
+            issues.append((
+                "error",
+                "STRIPE_SECRET_KEY_LIVE should start with sk_live_ or rk_live_ "
+                "(restricted keys are rk_live_) — wrong mode?",
+            ))
         if not whsec_live:
             issues.append((
                 "error",
