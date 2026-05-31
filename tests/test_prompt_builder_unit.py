@@ -182,26 +182,44 @@ class TestPromptConfigVariations:
 
 
 class TestDependencyContextSelection:
-    """Aspect nodes should only see prereqs they actually need (no full GEJU dump)."""
+    """Aspect nodes should see the exact upstream context they need."""
 
-    def test_career_skips_geju_router_full_text(self, sample_cache):
-        """CAREER prompt should not include GEJU_ROUTER raw JSON or GEJU_ANALYSIS body."""
+    def test_career_includes_combined_geju_context(self, sample_cache):
+        """CAREER prompt should include all three GEJU stage outputs as one context block."""
         result = build_prompt("CAREER", sample_cache, prompt_config="lingyun_cat")
         user_prompt = result["user_prompt"]
-        # GEJU_ROUTER raw content (the JSON string) must NOT appear.
-        assert "正官格" not in user_prompt or "Test geju level content" in user_prompt
-        # The bulky analysis block is dropped for downstream domain nodes.
-        assert "Test geju analysis content" not in user_prompt
-        # The distilled level summary IS kept.
+        assert "格局（三节点合并）" in user_prompt
+        assert "Test router reasoning" in user_prompt
+        assert "Test geju analysis content" in user_prompt
         assert "Test geju level content" in user_prompt
 
-    def test_overall_only_sees_paipan(self, sample_cache):
-        """OVERALL should only see paipan/guji, not other prereqs."""
+    def test_overall_sees_chart_not_other_llm_prereqs(self, sample_cache):
+        """OVERALL should see chart/script context, not SHISHEN/GEJU/WUXING outputs."""
         result = build_prompt("OVERALL", sample_cache)
         user_prompt = result["user_prompt"]
         assert "Test paipan results" in user_prompt
+        assert "Test liupan results" in user_prompt
         assert "Test shishen content" not in user_prompt
         assert "Test wuxing prefs content" not in user_prompt
+
+    def test_year_data_injected_into_overall_runtime_context(self, sample_cache):
+        """Target-year dayun/liunian data should be available to OVERALL."""
+        result = build_prompt(
+            "OVERALL",
+            sample_cache,
+            runtime_context={"time_context": {"year_data": [{"year": 2026, "data": "2026 liunian details"}]}},
+        )
+        user_prompt = result["user_prompt"]
+        assert "完整大运流年信息" in user_prompt
+        assert "2026 liunian details" in user_prompt
+
+    def test_shishen_prompt_forbids_geju_analysis(self, sample_cache):
+        """SHISHEN prompt should explicitly stay within Ten Gods analysis."""
+        result = build_prompt("SHISHEN", sample_cache)
+        user_prompt = result["user_prompt"]
+        assert "十神分析" in user_prompt
+        assert "不要判定命局格局名称" in user_prompt
+        assert "不要转入格局分析" in user_prompt
 
 
 class TestResponseAspectFiltering:
@@ -241,8 +259,8 @@ class TestResponseAspectFiltering:
         user_prompt = result["user_prompt"]
         assert "Test career analysis content" in user_prompt
 
-    def test_response_skips_geju_router_and_analysis(self, sample_cache):
-        """RESPONSE prompt only reuses GEJU_LEVEL summary, not router/analysis raw."""
+    def test_response_includes_combined_geju_context(self, sample_cache):
+        """RESPONSE prompt reuses the complete three-stage GEJU context."""
         result = build_response_prompt(
             cache=sample_cache,
             time_context=None,
@@ -251,8 +269,9 @@ class TestResponseAspectFiltering:
             aspects=["CAREER"],
         )
         user_prompt = result["user_prompt"]
+        assert "Test router reasoning" in user_prompt
         assert "Test geju level content" in user_prompt
-        assert "Test geju analysis content" not in user_prompt
+        assert "Test geju analysis content" in user_prompt
 
     def test_response_dedup_same_text(self, sample_cache):
         """Identical content present in two cached nodes should appear only once."""

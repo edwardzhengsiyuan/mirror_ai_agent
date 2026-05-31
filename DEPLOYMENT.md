@@ -21,7 +21,7 @@ docs/API/self-service billing pages and hides the BaZi frontend/admin UI, see
 - A Stripe account that has completed activation (KYC, business info, bank).
 - LLM provider accounts with billing on:
   - GPTProto (default routes) — `sk-...` for `GPTPROTO_API_KEY`.
-  - Aliyun DashScope (for SHISHEN / GEJU / NAJIA nodes) — `sk-...` for `QWEN_API_KEY`.
+  - Aliyun DashScope (for GEJU / NAJIA nodes) — `sk-...` for `QWEN_API_KEY`.
 
 ---
 

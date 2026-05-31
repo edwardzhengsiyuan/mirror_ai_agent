@@ -31,23 +31,26 @@ def main() -> None:
     assert response_route["model"] == "gemini-3.1-pro-preview"
     assert response_route["api_key"] == "gpt-key"
     assert response_route["authorization_scheme"] == "Bearer"
-    assert shishen_route["model"] == "qwen3-max"
-    assert shishen_route["api_key"] == "qwen-key"
+    assert shishen_route["model"] == "gemini-3.1-pro-preview"
+    assert shishen_route["api_key"] == "gpt-key"
     assert shishen_route["authorization_scheme"] == "Bearer"
 
-    # Node route defaults take priority over the profile/global requested model.
+    # SHISHEN should use the global/profile model; GEJU keeps node route defaults.
     shishen_default = resolve_llm_settings("SHISHEN", requested_model="gemini-3.1-pro-preview")
-    assert shishen_default["model"] == "qwen3-max"
-    assert shishen_default["provider"] == "qwen"
+    assert shishen_default["model"] == "gemini-3.1-pro-preview"
+    assert shishen_default["provider"] == "gptproto"
+    geju_default = resolve_llm_settings("GEJU_ROUTER", requested_model="gemini-3.1-pro-preview")
+    assert geju_default["model"] == "qwen3-max"
+    assert geju_default["provider"] == "qwen"
 
-    # Explicit per-node override wins over both node route defaults and global model.
+    # Explicit per-node override wins over the global model.
     shishen_override = resolve_llm_settings(
         "SHISHEN",
-        requested_model="qwen3-max",
-        node_model_overrides={"SHISHEN": "gemini-3.1-pro-preview"},
+        requested_model="gemini-3.1-pro-preview",
+        node_model_overrides={"SHISHEN": "qwen3-max"},
     )
-    assert shishen_override["model"] == "gemini-3.1-pro-preview"
-    assert shishen_override["provider"] == "gptproto"
+    assert shishen_override["model"] == "qwen3-max"
+    assert shishen_override["provider"] == "qwen"
 
     # Nodes without a route default use the global/profile model.
     career_global = resolve_llm_settings("CAREER", requested_model="qwen3-max")

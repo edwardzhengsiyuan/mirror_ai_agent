@@ -218,14 +218,14 @@ def test_profile_node_model_overrides(tmp_path) -> None:
         json={
             "user_id": "u_test",
             "birth": {"year": 1990, "month": 1, "day": 1},
-            "node_model_overrides": {"shishen": "qwen3-max", "response": "gemini-3.1-pro-preview"},
+            "node_model_overrides": {"geju_router": "qwen3-max", "response": "gemini-3.1-pro-preview"},
         },
     )
     assert resp.status_code == 200
 
     profile = client.get("/api/profile?user_id=u_test").get_json()
     assert profile["node_model_overrides"] == {
-        "SHISHEN": "qwen3-max",
+        "GEJU_ROUTER": "qwen3-max",
         "RESPONSE": "gemini-3.1-pro-preview",
     }
 

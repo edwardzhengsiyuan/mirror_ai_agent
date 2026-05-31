@@ -53,7 +53,7 @@ def _extract_dayun_list(yun_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         zhi = item.get("zhi", "")
         gan_char = gan_map.get(gan, "")
         zhi_char = zhi_map.get(zhi, "")
-        name = f"{gan_char}{zhi_char}" if gan_char and zhi_char else None
+        name = f"{gan_char}{zhi_char}" if gan_char and zhi_char else "起运前"
 
         # Calculate end year from next dayun
         next_start = None

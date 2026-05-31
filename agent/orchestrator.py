@@ -77,7 +77,42 @@ def run_turn(
     # Also emit plan event for backward compatibility
     emit_event(event_sink, {"type": "plan", "plan": plan_result, "question": question})
 
-    # 3. Execute persistent nodes DAG (cached in profile)
+    # 3. Execute TIME_CONTEXT before persistent LLM nodes so intermediate
+    # analyses can use the same target-year dayun/liunian/liuyue facts.
+    time_context = None
+    plan_times = plan_result.get("times", [])
+    years = [t.get("year") for t in plan_times if t.get("need_tool") and t.get("year")]
+    if years:
+        tc_inputs = {
+            "requests": [{"year": y} for y in years],
+            "birth": profile.get("birth", {}),
+            "gender": profile.get("gender", "male"),
+            "birth_time_unknown": profile.get("birth_time_unknown", False),
+        }
+        time_context, tc_invocation_id, tc_duration_ms, tc_llm_prompt = run_tool(
+            "TIME_CONTEXT",
+            tc_inputs,
+            event_sink=event_sink,
+            stream=stream,
+        )
+
+        # Emit tool_invocation event for TIME_CONTEXT
+        tc_invocation = {
+            "tool": "TIME_CONTEXT",
+            "invocation_id": tc_invocation_id,
+            "input": tc_inputs,
+            "output": time_context,
+            "duration_ms": tc_duration_ms,
+        }
+        if tc_llm_prompt:
+            tc_invocation["llm_prompt"] = tc_llm_prompt
+        tool_invocations.append(tc_invocation)
+        emit_event(event_sink, {"type": "tool_invocation", **tc_invocation})
+
+        # Also emit time_context event for backward compatibility
+        emit_event(event_sink, {"type": "time_context", "value": time_context})
+
+    # 4. Execute persistent nodes DAG (cached in profile)
     nodes = set(COMMON_PREREQS)
     nodes.update(aspects)
     prompt_config = profile.get("prompt_config", "lingyun_cat")
@@ -87,6 +122,7 @@ def run_turn(
         "prompt_config": prompt_config,
         "model": llm_model,
         "node_model_overrides": node_model_overrides,
+        "time_context": time_context,
     }
     outputs = run_nodes_parallel(
         profile,
@@ -144,40 +180,6 @@ def run_turn(
             "failed_nodes": failed_nodes,
             "skipped_nodes": skipped_nodes,
         }
-
-    # 4. Execute TIME_CONTEXT tool if needed (conversation-level, not cached)
-    time_context = None
-    plan_times = plan_result.get("times", [])
-    years = [t.get("year") for t in plan_times if t.get("need_tool") and t.get("year")]
-    if years:
-        tc_inputs = {
-            "requests": [{"year": y} for y in years],
-            "birth": profile.get("birth", {}),
-            "gender": profile.get("gender", "male"),
-            "birth_time_unknown": profile.get("birth_time_unknown", False),
-        }
-        time_context, tc_invocation_id, tc_duration_ms, tc_llm_prompt = run_tool(
-            "TIME_CONTEXT",
-            tc_inputs,
-            event_sink=event_sink,
-            stream=stream,
-        )
-
-        # Emit tool_invocation event for TIME_CONTEXT
-        tc_invocation = {
-            "tool": "TIME_CONTEXT",
-            "invocation_id": tc_invocation_id,
-            "input": tc_inputs,
-            "output": time_context,
-            "duration_ms": tc_duration_ms,
-        }
-        if tc_llm_prompt:
-            tc_invocation["llm_prompt"] = tc_llm_prompt
-        tool_invocations.append(tc_invocation)
-        emit_event(event_sink, {"type": "tool_invocation", **tc_invocation})
-
-        # Also emit time_context event for backward compatibility
-        emit_event(event_sink, {"type": "time_context", "value": time_context})
 
     # 5. Generate Response (conversation-level, not cached)
     response_inputs = {

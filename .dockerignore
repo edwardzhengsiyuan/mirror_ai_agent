@@ -3,10 +3,22 @@
 __pycache__
 .pytest_cache
 .env
+.env.*
+.deploy.env
 storage/users
 storage/logs
 storage/conversations
 *.pyc
+
+# Files not needed at runtime. Keep scripts/check_prod_env.py in the image for
+# image-only deploy preflight, but exclude tests, CI, and human docs.
+.github
+tests
+deploy
+README*.md
+DEPLOY*.md
+CLAUDE.md
+AGENTS.md
 
 # Legacy internal UIs — kept in the repo for local dev / demos but excluded
 # from the production image so Flask's static handler can't serve them even

@@ -18,6 +18,13 @@ GEJU_PROMPTS_DIR = os.path.join(REPO_ROOT, "agent", "prompts", "geju")
 
 SYSTEM_PROMPT = "你是一位精通八字的算命师，具有深厚的命理学知识和丰富的分析经验。"
 
+INTERNAL_NODE_INSTRUCTION = """# 中间节点输出约束
+
+这是供后续节点继续推理使用的内部分析中间态，不是直接交付用户的最终答复。
+请只输出可复核的命理逻辑、判定依据、关键矛盾和结论。
+不要使用“缘主您好”“开运建议”“算命师箴言”“祝福语”“穿什么颜色/摆什么物件”等面向用户交付的包装内容。
+如需给出注意事项，只保留与命理推理直接相关的风险依据，不要写泛化人生建议。"""
+
 PROMPT_CONFIGS = {
     "default": {
         "RELATIONSHIP": "ganqing_lym.md",
@@ -65,29 +72,29 @@ ASPECT_NODES = [
 ]
 
 # Per-node upstream context keys. Order is rendering order in the prompt.
-# Aspect nodes intentionally skip GEJU_ROUTER/GEJU_ANALYSIS full text so the
-# downstream domain prompt stays compact; the distilled GEJU_LEVEL is enough.
 NODE_CONTEXT: Dict[str, List[str]] = {
-    "OVERALL": ["paipan", "guji"],
-    "SHISHEN": ["paipan", "guji"],
-    "GEJU_ROUTER": ["paipan", "guji", "OVERALL"],
-    "GEJU_ANALYSIS": ["paipan", "guji", "OVERALL", "GEJU_ROUTER"],
-    "GEJU_LEVEL": ["paipan", "guji", "OVERALL", "GEJU_ROUTER", "GEJU_ANALYSIS"],
-    "WUXING_PREFS": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL"],
-    "CAREER": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "RELATIONSHIP": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "HEALTH": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "GUIREN": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "LIUQIN": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "XINGGE": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
-    "OTHER": ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"],
+    "OVERALL": ["paipan", "guji", "dayun_liunian"],
+    "SHISHEN": ["paipan", "guji", "dayun_liunian"],
+    "GEJU_ROUTER": ["paipan", "guji", "dayun_liunian"],
+    "GEJU_ANALYSIS": ["paipan", "guji", "dayun_liunian", "GEJU_ROUTER"],
+    "GEJU_LEVEL": ["paipan", "guji", "dayun_liunian", "GEJU_ROUTER", "GEJU_ANALYSIS"],
+    "WUXING_PREFS": ["paipan", "guji", "dayun_liunian", "OVERALL", "SHISHEN", "GEJU"],
+    "CAREER": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "RELATIONSHIP": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "HEALTH": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "GUIREN": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "LIUQIN": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "XINGGE": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
+    "OTHER": ["paipan", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"],
 }
 
 CONTEXT_LABELS: Dict[str, str] = {
     "paipan": "排盘",
     "guji": "古籍",
+    "dayun_liunian": "完整大运流年信息",
     "OVERALL": "整体分析",
     "SHISHEN": "十神",
+    "GEJU": "格局（三节点合并）",
     "GEJU_ROUTER": "格局判断",
     "GEJU_ANALYSIS": "格局详细分析",
     "GEJU_LEVEL": "格局层次",
@@ -191,13 +198,42 @@ NODE_VALIDATORS: Dict[str, Callable[[str], tuple[bool, str]]] = {
 }
 
 
-def _resolve_context_value(key: str, cache: Dict[str, Any]) -> str:
+def _format_geju_context(cache: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in ("GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL"):
+        content = str(cache.get(key, {}).get("output", {}).get("content", "") or "").strip()
+        if content:
+            parts.append(f"## {CONTEXT_LABELS.get(key, key)}\n{content}")
+    return "\n\n".join(parts)
+
+
+def _format_dayun_liunian_context(cache: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> str:
+    paipan = cache.get("PAIPAN", {}).get("output", {}) or {}
+    parts: List[str] = []
+    liupan = str(paipan.get("liupan_results") or "").strip()
+    if liupan:
+        parts.append("## 排盘脚本大运简排/流盘结果\n" + liupan)
+    year_data = _format_year_data((runtime_context or {}).get("time_context"))
+    if year_data:
+        parts.append("## 目标年份大运/流年/流月详情\n" + year_data)
+    return "\n\n".join(parts)
+
+
+def _resolve_context_value(
+    key: str,
+    cache: Dict[str, Any],
+    runtime_context: Optional[Dict[str, Any]] = None,
+) -> str:
     """Return the textual content for a context key, or empty string."""
     paipan = cache.get("PAIPAN", {}).get("output", {}) or {}
     if key == "paipan":
         return str(paipan.get("paipan_results") or "")
     if key == "guji":
         return str(paipan.get("guji_results") or "")
+    if key == "dayun_liunian":
+        return _format_dayun_liunian_context(cache, runtime_context=runtime_context)
+    if key == "GEJU":
+        return _format_geju_context(cache)
     return str(cache.get(key, {}).get("output", {}).get("content", "") or "")
 
 
@@ -240,6 +276,7 @@ def _build_context_for_node(
     node: str,
     cache: Dict[str, Any],
     extra_keys: Optional[Sequence[str]] = None,
+    runtime_context: Optional[Dict[str, Any]] = None,
 ) -> _DedupCollector:
     """Collect dependency-driven context fragments for a node.
 
@@ -253,7 +290,7 @@ def _build_context_for_node(
                 keys.append(key)
     collector = _DedupCollector()
     for key in keys:
-        text = _resolve_context_value(key, cache)
+        text = _resolve_context_value(key, cache, runtime_context=runtime_context)
         label = CONTEXT_LABELS.get(key, key)
         collector.add(label, text)
     return collector
@@ -265,6 +302,7 @@ def build_prompt(
     prompt_config: str = "lingyun_cat",
     question: Optional[str] = None,  # kept for back-compat; aspect nodes ignore it
     history_rounds: Optional[list[dict[str, str]]] = None,  # ditto
+    runtime_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
     """Assemble system + user prompt for a persistent node.
 
@@ -287,10 +325,11 @@ def build_prompt(
             config = PROMPT_CONFIGS["default"]
         prompt_text = _load_prompt(config[node])
 
-    collector = _build_context_for_node(node, cache)
+    collector = _build_context_for_node(node, cache, runtime_context=runtime_context)
     context_blocks = collector.render(heading_prefix="##")
 
-    parts: List[str] = list(context_blocks)
+    parts: List[str] = [INTERNAL_NODE_INSTRUCTION]
+    parts.extend(context_blocks)
     parts.append(prompt_text)
     return {"system_prompt": SYSTEM_PROMPT, "user_prompt": "\n".join(parts)}
 
@@ -375,7 +414,7 @@ def build_response_prompt(
             seen_aspects.add(normalized)
             aspect_keys.append(normalized)
 
-    base_keys = ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU_LEVEL", "WUXING_PREFS"]
+    base_keys = ["paipan", "guji", "OVERALL", "SHISHEN", "GEJU", "WUXING_PREFS"]
     context_keys: List[str] = list(base_keys)
     for aspect in aspect_keys:
         if aspect not in context_keys:

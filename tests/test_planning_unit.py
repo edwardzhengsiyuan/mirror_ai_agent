@@ -18,6 +18,7 @@ from agent.planning import (
     plan_with_rules,
     _parse_tool_call,
     _merge_times_from_question,
+    _build_planner_prompt,
 )
 
 
@@ -299,3 +300,17 @@ class TestPlanWithRules:
         assert "CAREER" in aspects
         assert "RELATIONSHIP" in aspects
         assert "HEALTH" in aspects
+
+
+class TestPlannerPrompt:
+    """Planner prompt formatting."""
+
+    def test_missing_dayun_name_is_labeled_qiyunqian(self):
+        """Pre-start luck range should not be called unknown dayun."""
+        _, user_prompt = _build_planner_prompt(
+            "今年运势",
+            dt.datetime(2026, 1, 1),
+            dayun_list=[{"name": None, "start_year": 1990, "end_year": 1997}],
+        )
+        assert "起运前 1990-1997" in user_prompt
+        assert "未知大运" not in user_prompt

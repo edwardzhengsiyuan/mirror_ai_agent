@@ -53,10 +53,6 @@
     "ZWDS_RESPONSE"
   ],
   "nodes": {
-    "SHISHEN": {
-      "provider": "qwen",
-      "model": "qwen3-max"
-    },
     "GEJU_ROUTER": {
       "provider": "qwen",
       "model": "qwen3-max"

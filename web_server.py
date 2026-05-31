@@ -202,7 +202,7 @@ def create_app(
                 "enum": available_models(),
             },
             "description": "Optional per-node model overrides. Node override takes priority over node defaults and the global llm_model.",
-            "example": {"SHISHEN": "qwen3-max", "RESPONSE": current_default_model()},
+            "example": {"GEJU_ROUTER": "qwen3-max", "RESPONSE": current_default_model()},
         }
 
     def normalize_node_model_overrides(value: object):

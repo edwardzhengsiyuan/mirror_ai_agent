@@ -203,6 +203,7 @@ def ensure_node(
                 prompt_config=prompt_config,
                 question=inputs.get("question"),
                 history_rounds=inputs.get("history_rounds"),
+                runtime_context=inputs,
             )
             system_prompt = prompt.get("system_prompt", "")
             user_prompt = prompt.get("user_prompt", "")

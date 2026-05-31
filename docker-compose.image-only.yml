@@ -1,0 +1,23 @@
+x-logging: &default-logging
+  # Docker's default json-file driver has no size cap, so a noisy week can
+  # fill the host disk. Cap the API container at ~250MB of logs.
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  bazi-agent-api:
+    # Image-only deployment: this compose file is copied to the server and
+    # uses a prebuilt image from a private registry. The server no longer
+    # needs a git checkout or Docker build context.
+    image: ${IMAGE_REF:?IMAGE_REF is required}
+    container_name: bazi-agent-api
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    logging: *default-logging

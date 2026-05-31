@@ -62,7 +62,7 @@ Three-column layout (ChatGPT/Claude style):
 **PUT /api/profile**
 ```json
 // Request - update model
-{"user_id": "u_demo", "llm_model": "gemini-3.1-pro-preview", "node_model_overrides": {"SHISHEN": "qwen3-max"}}
+{"user_id": "u_demo", "llm_model": "gemini-3.1-pro-preview", "node_model_overrides": {"GEJU_ROUTER": "qwen3-max"}}
 
 // Request - enable bypass cache
 {"user_id": "u_demo", "bypass_cache": true}

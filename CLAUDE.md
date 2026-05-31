@@ -88,7 +88,7 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 **Available Models** (canonical list in `config/llm_routes.json`):
 - `gemini-3.1-pro-preview` (default, gptproto provider)
 - `gemini-3-flash-preview` (gptproto provider)
-- `qwen3-max` (qwen provider, used by GEJU/SHISHEN node overrides)
+- `qwen3-max` (qwen provider, used by GEJU and NAJIA node overrides)
 
 `agent/models.py` is a compatibility shim around `agent/llm_config.py`, which reads `config/llm_routes.json` at runtime. Per-node routing/overrides live under the `nodes` block of that file.
 

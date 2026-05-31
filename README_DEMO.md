@@ -45,8 +45,8 @@ For real LLM calls, edit `.env` and set `LLM_MODE` empty or `auto`, plus provide
 
 Per-node model routing is managed in `config/llm_routes.json`:
 
-- Default for unrouted nodes (`PLANNER`, `OVERALL`, `WUXING_PREFS`, `CAREER`, `RELATIONSHIP`, `HEALTH`, `GUIREN`, `LIUQIN`, `XINGGE`, `OTHER`, `RESPONSE`, `CEZI_RESPONSE`, `HEPAN_RESPONSE`) is `gptproto` + `gemini-3.1-pro-preview`.
-- `SHISHEN`, `GEJU_ROUTER`, `GEJU_ANALYSIS`, `GEJU_LEVEL`, `NAJIA_RESPONSE` are pinned to `qwen` + `qwen3-max`.
+- Default for unrouted nodes (`PLANNER`, `OVERALL`, `SHISHEN`, `WUXING_PREFS`, `CAREER`, `RELATIONSHIP`, `HEALTH`, `GUIREN`, `LIUQIN`, `XINGGE`, `OTHER`, `RESPONSE`, `CEZI_RESPONSE`, `HEPAN_RESPONSE`) is `gptproto` + `gemini-3.1-pro-preview`.
+- `GEJU_ROUTER`, `GEJU_ANALYSIS`, `GEJU_LEVEL`, `NAJIA_RESPONSE` are pinned to `qwen` + `qwen3-max`.
 - Exposed model choices currently come only from the route config: `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, and `qwen3-max`.
 - Requests can pass `node_model_overrides`, and profile settings can persist those overrides. Priority is node override, then route node default, then global `llm_model`, then route default.
 

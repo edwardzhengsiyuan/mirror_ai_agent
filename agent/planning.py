@@ -121,7 +121,7 @@ def _build_planner_prompt(
     if dayun_list:
         lines = []
         for item in dayun_list:
-            name = item.get("name") or "未知大运"
+            name = item.get("name") or "起运前"
             start = item.get("start_year")
             end = item.get("end_year")
             if isinstance(start, int) and isinstance(end, int):

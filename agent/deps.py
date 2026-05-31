@@ -50,10 +50,12 @@ DEPS: Dict[str, List[str]] = {
     "PAIPAN": [],
     "OVERALL": ["PAIPAN"],
     "SHISHEN": ["PAIPAN"],
-    "GEJU_ROUTER": ["PAIPAN", "OVERALL"],
-    "GEJU_ANALYSIS": ["PAIPAN", "OVERALL", "GEJU_ROUTER"],
-    "GEJU_LEVEL": ["PAIPAN", "OVERALL", "GEJU_ROUTER", "GEJU_ANALYSIS"],
-    "WUXING_PREFS": ["PAIPAN", "OVERALL", "SHISHEN", "GEJU_LEVEL"],
+    # 格局、十神、OVERALL are sibling analyses over the chart, not a chain.
+    "GEJU_ROUTER": ["PAIPAN"],
+    "GEJU_ANALYSIS": ["PAIPAN", "GEJU_ROUTER"],
+    "GEJU_LEVEL": ["PAIPAN", "GEJU_ROUTER", "GEJU_ANALYSIS"],
+    # WUXING_PREFS consumes the complete GEJU three-stage result plus SHISHEN/OVERALL.
+    "WUXING_PREFS": ["PAIPAN", "OVERALL", "SHISHEN", "GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL"],
     "CAREER": COMMON_PREREQS,
     "RELATIONSHIP": COMMON_PREREQS,
     "HEALTH": COMMON_PREREQS,
