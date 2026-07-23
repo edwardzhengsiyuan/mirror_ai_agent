@@ -2,7 +2,12 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.pytest-*/
 .pytest_tmp/
+.pytest-tmp*/
+tmp/
+output/
+docs/prototypes/mingshu-job-*/
 
 # Local config / secrets
 .env

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "fonts": [
+    {
+      "file": "NotoSerifSC-Regular.ttf",
+      "family": "Noto Serif SC",
+      "roles": ["body", "display", "numerals"],
+      "license": "OFL-1.1",
+      "source": "https://github.com/google/fonts/tree/main/ofl/notoserifsc"
+    },
+    {
+      "file": "NotoSansSC-Regular.ttf",
+      "family": "Noto Sans SC",
+      "roles": ["chart", "caption", "ui"],
+      "license": "OFL-1.1",
+      "source": "https://github.com/google/fonts/tree/main/ofl/notosanssc"
+    }
+    ,
+    {
+    "file": "MaShanZheng-Regular.ttf",
+    "family": "Ma Shan Zheng",
+    "roles": ["cover_title", "chapter_title"],
+    "license": "OFL-1.1",
+    "source": "https://fonts.gstatic.com/s/mashanzheng/v17/NaPecZTRCLxvwo41b4gvzkXaRMQ.ttf"
+    }
+  ]
+}

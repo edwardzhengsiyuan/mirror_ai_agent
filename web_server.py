@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from agent.auth import (
     SessionManager,
@@ -109,12 +109,30 @@ def create_app(
     run_najia_turn_func: Callable = run_najia_turn,
     run_zwds_turn_func: Callable = run_zwds_turn,
     storage_root: Optional[str] = None,
+    mingshu_job_service=None,
 ) -> Flask:
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
     _maybe_init_sentry()
     app = Flask(__name__, static_folder="web", static_url_path="")
 
-    root = storage_root or os.path.join(os.path.dirname(__file__), "storage")
+    root = (
+        storage_root
+        or os.environ.get("MIRROR_STORAGE_ROOT")
+        or os.path.join(os.path.dirname(__file__), "storage")
+    )
+    if mingshu_job_service is None:
+        from mingshu.case_pipeline import generate_mingshu_job
+        from mingshu.job_service import MingshuJobService
+
+        try:
+            mingshu_workers = int(os.environ.get("MINGSHU_JOB_WORKERS", "1"))
+        except ValueError:
+            mingshu_workers = 1
+        mingshu_job_service = MingshuJobService(
+            os.path.join(root, "mingshu_jobs"),
+            generate_mingshu_job,
+            max_workers=mingshu_workers,
+        )
 
     def user_root(user_id: str) -> str:
         return os.path.join(root, "users", user_id)
@@ -1643,6 +1661,15 @@ def create_app(
     def portal_billing() -> Response:
         return send_from_directory(app.static_folder, "billing.html")
 
+    @app.route("/mingshu")
+    def mingshu_workbench() -> Response:
+        return send_from_directory(app.static_folder, "mingshu.html")
+
+    @app.route("/assets/<path:filename>")
+    def mingshu_asset(filename: str) -> Response:
+        """Serve versioned book fonts and illustrations to the local workbench."""
+        return send_from_directory(os.path.join(os.path.dirname(__file__), "assets"), filename)
+
     @app.route("/v1/users", methods=["POST"])
     def v1_upsert_user() -> Response:
         auth_error = require_demo_auth()
@@ -2272,6 +2299,177 @@ def create_app(
             profile["bypass_cache"] = bool(data["bypass_cache"])
         save_profile(path, profile)
         return jsonify({"success": True, "profile": profile})
+
+    @app.route("/api/mingshu/preview", methods=["POST"])
+    def mingshu_preview() -> Response:
+        """Build a book manifest from a stored profile without new LLM calls."""
+        data = request.get_json(silent=True) or {}
+        user_id = str(data.get("user_id") or "").strip()
+        safe_id_error = validate_safe_id(user_id, "user_id")
+        if safe_id_error:
+            return api_error(400, "invalid_user_id", safe_id_error)
+        path = profile_path(user_id)
+        if not os.path.exists(path):
+            return api_error(404, "user_not_found", "user not found")
+        profile = load_profile(path)
+        birth = profile.get("birth")
+        if not isinstance(birth, dict):
+            return api_error(400, "birth_required", "stored profile has no birth data")
+        birth_error = validate_birth(birth)
+        if birth_error:
+            return api_error(400, "invalid_birth", birth_error)
+
+        try:
+            from agent.tools.paipan_tool import paipan_tool
+            from mingshu import build_book_facts, build_standard_blueprint, compose_book
+            from mingshu.opening_v2 import build_opening_html_v2
+
+            cache = profile.get("node_cache") or {}
+            paipan_entry = cache.get("PAIPAN") or {}
+            paipan = paipan_entry.get("output") if isinstance(paipan_entry, dict) else None
+            if not isinstance(paipan, dict) or not paipan.get("paipan_output"):
+                paipan = paipan_tool(
+                    {
+                        "birth": birth,
+                        "gender": profile.get("gender", "male"),
+                        "birth_time_unknown": profile.get("birth_time_unknown", False),
+                    }
+                )
+            subject_profile = dict(profile)
+            subject_profile["display_name"] = (
+                str(data.get("display_name") or "").strip()
+                or str(profile.get("display_name") or "").strip()
+                or user_id
+            )
+            facts = build_book_facts(paipan, subject_profile)
+            blueprint = build_standard_blueprint()
+            node_outputs = {
+                node: entry.get("output")
+                for node, entry in cache.items()
+                if isinstance(entry, dict) and isinstance(entry.get("output"), dict)
+            }
+            book = compose_book(facts, blueprint, node_outputs=node_outputs)
+            opening_html = build_opening_html_v2(
+                facts,
+                asset_prefix="/assets/mingshu/illustrations",
+                font_prefix="/assets/fonts",
+            )
+        except Exception as exc:
+            return api_error(500, "mingshu_generation_failed", str(exc))
+        return jsonify({"facts": facts, "blueprint": blueprint, "book": book, "opening_html": opening_html})
+
+    def require_mingshu_service_auth():
+        expected = (os.environ.get("MINGSHU_SERVICE_TOKEN") or "").strip()
+        if not expected:
+            return None
+        if bearer_token() != expected:
+            return api_error(401, "unauthorized", "Valid MingShu service token required.")
+        return None
+
+    def mingshu_job_response(job: Dict[str, Any], status: int = 200):
+        job_id = str(job["id"])
+        payload = {
+            "job": job,
+            "status_url": f"/api/mingshu/jobs/{job_id}",
+        }
+        if job.get("status") == "succeeded":
+            payload["downloads"] = {
+                "spreads": f"/api/mingshu/jobs/{job_id}/download?format=spreads",
+                "a5": f"/api/mingshu/jobs/{job_id}/download?format=a5",
+            }
+        return jsonify(payload), status
+
+    @app.route("/api/mingshu/jobs", methods=["POST"])
+    def create_mingshu_job() -> Response:
+        auth_error = require_mingshu_service_auth()
+        if auth_error is not None:
+            return auth_error
+        data = request.get_json(silent=True) or {}
+        birth = data.get("birth")
+        if not isinstance(birth, dict):
+            return api_error(400, "birth_required", "birth required")
+        birth_error = validate_birth(birth)
+        if birth_error:
+            return api_error(400, "invalid_birth", birth_error)
+        try:
+            parsed_birth = {
+                "year": int(birth["year"]),
+                "month": int(birth["month"]),
+                "day": int(birth["day"]),
+                "hour": int(birth.get("hour", 0)),
+                "minute": int(birth.get("minute", 0)),
+                "second": int(birth.get("second", 0)),
+            }
+            dt.datetime(**parsed_birth)
+        except (TypeError, ValueError):
+            return api_error(400, "invalid_birth", "birth date or time is invalid")
+
+        gender = str(data.get("gender") or "").strip().lower()
+        if gender not in {"male", "female"}:
+            return api_error(400, "invalid_gender", "gender must be male or female")
+        calendar = str(data.get("calendar") or "solar").strip().lower()
+        if calendar != "solar":
+            return api_error(400, "unsupported_calendar", "当前版本仅支持公历日期")
+        birthplace = str(data.get("birthplace") or "").strip()
+        if not birthplace:
+            return api_error(400, "birthplace_required", "birthplace required")
+        if len(birthplace) > 120:
+            return api_error(400, "invalid_birthplace", "birthplace is too long")
+        name = str(data.get("name") or "").strip()
+        if len(name) > 80:
+            return api_error(400, "invalid_name", "name is too long")
+
+        payload = {
+            "name": name,
+            "birth": parsed_birth,
+            "birthplace": birthplace,
+            "gender": gender,
+            "calendar": "solar",
+            "time_basis": "Asia/Shanghai",
+            "requested_by": str(data.get("requested_by") or "").strip()[:160],
+        }
+        job = mingshu_job_service.create(payload)
+        return mingshu_job_response(job, 202)
+
+    @app.route("/api/mingshu/jobs/<job_id>", methods=["GET"])
+    def get_mingshu_job(job_id: str) -> Response:
+        auth_error = require_mingshu_service_auth()
+        if auth_error is not None:
+            return auth_error
+        safe_id_error = validate_safe_id(job_id, "job_id")
+        if safe_id_error:
+            return api_error(400, "invalid_job_id", safe_id_error)
+        job = mingshu_job_service.get(job_id)
+        if job is None:
+            return api_error(404, "job_not_found", "job not found")
+        return mingshu_job_response(job)
+
+    @app.route("/api/mingshu/jobs/<job_id>/download", methods=["GET"])
+    def download_mingshu_job(job_id: str) -> Response:
+        auth_error = require_mingshu_service_auth()
+        if auth_error is not None:
+            return auth_error
+        safe_id_error = validate_safe_id(job_id, "job_id")
+        if safe_id_error:
+            return api_error(400, "invalid_job_id", safe_id_error)
+        kind = str(request.args.get("format") or "a5").strip().lower()
+        if kind not in {"a5", "spreads"}:
+            return api_error(400, "invalid_format", "format must be a5 or spreads")
+        job = mingshu_job_service.get(job_id)
+        if job is None:
+            return api_error(404, "job_not_found", "job not found")
+        if job.get("status") != "succeeded":
+            return api_error(409, "job_not_ready", "job is not ready")
+        path = mingshu_job_service.download_path(job_id, kind)
+        if path is None:
+            return api_error(404, "file_not_found", "generated file not found")
+        return send_file(
+            path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=path.name,
+            conditional=True,
+        )
 
     @app.route("/api/models", methods=["GET"])
     def get_models() -> Response:

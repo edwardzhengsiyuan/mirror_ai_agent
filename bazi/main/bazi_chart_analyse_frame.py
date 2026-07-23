@@ -217,6 +217,11 @@ class BaziChartAnalyseFrame:
         self.res["rizhu"] = self.res["zhu_list"][zhu_name_list[2]]["gan"]
         self.res["shengxiao"] = self.bazi_chart.year_zhi.get().shengxiao.name
         self.res["geju"] = [g.name for g in self.analysis_results["geju_analysis"]]
+        # 命书、图表和下游 API 需要稳定 JSON，不能再从日志文本反向解析。
+        # 这些字段只公开已经由脚本计算出的事实及依据，不添加新的命理解读。
+        self.res["origin_relations"] = self._serialize_origin_relations()
+        self.res["shensha_details"] = self._serialize_shensha_details()
+        self.res["shishen_clues"] = self._serialize_shishen_clues()
 
         # 对外 JSON：把所有可枚举语义字段统一输出为带命名空间的枚举码（如 "GAN:WU"）
         self._namespace_basic_res(self.res)
@@ -403,6 +408,158 @@ class BaziChartAnalyseFrame:
             shishen = hidden_gans_shishen[i]
             hidden_gans_item["shishen"] = shishen.name
             target["hidden_gans"].append(hidden_gans_item)
+
+    @staticmethod
+    def _pillar_name(index: int) -> str:
+        names = ["year", "month", "day", "hour"]
+        return names[index] if 0 <= index < len(names) else f"pillar_{index}"
+
+    @staticmethod
+    def _serialize_relation_member(element, index: int) -> Dict[str, Any]:
+        member: Dict[str, Any] = {
+            "pillar": BaziChartAnalyseFrame._pillar_name(index),
+            "pillar_index": index,
+        }
+        if isinstance(element, BaziChartGan):
+            member.update(
+                {
+                    "field": "stem",
+                    "code": ns(NS_GAN, element._gan.name),
+                    "wuxing": ns(NS_WUXING, element._wuxing.name),
+                }
+            )
+        elif isinstance(element, BaziChartZhi):
+            member.update(
+                {
+                    "field": "branch",
+                    "code": ns(NS_ZHI, element._zhi.name),
+                    "wuxing": ns(NS_WUXING, element._wuxing.name),
+                }
+            )
+        return member
+
+    def _serialize_origin_relations(self) -> list[Dict[str, Any]]:
+        """Return chart interactions as JSON-safe evidence records."""
+        relations: list[Dict[str, Any]] = []
+
+        for _category, forces in self.analysis_results.get("hehua_analysis", {}).items():
+            for force in forces or []:
+                indexes = list(getattr(force, "element_index", []) or [])
+                elements = list(getattr(force, "elements", []) or [])
+                members = [
+                    self._serialize_relation_member(element, indexes[pos])
+                    for pos, element in enumerate(elements)
+                    if pos < len(indexes)
+                ]
+                relation: Dict[str, Any] = {
+                    "relation_type": force.__class__.__name__,
+                    "label": str(getattr(force, "cate", _category)),
+                    "field": "stem" if getattr(force, "field", "") == "天干" else "branch",
+                    "members": members,
+                    "strength": float(getattr(force, "E", 0.0) or 0.0),
+                    "distance": int(getattr(force, "distance", 0) or 0),
+                }
+                result_wuxing = getattr(force, "wuxing", None)
+                if isinstance(result_wuxing, Wuxing):
+                    relation["result_wuxing"] = ns(NS_WUXING, result_wuxing.name)
+                relations.append(relation)
+
+        # 刑、穿由 XinghaiAnalyser 独立计算，补进同一关系集合。
+        for label, pairs in self.analysis_results.get("xinghai_analysis", {}).items():
+            if not isinstance(pairs, dict):
+                continue
+            for branch_names, indexes in pairs.items():
+                if not isinstance(indexes, tuple):
+                    continue
+                members = []
+                for pos, index in enumerate(indexes):
+                    if pos >= len(branch_names):
+                        continue
+                    branch = Zhi.from_chinese(branch_names[pos])
+                    members.append(
+                        {
+                            "pillar": self._pillar_name(index),
+                            "pillar_index": index,
+                            "field": "branch",
+                            "code": ns(NS_ZHI, branch.name),
+                            "wuxing": ns(NS_WUXING, branch.wuxing.name),
+                        }
+                    )
+                relations.append(
+                    {
+                        "relation_type": "XING" if label == "刑" else "CHUAN",
+                        "label": label,
+                        "field": "branch",
+                        "members": members,
+                        "strength": None,
+                        "distance": abs(indexes[-1] - indexes[0]) if indexes else 0,
+                    }
+                )
+
+        for index, relation in enumerate(relations, start=1):
+            relation["id"] = f"origin_relation_{index:02d}"
+        return relations
+
+    def _serialize_shensha_details(self) -> Dict[str, list[Dict[str, Any]]]:
+        """Expose detected shensha together with source and pillar."""
+        pillar_names = {
+            "年柱": "year",
+            "月柱": "month",
+            "日柱": "day",
+            "时柱": "hour",
+        }
+        result: Dict[str, list[Dict[str, Any]]] = {
+            "year": [],
+            "month": [],
+            "day": [],
+            "hour": [],
+        }
+        for position, items in self.analysis_results.get("shensha_sorted", {}).items():
+            pillar = pillar_names.get(position, position)
+            bucket = result.setdefault(pillar, [])
+            for index, item in enumerate(items or [], start=1):
+                try:
+                    code = ShenshaEnum[item["name"].upper()].value
+                except (KeyError, AttributeError):
+                    code = str(item.get("name", ""))
+                bucket.append(
+                    {
+                        "id": f"shensha_{pillar}_{index:02d}",
+                        "code": ns(NS_SHENSHA, code),
+                        "name": item.get("chinese_name") or code,
+                        "kind": item.get("type") or "",
+                        "source": item.get("source") or "",
+                    }
+                )
+        return result
+
+    def _serialize_shishen_clues(self) -> list[Dict[str, Any]]:
+        """Expose deterministic ten-god clues without string parsing."""
+        result: list[Dict[str, Any]] = []
+        for index, clue in enumerate(self.analysis_results.get("shishen_analysis", []) or [], start=1):
+            shishen_name = getattr(clue, "_shishen", "")
+            try:
+                shishen_code = ns(
+                    NS_SHISHEN,
+                    Shishen.from_chinese_name(shishen_name).name,
+                )
+            except (KeyError, ValueError):
+                shishen_code = shishen_name
+            area = getattr(clue, "area", None)
+            condition = getattr(clue, "condition", None)
+            result.append(
+                {
+                    "id": f"shishen_clue_{index:02d}",
+                    "area_code": getattr(area, "name", ""),
+                    "area": getattr(area, "value", ""),
+                    "condition_code": getattr(condition, "name", ""),
+                    "condition": getattr(condition, "value", ""),
+                    "shishen": shishen_code,
+                    "reason": getattr(clue, "reason", ""),
+                    "finding": getattr(clue, "content", ""),
+                }
+            )
+        return result
 
     def log_bazi_chart(self):
         currentDateAndTime = datetime.now()

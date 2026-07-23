@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "generated_with": "OpenAI built-in image generation",
+  "text_baked_into_images": false,
+  "collections": {
+    "cover": {"count": 1, "format": "RGB PNG", "directory": "covers"},
+    "layout": {
+      "count": 7,
+      "format": "RGB PNG",
+      "directory": "layout",
+      "files": [
+        "reading-guide-v2.png",
+        "opening-message-v2.png",
+        "wuxing-compass-v2.png",
+        "reading-guide-v3.png",
+        "opening-message-v3.png",
+        "wuxing-compass-v3-clear.png",
+        "wuxing-watercolor-field-v1.png"
+      ]
+    },
+    "daymasters": {"count": 20, "format": "RGBA PNG", "directory": "daymasters", "dimensions": "1024x1536"},
+    "seasons": {"count": 12, "format": "RGB PNG", "directory": "seasons", "dimensions": "1400x1000"},
+    "zodiac": {"count": 12, "format": "RGBA PNG", "directory": "zodiac"},
+    "cases": {
+      "count": 1,
+      "format": "RGB PNG",
+      "directory": "cases",
+      "files": ["ding-si-symbolic-landscape-v1.png"]
+    },
+    "content": {
+      "count": 1,
+      "format": "UTF-8 JSON",
+      "directory": "../content",
+      "files": ["tiaohou-library-v1.json"]
+    }
+  },
+  "daymaster_order": ["jia", "yi", "bing", "ding", "wu", "ji", "geng", "xin", "ren", "gui"],
+  "season_order": ["zi", "chou", "yin", "mao", "chen", "si", "wu", "wei", "shen", "you", "xu", "hai"],
+  "zodiac_order": ["rat", "ox", "tiger", "rabbit", "dragon", "snake", "horse", "goat", "monkey", "rooster", "dog", "pig"],
+  "transparent_workflow": "solid chroma background followed by remove_chroma_key.py auto-border extraction, soft matte, despill, and edge contraction",
+  "print_workflow": "HTML/CSS proof -> browser PDF -> 300 DPI opaque DeviceRGB flatten -> A5 page split",
+  "prompt_family": "premium A5 Bazi book; Song-dynasty ink, refined contemporary guofeng woodblock and mineral pigment; ivory, cinnabar, antique gold, muted teal; no text, seal, watermark, pink wash, abstract circles, or fake data"
+}

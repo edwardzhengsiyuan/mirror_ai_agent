@@ -2,6 +2,7 @@
 .venv
 __pycache__
 .pytest_cache
+.pytest-*
 .env
 .env.*
 .deploy.env
@@ -9,6 +10,15 @@ storage/users
 storage/logs
 storage/conversations
 *.pyc
+*.pdf
+
+# Generated proofs and local browser artifacts are several gigabytes and are
+# not part of the production service.
+output
+tmp
+docs
+storage
+assets/mingshu/backgrounds
 
 # Files not needed at runtime. Keep scripts/check_prod_env.py in the image for
 # image-only deploy preflight, but exclude tests, CI, and human docs.
