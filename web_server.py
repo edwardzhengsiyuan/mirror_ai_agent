@@ -1593,6 +1593,7 @@ def create_app(
             "status": "ok",
             "service": "bazi-agent-api",
             "auth_configured": bool(os.environ.get("DEMO_API_TOKEN", "").strip()),
+            "mingshu_report_version": "luck-power/1.0",
         })
 
     @app.route("/openapi.json", methods=["GET"])
