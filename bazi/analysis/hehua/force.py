@@ -29,7 +29,12 @@ class Force:
         self.field = self.get_field()
         self.item_list = [self.elements[i]._chinese_name + self.elements[i]._wuxing.chinese_name for i in range(len(self.elements))]
         idx_name_list = ["年", "月", "日", "时"]
-        self.idx_list = [f"{idx_name_list[i]}" for i in self.element_index]  # 简化
+        self.idx_list = [
+            idx_name_list[i]
+            if i < len(idx_name_list)
+            else ("运" if i == len(idx_name_list) else f"运{i - len(idx_name_list) + 1}")
+            for i in self.element_index
+        ]
 
     def get_field(self):
         raise NotImplementedError

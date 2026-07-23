@@ -61,30 +61,11 @@ class HehuaPowerCheckAnalyser(BaseAnalyser):
         super().__init__(bazi_chart, log_helper)
         self.without_time = self._bazi_chart.without_time
         self._hehua_check_results: Dict[str, List[Any]] = hehua_check_results
-        if self.without_time:
-            self._zhi_list: List[Zhi] = [
-                self._bazi_chart.year_zhi,
-                self._bazi_chart.month_zhi,
-                self._bazi_chart.day_zhi
-            ]
-            self._gan_list: List[Gan] = [
-                self._bazi_chart.year_gan,
-                self._bazi_chart.month_gan,
-                self._bazi_chart.day_gan
-            ]
-        else:
-            self._zhi_list: List[Zhi] = [
-                self._bazi_chart.year_zhi,
-                self._bazi_chart.month_zhi,
-                self._bazi_chart.day_zhi,
-                self._bazi_chart.hour_zhi
-            ]
-            self._gan_list: List[Gan] = [
-                self._bazi_chart.year_gan,
-                self._bazi_chart.month_gan,
-                self._bazi_chart.day_gan,
-                self._bazi_chart.hour_gan
-            ]
+        # Use the chart's actual lists instead of rebuilding a hard-coded
+        # three/four-pillar view. Regular natal charts are unchanged, while
+        # temporary analysis views may append a luck pillar.
+        self._zhi_list: List[Zhi] = list(self._bazi_chart.zhi_list)
+        self._gan_list: List[Gan] = list(self._bazi_chart.gan_list)
         self._zhi_names: List[str] = [zhi._chinese_name for zhi in self._zhi_list]
         self._gan_names: List[str] = [gan._chinese_name for gan in self._gan_list]
 

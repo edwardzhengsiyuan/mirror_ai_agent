@@ -43,6 +43,13 @@ SHENGKE_FORCE = 0.02
 
 zhu_name = ['年', '月', '日', '时']
 
+
+def _zhu_name(index):
+    """Return a readable name for natal and temporary transit pillars."""
+    if index < len(zhu_name):
+        return zhu_name[index]
+    return '运' if index == len(zhu_name) else f'运{index - len(zhu_name) + 1}'
+
 def calculate_force(element, wuxing, distance):
     Ma = element.M
     base_force = element.wuxing_power[wuxing] * Ma
@@ -107,7 +114,7 @@ class PowerTransformer:
         # 对天干进行处理
         for i, element_gan in enumerate(state2.fixed_row):
             force_sum = 0
-            gan_name = zhu_name[i] + '干' + self.bazi_chart.gan_list[i]._chinese_name + self.bazi_chart.gan_list[i]._wuxing_chinese_name
+            gan_name = _zhu_name(i) + '干' + self.bazi_chart.gan_list[i]._chinese_name + self.bazi_chart.gan_list[i]._wuxing_chinese_name
             zhi_name = []
             for j, elements_zhi in enumerate(state1.variable_row):
                 force = sum(element.M * element.wuxing_power[element_gan.gan.wuxing] for element in elements_zhi)
@@ -115,7 +122,7 @@ class PowerTransformer:
                 force_sum += force * rate * TIANTOUDICANG_FORCE
                 for k in range(len(elements_zhi)):
                     if elements_zhi[k].gan.wuxing == element_gan.gan.wuxing and elements_zhi[k].wuxing_power[element_gan.gan.wuxing] > 0:
-                        zhi_name.append(zhu_name[j] + '支' + self.bazi_chart.zhi_list[j]._chinese_name + '中' + elements_zhi[k].gan.chinese_name + elements_zhi[k].gan.wuxing.chinese_name)
+                        zhi_name.append(_zhu_name(j) + '支' + self.bazi_chart.zhi_list[j]._chinese_name + '中' + elements_zhi[k].gan.chinese_name + elements_zhi[k].gan.wuxing.chinese_name)
                         wuxing_word.append(self.bazi_chart.gan_list[i]._wuxing.chinese_name)
             element_gan.wuxing_power[element_gan.gan.wuxing] *= (force_sum + 1)
             log = gan_name + '通根于' + '、'.join(zhi_name)

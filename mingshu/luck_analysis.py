@@ -7,6 +7,7 @@ from typing import Any
 from .opening_v2 import _view
 from .pattern import build_pattern_analysis
 from .shensha_library import get_shensha_knowledge
+from .luck_power import calculate_luck_wuxing_power
 
 
 STEM_PROFILE = {
@@ -308,6 +309,7 @@ def _cycle_record(cycle: dict, facts: dict) -> dict:
         "support": support, "movement": movement, "score": parts["score"], "band": _band(parts["score"]),
         "components": {key: parts[key] for key in ("pattern", "climate", "relations")},
         "headline": _focus(gan_god, zhi_god), "stem_note": stem_note, "action": action,
+        "wuxing_shift": calculate_luck_wuxing_power(facts, cycle),
     }
 
 

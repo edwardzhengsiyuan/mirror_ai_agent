@@ -48,13 +48,17 @@ class HehuaAnalysis(BaseAnalyser):
 
         # 记录初步检查结果
         self._log_helper.debug("可能存在的合化冲关系：\n")
+        position_names = list(
+            getattr(
+                self._bazi_chart,
+                "pillar_names",
+                ["年", "月", "日"] if self.without_time else ["年", "月", "日", "时"],
+            )
+        )
         for key, value in self.hehua_check_results.items():
             if value:
                 for v in value:
-                    if self.without_time:
-                        loc_idx = get_elements_by_index(["年", "月", "日", "时"], v, key[1])
-                    else:
-                        loc_idx = get_elements_by_index(["年", "月", "日"], v, key[1])
+                    loc_idx = get_elements_by_index(position_names, v, key[1])
                     if key[1] == "干":
                         ele = self._bazi_chart.gan_list
                     else:
