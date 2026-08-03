@@ -23,6 +23,10 @@
       "provider": "gptproto"
     },
     {
+      "id": "grok-4.5",
+      "provider": "gptproto"
+    },
+    {
       "id": "qwen3-max",
       "provider": "qwen"
     }
@@ -80,6 +84,22 @@
     "ZWDS_RESPONSE": {
       "provider": "gptproto",
       "model": "gemini-3.1-pro-preview"
+    },
+    "MINGSHU_LOCALIZE_ZH_TW": {
+      "provider": "gptproto",
+      "model": "grok-4.5"
+    },
+    "MINGSHU_LOCALIZE_EN": {
+      "provider": "gptproto",
+      "model": "grok-4.5"
+    },
+    "MINGSHU_LOCALIZE_JA": {
+      "provider": "gptproto",
+      "model": "grok-4.5"
+    },
+    "MINGSHU_LOCALIZE_KO": {
+      "provider": "gptproto",
+      "model": "grok-4.5"
     }
   }
 }
