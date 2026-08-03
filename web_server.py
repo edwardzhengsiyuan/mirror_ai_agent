@@ -2419,6 +2419,13 @@ def create_app(
         name = str(data.get("name") or "").strip()
         if len(name) > 80:
             return api_error(400, "invalid_name", "name is too long")
+        locale = str(data.get("locale") or "zh-CN").strip()
+        if locale not in {"zh-CN", "zh-TW", "en", "ja", "ko"}:
+            return api_error(
+                400,
+                "unsupported_locale",
+                "locale must be zh-CN, zh-TW, en, ja, or ko",
+            )
 
         payload = {
             "name": name,
@@ -2427,6 +2434,7 @@ def create_app(
             "gender": gender,
             "calendar": "solar",
             "time_basis": "Asia/Shanghai",
+            "locale": locale,
             "requested_by": str(data.get("requested_by") or "").strip()[:160],
         }
         job = mingshu_job_service.create(payload)

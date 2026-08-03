@@ -19,6 +19,7 @@ from mingshu import build_book_facts
 from mingshu.closing_pages import write_closing_sample
 from mingshu.integrated_bridge import write_integrated_bridge
 from mingshu.luck_pages import write_luck_sample
+from mingshu.localization import localize_html_files, normalize_report_locale
 from mingshu.opening_v2 import write_opening_html_v2, write_opening_manifest_v2
 from mingshu.pattern_pages import write_pattern_sample
 from mingshu.relation_pages import write_relation_sample
@@ -240,6 +241,7 @@ def generate_mingshu_job(
     birth = dict(request_payload["birth"])
     birth.setdefault("minute", 0)
     birth.setdefault("second", 0)
+    locale = normalize_report_locale(request_payload.get("locale"))
     profile = {
         "display_name": request_payload.get("name", ""),
         "birthplace": request_payload.get("birthplace", ""),
@@ -247,8 +249,16 @@ def generate_mingshu_job(
         "birth": birth,
         "gender": request_payload["gender"],
         "birth_time_unknown": False,
+        "locale": locale,
     }
     facts, bundle = _generate_bundle(job_id, profile, job_dir, progress)
+
+    if locale != "zh-CN":
+        progress(23, f"正在准备 {locale} 报告文本")
+        localize_html_files(
+            [Path(segment["html"]) for segment in bundle["segments"]],
+            locale,
+        )
 
     segment_dir = job_dir / "segments"
     segment_dir.mkdir(parents=True, exist_ok=True)
@@ -294,11 +304,26 @@ def generate_mingshu_job(
             shutil.rmtree(Path(segment["html"]).parent, ignore_errors=True)
         except (OSError, TypeError, ValueError):
             pass
+    localized_titles = {
+        "zh-CN": f"{profile.get('display_name') or '个人'}的命书",
+        "zh-TW": f"{profile.get('display_name') or '個人'}的命書",
+        "en": f"{profile.get('display_name') or 'Personal'} MingShu Report",
+        "ja": f"{profile.get('display_name') or '個人'}の命書",
+        "ko": f"{profile.get('display_name') or '개인'} 명서",
+    }
+    time_basis = {
+        "zh-CN": "北京时间",
+        "zh-TW": "北京時間",
+        "en": "Beijing Time",
+        "ja": "北京時間",
+        "ko": "베이징 시간",
+    }
     return {
         "case_id": bundle["case_id"],
-        "title": f"{profile.get('display_name') or '命主'}的命书",
+        "title": localized_titles[locale],
+        "locale": locale,
         "birthplace": profile.get("birthplace", ""),
-        "time_basis": "北京时间",
+        "time_basis": time_basis[locale],
         "pillars": pillars,
         "spread_count": spread_pages,
         "a5_page_count": a5_pages,
