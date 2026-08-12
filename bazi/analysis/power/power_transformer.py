@@ -39,6 +39,7 @@ MONTH_FORCE = 0.3
 TIANTOUDICANG_FORCE = 0.2
 SANHUI_FORCE = 2
 SANHE_FORCE = 1.5
+SANHUI_ROOT_RESIDUAL = 0.8
 SHENGKE_FORCE = 0.02
 
 zhu_name = ['年', '月', '日', '时']
@@ -329,10 +330,13 @@ class BaziChartPowerTransformerFromHehuichong:
         for index in force.element_index:
             elements = self.bazi_power_chart.get_element(force.field, index)
             for element in elements:
+                original_total = sum(element.wuxing_power.values())
                 for wuxing in element.wuxing_power:
-                    if wuxing != force.wuxing:
-                        element.wuxing_power[wuxing] = 0
-                element.wuxing_power[force.wuxing] = SANHUI_FORCE
+                    element.wuxing_power[wuxing] *= SANHUI_ROOT_RESIDUAL
+                element.wuxing_power[force.wuxing] += max(
+                    original_total * (SANHUI_FORCE - SANHUI_ROOT_RESIDUAL),
+                    0,
+                )
     
     def apply_dizhi_sanhe(self, force):
         specific_gans = {

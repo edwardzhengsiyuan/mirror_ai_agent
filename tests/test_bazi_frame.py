@@ -108,6 +108,15 @@ class TestGenerateBasicRes:
         props = res["shishen_proportions"]
         assert isinstance(props, dict)
 
+    def test_sanhui_uses_true_center_and_preserves_root_qi(self):
+        """巳午未三会 should use 午 as the center and not erase earth roots."""
+        solar = Solar.fromYmdHms(1995, 6, 9, 10, 0, 0)
+        frame = BaziChartAnalyseFrame(solar.getLunar(), "female")
+        res = frame.res
+
+        assert res["geju"] == ["GEJU:QISHA_GE"]
+        assert res["wuxing_proportions"]["WUXING:TU"] == pytest.approx(0.08633, abs=0.0001)
+
     def test_has_yun_data(self, frame):
         """Output should have yun (fortune/luck) data."""
         frame.generate_basic_res()

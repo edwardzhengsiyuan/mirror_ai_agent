@@ -5,7 +5,7 @@ from ..hehua import (
     DiZhiSanHui,
     DiZhiSanHe
 )
-from ...core import Shishen, Wuxing, GejuEnum
+from ...core import Shishen, Wuxing, GejuEnum, Zhi
 from ...core.bazi_chart import BaziChart
 from ...utils import LogHelper
 
@@ -47,6 +47,8 @@ class GejuAnalyser(BaseAnalyser):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, first_hidden_gan)
             if shishen != Shishen.RIZHU:
                 self._geju.append(GejuEnum.from_shishen(shishen))
+        if self._geju:
+            return
 
         # b. 检查月支其他藏干是否透出
         for hidden_gan in self._bazi_chart.month_zhi._hidden_gans[1:]:
@@ -57,9 +59,17 @@ class GejuAnalyser(BaseAnalyser):
 
 
         # c. 检查地支中是否有三合，三会存在
+        if self._geju:
+            return
+
         self.check_sanhe_sanhui()
+        if self._geju:
+            return
 
         # d. 检查月干是否同根于年支日支时支
+        if self._geju:
+            return
+
         if self.is_tonggen(self._bazi_chart.month_gan):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, self._bazi_chart.month_gan)
             if shishen != Shishen.RIZHU:
@@ -92,6 +102,8 @@ class GejuAnalyser(BaseAnalyser):
     def _analyse_same_wuxing(self, month_zhi_wuxing: Wuxing, day_gan_wuxing: Wuxing) -> None:
         # a. 检查地支中是否有三合，三会存在
         self.check_sanhe_sanhui()
+        if self._geju:
+            return
 
         # b. 检查月令是否为日主的羊刃或禄神
         for shensha in self._shensha_results:
@@ -102,6 +114,9 @@ class GejuAnalyser(BaseAnalyser):
                     self._geju.append(GejuEnum.LUSHEN_GE)
 
         # d. 检查月干是否同根于年支日支时支
+        if self._geju:
+            return
+
         if self.is_tonggen(self._bazi_chart.month_gan):
             shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, self._bazi_chart.month_gan)
             if shishen != Shishen.RIZHU:
@@ -148,7 +163,7 @@ class GejuAnalyser(BaseAnalyser):
     def check_sanhe_sanhui(self):
         for force in self._hehua_analysis_results:
             if isinstance(force, DiZhiSanHe) or isinstance(force, DiZhiSanHui):
-                center_zhi = self.get_center_zhi(force.element_index)
+                center_zhi = self.get_center_zhi(force)
                 if center_zhi:
                     shishen = self._bazi_chart.calculate_shishen(self._bazi_chart.day_gan, center_zhi.get_hidden_gans()[0])
                     if shishen not in [Shishen.BIJIAN, Shishen.JIECAI]:
@@ -159,19 +174,36 @@ class GejuAnalyser(BaseAnalyser):
                     else:
                         self._geju.append(GejuEnum.ZHUANWANG_GE)
 
-    def get_center_zhi(self, indices):
-        if len(indices) == 3:
-            return self._bazi_chart.zhi_list[indices[1]]
+    def get_center_zhi(self, force):
+        """Return the true center branch of a sanhe/sanhui force."""
+        center_by_wuxing = {
+            Wuxing.MU: Zhi.MAO,
+            Wuxing.HUO: Zhi.WU,
+            Wuxing.JIN: Zhi.YOU,
+            Wuxing.SHUI: Zhi.ZI,
+        }
+        center = center_by_wuxing.get(force.wuxing)
+        indices = force.element_index
+        if len(indices) == 3 and center is not None:
+            for index in indices:
+                zhi = self._bazi_chart.zhi_list[index]
+                if zhi._zhi == center:
+                    return zhi
         return None
 
     def _resolve_conflicting_geju(self) -> None:
         unique_geju = list(dict.fromkeys(self._geju))
-        conflicts = [
-            (GejuEnum.SHISHEN_GE, GejuEnum.SHANGGUAN_GE),
-            (GejuEnum.ZHENGGUAN_GE, GejuEnum.QISHA_GE),
-            (GejuEnum.ZHENGCAI_GE, GejuEnum.PIANCAI_GE),
-            (GejuEnum.ZHENGYIN_GE, GejuEnum.PIANYIN_GE),
-        ]
+        conflicts = []
+        for first, second in (
+            ("SHISHEN_GE", "SHANGGUAN_GE"),
+            ("ZHENGGUAN_GE", "QISHA_GE"),
+            ("ZHENGCAI_GE", "PIANCAI_GE"),
+            ("ZHENGYIN_GE", "PIANYIN_GE"),
+        ):
+            ge1 = getattr(GejuEnum, first, None)
+            ge2 = getattr(GejuEnum, second, None)
+            if ge1 is not None and ge2 is not None:
+                conflicts.append((ge1, ge2))
         for ge1, ge2 in conflicts:
             if ge1 in unique_geju and ge2 in unique_geju:
                 unique_geju.remove(ge1)
