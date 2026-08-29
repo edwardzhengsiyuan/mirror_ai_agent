@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import functools
 import os
+import secrets
 import uuid
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
@@ -91,10 +92,12 @@ class BillingHelpers:
         service: BillingService,
         pricing: Pricing,
         admin_token_getter: Callable[[], str],
+        service_token_getter: Optional[Callable[[], str]] = None,
     ) -> None:
         self.service = service
         self.pricing = pricing
         self._admin_token_getter = admin_token_getter
+        self._service_token_getter = service_token_getter
 
     # ------------------------------------------------------------------
     # auth
@@ -123,8 +126,19 @@ class BillingHelpers:
         if not token:
             return None, _api_error(401, "unauthorized", "Bearer token required.")
         if allow_admin_bypass:
+            expected_service = (
+                self._service_token_getter() if self._service_token_getter else ""
+            ) or ""
+            expected_service = expected_service.strip()
+            if expected_service and secrets.compare_digest(token, expected_service):
+                return {
+                    "user_id": None,
+                    "is_admin": True,
+                    "is_service": True,
+                    "key_hash": None,
+                }, None
             expected_admin = (self._admin_token_getter() or "").strip()
-            if expected_admin and token == expected_admin:
+            if expected_admin and secrets.compare_digest(token, expected_admin):
                 if not _admin_bypass_enabled():
                     return None, _api_error(
                         403,
@@ -132,12 +146,18 @@ class BillingHelpers:
                         "Admin token is not allowed on billed /v1/* endpoints. "
                         "Use a user API key, or set BILLING_ADMIN_BYPASS=1 to re-enable.",
                     )
-                return {"user_id": None, "is_admin": True, "key_hash": None}, None
+                return {
+                    "user_id": None,
+                    "is_admin": True,
+                    "is_service": False,
+                    "key_hash": None,
+                }, None
         try:
             auth = self.service.authenticate(token)
         except UnknownApiKeyError as e:
             return None, _api_error(401, "unauthorized", str(e))
         auth["is_admin"] = False
+        auth["is_service"] = False
         if enforce_rate_limit:
             try:
                 self.service.check_rate_limit(scope=f"key:{auth['key_hash']}")

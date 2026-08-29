@@ -28,6 +28,7 @@ from web_server import create_app
 
 
 ADMIN_TOKEN = "admin-test-token"
+SERVICE_TOKEN = "site-service-test-token"
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +124,19 @@ def _token_emitting_cezi_turn(question, character, **kwargs):
     """
     sink = kwargs.get("event_sink")
     if sink:
-        for prompt, completion in [(120, 60), (200, 90), (50, 25)]:
+        for prompt, cached, completion, reasoning in [
+            (120, 20, 60, 10),
+            (200, 50, 90, 20),
+            (50, 0, 25, 5),
+        ]:
             sink({
                 "type": "llm_usage",
                 "node": "STUB",
                 "model": "stub-model",
                 "prompt_tokens": prompt,
+                "cached_tokens": cached,
                 "completion_tokens": completion,
+                "reasoning_tokens": reasoning,
                 "total_tokens": prompt + completion,
             })
         sink({"type": "response", "text": "stub-cezi-with-tokens"})
@@ -141,6 +148,23 @@ def _token_emitting_cezi_turn(question, character, **kwargs):
     }
 
 
+def test_stream_parser_preserves_final_usage_chunk() -> None:
+    from agent.tools.llm_tool import _stream_sse_response
+
+    lines = [
+        b'data: {"choices":[{"delta":{"content":"A"}}]}\n',
+        b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n',
+        b'data: [DONE]\n',
+    ]
+    content, reasoning, usage = _stream_sse_response(lines, None)
+    assert content == "A"
+    assert reasoning == ""
+    assert usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 7,
+        "total_tokens": 19,
+    }
+
 # ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
@@ -149,6 +173,7 @@ def _token_emitting_cezi_turn(question, character, **kwargs):
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("XUANXUE_SERVICE_TOKEN", SERVICE_TOKEN)
     monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
     monkeypatch.setenv("BILLING_INFLIGHT_LIMIT", "2")
     monkeypatch.setenv("BILLING_RATE_LIMIT_PER_MIN", "1000")  # disable for tests
@@ -169,6 +194,10 @@ def client(app):
 
 def _admin(token=ADMIN_TOKEN):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _service():
+    return {"Authorization": f"Bearer {SERVICE_TOKEN}"}
 
 
 def _create_user(client, user_id="u_alice", credits=1000) -> str:
@@ -324,6 +353,20 @@ def test_admin_bypass_disabled_via_env_returns_403(client, monkeypatch) -> None:
     # /admin/* still accepts the admin token regardless of this flag.
     list_resp = client.get("/admin/users", headers=_admin())
     assert list_resp.status_code == 200
+
+
+def test_site_service_token_bypasses_legacy_billing_when_admin_bypass_is_disabled(
+    client, monkeypatch
+) -> None:
+    monkeypatch.setenv("BILLING_ADMIN_BYPASS", "0")
+    resp = client.post(
+        "/v1/cezi/ask",
+        headers=_service(),
+        json={"user_id": "org_request", "question": "ok?", "character": "合"},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.headers.get("X-Charged-Credits") is None
+    assert resp.get_json()["usage"]["node_count"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +525,7 @@ def test_user_id_mismatch_returns_403(client) -> None:
 
 def test_llm_usage_aggregates_into_ledger_meta(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_API_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("XUANXUE_SERVICE_TOKEN", SERVICE_TOKEN)
     monkeypatch.setenv("BILLING_DB_PATH", str(tmp_path / "billing.db"))
     monkeypatch.setenv("BILLING_RATE_LIMIT_PER_MIN", "1000")
     app = create_app(
@@ -501,6 +545,12 @@ def test_llm_usage_aggregates_into_ledger_meta(tmp_path, monkeypatch) -> None:
         json={"question": "Q", "character": "合"},
     )
     assert resp.status_code == 200, resp.get_json()
+    usage = resp.get_json()["usage"]
+    assert usage["prompt_tokens"] == 370
+    assert usage["cached_tokens"] == 70
+    assert usage["completion_tokens"] == 175
+    assert usage["reasoning_tokens"] == 35
+    assert usage["by_model"]["stub-model"]["calls"] == 3
 
     # The charge ledger row should now carry aggregated llm_usage.
     ledger = client.get(
@@ -514,6 +564,9 @@ def test_llm_usage_aggregates_into_ledger_meta(tmp_path, monkeypatch) -> None:
     assert meta["llm_usage"]["prompt_tokens"] == 120 + 200 + 50
     assert meta["llm_usage"]["completion_tokens"] == 60 + 90 + 25
     assert meta["llm_usage"]["total_tokens"] == 545
+    assert meta["llm_usage"]["cached_tokens"] == 70
+    assert meta["llm_usage"]["reasoning_tokens"] == 35
+    assert meta["llm_usage"]["by_model"]["stub-model"]["calls"] == 3
     assert meta["duration_ms"] >= 0
 
 

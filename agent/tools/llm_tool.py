@@ -86,9 +86,10 @@ def _emit_stub_stream(content: str, on_delta: Callable[[Dict[str, str]], None]) 
 
 def _stream_sse_response(
     resp: Any, on_delta: Optional[Callable[[Dict[str, str]], None]]
-) -> tuple[str, str]:
+) -> tuple[str, str, Optional[Dict[str, Any]]]:
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
+    usage: Optional[Dict[str, Any]] = None
     for raw_line in resp:
         line = raw_line.decode("utf-8").strip()
         if not line or not line.startswith("data:"):
@@ -100,6 +101,9 @@ def _stream_sse_response(
             payload = json.loads(data)
         except json.JSONDecodeError:
             continue
+        chunk_usage = payload.get("usage") if isinstance(payload, dict) else None
+        if isinstance(chunk_usage, dict):
+            usage = chunk_usage
         choice = (payload.get("choices") or [{}])[0]
         delta = choice.get("delta") or {}
         content_delta = delta.get("content") or ""
@@ -110,7 +114,7 @@ def _stream_sse_response(
             reasoning_parts.append(reasoning_delta)
         if on_delta and (content_delta or reasoning_delta):
             on_delta({"content": content_delta, "reasoning_content": reasoning_delta})
-    return "".join(content_parts), "".join(reasoning_parts)
+    return "".join(content_parts), "".join(reasoning_parts), usage
 
 
 def _do_llm_api_call(
@@ -143,6 +147,7 @@ def _do_llm_api_call(
     }
     if stream:
         payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
     data = json.dumps(payload).encode("utf-8")
     auth_value = f"{authorization_scheme} {api_key}" if authorization_scheme else api_key
     req = urllib.request.Request(
@@ -176,19 +181,22 @@ def _do_llm_api_call(
             )
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 if stream:
-                    content, reasoning_content = _stream_sse_response(resp, on_delta)
-                    body = json.dumps(
-                        {
-                            "choices": [
-                                {
-                                    "message": {
-                                        "content": content,
-                                        "reasoning": reasoning_content,
-                                    }
-                                }
-                            ]
-                        }
+                    content, reasoning_content, stream_usage = _stream_sse_response(
+                        resp, on_delta
                     )
+                    assembled: Dict[str, Any] = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": content,
+                                    "reasoning": reasoning_content,
+                                }
+                            }
+                        ]
+                    }
+                    if stream_usage:
+                        assembled["usage"] = stream_usage
+                    body = json.dumps(assembled)
                 else:
                     body = resp.read().decode("utf-8")
             last_err = None
@@ -236,17 +244,31 @@ def _do_llm_api_call(
     # without changing this function's return signature.
     usage = parsed.get("usage") if isinstance(parsed, dict) else None
     if isinstance(usage, dict):
-        emit_event(
-            event_sink,
-            {
-                "type": "llm_usage",
-                "node": node_label,
-                "model": model_name,
-                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
-                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
-                "total_tokens": int(usage.get("total_tokens", 0) or 0),
-            },
-        )
+        prompt_details = usage.get("prompt_tokens_details")
+        if not isinstance(prompt_details, dict):
+            prompt_details = usage.get("input_tokens_details")
+        if not isinstance(prompt_details, dict):
+            prompt_details = {}
+        completion_details = usage.get("completion_tokens_details")
+        if not isinstance(completion_details, dict):
+            completion_details = usage.get("output_tokens_details")
+        if not isinstance(completion_details, dict):
+            completion_details = {}
+        usage_event = {
+            "type": "llm_usage",
+            "node": node_label,
+            "model": model_name,
+            "prompt_tokens": int(
+                usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+            ),
+            "completion_tokens": int(
+                usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+            ),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "cached_tokens": int(prompt_details.get("cached_tokens", 0) or 0),
+            "reasoning_tokens": int(completion_details.get("reasoning_tokens", 0) or 0),
+        }
+        emit_event(event_sink, usage_event)
 
     return content, reasoning_content, None
 

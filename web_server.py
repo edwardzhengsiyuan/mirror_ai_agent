@@ -296,6 +296,11 @@ def create_app(
         billing_service,
         billing_pricing,
         admin_token_getter=lambda: os.environ.get("DEMO_API_TOKEN", ""),
+        service_token_getter=lambda: (
+            os.environ.get("XUANXUE_SERVICE_TOKEN")
+            or os.environ.get("MINGSHU_SERVICE_TOKEN")
+            or ""
+        ),
     )
 
     stripe_gateway = StripeGateway.from_env()
@@ -367,9 +372,12 @@ def create_app(
             "variant_params": list(variant_params or []),
             "llm_usage": {
                 "prompt_tokens": 0,
+                "cached_tokens": 0,
                 "completion_tokens": 0,
+                "reasoning_tokens": 0,
                 "total_tokens": 0,
                 "node_count": 0,
+                "by_model": {},
             },
             "started_perf": None,
         }
@@ -393,10 +401,35 @@ def create_app(
             if event.get("type") != "llm_usage":
                 return
             usage = state["llm_usage"]
-            usage["prompt_tokens"] += int(event.get("prompt_tokens", 0) or 0)
-            usage["completion_tokens"] += int(event.get("completion_tokens", 0) or 0)
-            usage["total_tokens"] += int(event.get("total_tokens", 0) or 0)
+            prompt_tokens = int(event.get("prompt_tokens", 0) or 0)
+            cached_tokens = int(event.get("cached_tokens", 0) or 0)
+            completion_tokens = int(event.get("completion_tokens", 0) or 0)
+            reasoning_tokens = int(event.get("reasoning_tokens", 0) or 0)
+            total_tokens = int(event.get("total_tokens", 0) or 0)
+            usage["prompt_tokens"] += prompt_tokens
+            usage["cached_tokens"] += cached_tokens
+            usage["completion_tokens"] += completion_tokens
+            usage["reasoning_tokens"] += reasoning_tokens
+            usage["total_tokens"] += total_tokens or prompt_tokens + completion_tokens
             usage["node_count"] += 1
+            model = str(event.get("model") or "unknown").strip() or "unknown"
+            model_usage = usage["by_model"].setdefault(
+                model,
+                {
+                    "prompt_tokens": 0,
+                    "cached_tokens": 0,
+                    "completion_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 0,
+                    "calls": 0,
+                },
+            )
+            model_usage["prompt_tokens"] += prompt_tokens
+            model_usage["cached_tokens"] += cached_tokens
+            model_usage["completion_tokens"] += completion_tokens
+            model_usage["reasoning_tokens"] += reasoning_tokens
+            model_usage["total_tokens"] += total_tokens or prompt_tokens + completion_tokens
+            model_usage["calls"] += 1
 
         def wrap_sink(inner_sink):
             def sink(event: Dict[str, Any]) -> None:
@@ -452,6 +485,7 @@ def create_app(
             "refund": do_refund,
             "annotate": do_annotate,
             "wrap_sink": wrap_sink,
+            "usage": lambda: json.loads(json.dumps(state["llm_usage"])),
             "state": state,
         }
         if not defer_charge and not is_admin:
@@ -1727,6 +1761,7 @@ def create_app(
                 "error": bool(result.get("error", False)),
                 "failed_nodes": result.get("failed_nodes", []),
                 "skipped_nodes": result.get("skipped_nodes", []),
+                "usage": ctx["usage"](),
             }
         )
         return ctx["annotate"](response)
@@ -1802,6 +1837,7 @@ def create_app(
                 ctx["refund"]("endpoint_exception")
                 event_q.put({"type": "error", "message": str(exc)})
             finally:
+                event_q.put({"type": "usage", "usage": ctx["usage"]()})
                 if receipt is not None:
                     try:
                         balance_after = billing_service.get_balance(receipt.user_id)
@@ -1910,6 +1946,7 @@ def create_app(
                 "method": "hepan",
                 "answer": result["response"],
                 "compatibility": result["hepan"]["compatibility"],
+                "usage": ctx["usage"](),
             }
         )
         ctx["settle"]()
@@ -1989,6 +2026,7 @@ def create_app(
                 "method": "cezi",
                 "answer": result["response"],
                 "character": result["character"],
+                "usage": ctx["usage"](),
             }
         )
         ctx["settle"]()
@@ -2075,6 +2113,7 @@ def create_app(
                     "biangua": najia_result["biangua"],
                     "raw_text": najia_result["raw_text"],
                 },
+                "usage": ctx["usage"](),
             }
         )
         ctx["settle"]()
@@ -2190,6 +2229,7 @@ def create_app(
                     "liunian_infos": zwds_result["liunian_infos"],
                     "raw_text": zwds_result["raw_text"],
                 },
+                "usage": ctx["usage"](),
             }
         )
         ctx["settle"]()
