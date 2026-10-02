@@ -1,0 +1,5 @@
+# Integrity-pinned vendor assets must retain their exact upstream bytes in
+# Windows checkouts and git archives as well as Linux builds.
+web/vendor/*.js -text
+# Deployment scripts are executed by Unix shells.
+*.sh text eol=lf

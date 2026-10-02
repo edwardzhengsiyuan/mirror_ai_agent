@@ -163,9 +163,12 @@ def _do_llm_api_call(
 
     last_err = None
     body = None
-    for attempt in range(1, max_retries + 1):
+    # Preserve the legacy total-attempt budget, but disabling retries must
+    # still make the initial request instead of parsing a nonexistent body.
+    max_attempts = max(1, max_retries)
+    for attempt in range(1, max_attempts + 1):
         try:
-            _debug(f"POST {url} attempt={attempt}/{max_retries} model={model_name} node={node_label}")
+            _debug(f"POST {url} attempt={attempt}/{max_attempts} model={model_name} node={node_label}")
             emit_event(
                 event_sink,
                 {
@@ -222,7 +225,8 @@ def _do_llm_api_call(
                     "error_type": type(e).__name__,
                 },
             )
-            time.sleep(min(2 * attempt, 5))
+            if attempt < max_attempts:
+                time.sleep(min(2 * attempt, 5))
             continue
 
     if last_err is not None:
