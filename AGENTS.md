@@ -121,6 +121,13 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 - Run tests: `.venv/bin/pytest`
 - **Do not rely on system global Python** (may be restricted by PEP 668)
 
+### Production image security
+
+- The production image uses digest-pinned Python 3.12 on supported Alpine 3.23. Install tooling is pinned in `requirements-bootstrap.lock`; application dependencies remain in `requirements.lock` with hashes.
+- `pip` and `ensurepip` are removed after installation and dependency validation. Production dependencies are immutable: rebuild and redeploy the image to update them, rather than installing packages inside a running container. OS package and application distribution metadata remain available for vulnerability scans.
+- Before publishing, CI runs the complete offline suite inside the actual image and scans OS plus Python packages at **all severities**. The scanner must fail on any finding; do not add vulnerability ignores, `--ignore-unfixed`, or remove package metadata to obtain a pass. Database download and offline image scanning are separated so the downloader cannot access application contents.
+- Local HTTPS acceptance accepts `AUDIT_IMAGE` to select the exact candidate image without overwriting previous release tags. A clean scan describes known advisories at its database timestamp, not proof that unknown vulnerabilities cannot exist.
+
 ---
 
 ## Integration Guide

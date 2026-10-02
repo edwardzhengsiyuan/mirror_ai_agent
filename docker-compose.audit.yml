@@ -3,7 +3,7 @@ services:
   api:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    image: mirror-ai-audit:20261002
+    image: ${AUDIT_IMAGE:-mirror-ai-audit:20261002}
     environment:
       LLM_MODE: stub
       LLM_PLANNER_MODE: rule

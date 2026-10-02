@@ -1,16 +1,23 @@
-FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
+FROM python:3.12-alpine3.23@sha256:33a47b0a92c0766bdd77cd82bbaa4c320ce48db01a2bfe1782920ca7a16e3744
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Apply distribution security updates; the health probe needs no extra OS client.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends \
- && rm -rf /var/lib/apt/lists/*
+# Use the supported Alpine runtime without Debian's unused mount/login/systemd
+# packages; retain its package inventory so vulnerability scans remain complete.
+RUN apk upgrade --no-cache
 
-COPY requirements.lock .
-RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY requirements-bootstrap.lock requirements.lock ./
+# The base image's installer has separate advisories from application packages.
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements-bootstrap.lock \
+ && python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
+ && python -m pip check \
+ && python -m pip uninstall --yes pip \
+ && python -c "import ensurepip, pathlib, shutil; shutil.rmtree(pathlib.Path(ensurepip.__file__).parent)"
+# Dependencies are immutable at runtime. Remove the actual installer/vendor code
+# and ensurepip's old wheel, not package metadata or vulnerability scan findings.
 
 COPY . .
 
