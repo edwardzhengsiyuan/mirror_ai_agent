@@ -118,7 +118,7 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 - Create: `python3 -m venv .venv`
 - Install: `.venv/bin/pip install --require-hashes -r requirements.lock`
 - `requirements.txt` declares direct dependencies; regenerate `requirements.lock` with `pip-compile --generate-hashes --no-emit-index-url --output-file requirements.lock requirements.txt` and run dependency audits before updates.
-- Run tests: `.venv/bin/pytest`
+- Test tools are separate: install `requirements-test.lock` with `--require-hashes` before running `.venv/bin/pytest`. Regenerate that lock from `requirements-test.txt` with the same pip-compile options. Production installs only `requirements.lock`. CI mounts the separately built test tools read-only into the actual release image; pytest is absent from the release itself.
 - **Do not rely on system global Python** (may be restricted by PEP 668)
 
 ### Production image security

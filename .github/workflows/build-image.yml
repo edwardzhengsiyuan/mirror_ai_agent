@@ -37,6 +37,7 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install --require-hashes -r requirements-bootstrap.lock
           .venv/bin/python -m pip install --require-hashes -r requirements.lock
+          .venv/bin/python -m pip install --require-hashes -r requirements-test.lock
       - name: Offline regression suite
         run: .venv/bin/python -m pytest tests -m 'not llm_live' -q
       - name: Dependency vulnerability checks
@@ -44,6 +45,7 @@ jobs:
           .venv/bin/python -m pip install pip-audit==2.10.1
           .venv/bin/python -m pip_audit --require-hashes -r requirements.lock
           .venv/bin/python -m pip_audit --require-hashes -r requirements-bootstrap.lock
+          .venv/bin/python -m pip_audit --require-hashes -r requirements-test.lock
           .venv/bin/python scripts/audit_frontend.py
 
   build:
@@ -119,8 +121,15 @@ jobs:
         env:
           IMAGE: ${{ steps.meta.outputs.sha_tag }}
         run: |
+          set -euo pipefail
+          docker build --target test-tools -t mirror-test-tools .
+          helper=$(docker create mirror-test-tools)
+          trap 'docker rm -f "$helper" >/dev/null' EXIT
+          docker cp "$helper:/test-tools" "$RUNNER_TEMP/test-tools"
+          docker run --rm --network none "$IMAGE" python -c "import importlib.util; assert all(importlib.util.find_spec(m) is None for m in ('pytest', '_pytest', 'pip', 'ensurepip'))"
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
-            -e LLM_MODE=stub -e LLM_PLANNER_MODE=rule \
+            -e LLM_MODE=stub -e LLM_PLANNER_MODE=rule -e PYTHONPATH=/test-tools \
+            -v "$RUNNER_TEMP/test-tools:/test-tools:ro" \
             -v "$GITHUB_WORKSPACE/tests:/app/tests:ro" \
             -v "$GITHUB_WORKSPACE/web/app.html:/app/web/app.html:ro" \
             "$IMAGE" python -m pytest tests -m 'not llm_live' -q

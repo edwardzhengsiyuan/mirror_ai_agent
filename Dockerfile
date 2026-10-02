@@ -1,4 +1,10 @@
-FROM python:3.12-alpine3.23@sha256:33a47b0a92c0766bdd77cd82bbaa4c320ce48db01a2bfe1782920ca7a16e3744
+FROM python:3.12-alpine3.23@sha256:33a47b0a92c0766bdd77cd82bbaa4c320ce48db01a2bfe1782920ca7a16e3744 AS test-tools
+COPY requirements-bootstrap.lock requirements-test.lock /tmp/
+RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-bootstrap.lock \
+ && python -m pip install --no-cache-dir --require-hashes --target /test-tools -r /tmp/requirements-test.lock
+
+# Release does not inherit the test-tools stage.
+FROM python:3.12-alpine3.23@sha256:33a47b0a92c0766bdd77cd82bbaa4c320ce48db01a2bfe1782920ca7a16e3744 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
