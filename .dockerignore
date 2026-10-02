@@ -1,5 +1,14 @@
 .git
 .venv
+.venv*
+.tmp
+*.db
+*.db-*
+*.sqlite*
+*vouchers*.csv
+*vouchers*.md
+AUDIT*.md
+storage
 __pycache__
 .pytest_cache
 .env

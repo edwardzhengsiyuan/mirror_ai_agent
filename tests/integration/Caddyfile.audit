@@ -1,0 +1,7 @@
+{
+    auto_https disable_redirects
+}
+https://localhost:18443 {
+    tls internal
+    reverse_proxy api:8000
+}

@@ -5,3 +5,4 @@ waitress>=3.0.0
 numpy>=1.26
 pydantic>=2.0
 stripe>=15.0,<16
+cryptography>=50.0.2,<51

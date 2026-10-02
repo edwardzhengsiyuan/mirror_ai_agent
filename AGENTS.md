@@ -51,7 +51,7 @@ Backend agent for BaZi (八字, Four Pillars) Q&A: chart calculation (paipan), p
 ```bash
 # Create virtual environment
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes -r requirements.lock
 
 # Run CLI (stub mode)
 LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.json --question "How is my career this year?"
@@ -84,6 +84,11 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 | `BILLING_DB_PATH` | `<storage>/billing.db` | SQLite path for billing state |
 | `BILLING_INFLIGHT_LIMIT` | 2 | Max concurrent billable requests per user |
 | `BILLING_RATE_LIMIT_PER_MIN` | 10 | Max requests per minute per API key |
+| `AUTH_LOGIN_PER_MIN` | 20 | Login attempts per minute, separately limited by source IP and normalized email |
+| `AUTH_REGISTER_PER_MIN` | 10 | Registrations per minute per source IP, shared by both signup routes |
+| `APP_TRUSTED_PROXY_HOPS` | 0 | Trusted reverse-proxy hop count for client IP/protocol; set only when the origin is reachable exclusively through that proxy chain |
+| `APP_SECRET_KEY` | required outside stub mode | Stable random secret (at least 32 characters in production); signs sessions and derives portal-key encryption unless a dedicated key ring is configured |
+| `BILLING_KEY_ENCRYPTION_KEYS` | derived from `APP_SECRET_KEY` | Optional comma-separated Fernet keys, newest first; keep outside the database and preserve for backup recovery |
 
 **Available Models** (canonical list lives in `config/llm_routes.json`):
 - `gemini-3.1-pro-preview` (default, gptproto provider)
@@ -94,7 +99,9 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 **Note**: `LLM_MODEL_REASONING` and `LLM_MODEL_FAST` are deprecated. Use `LLM_MODEL` (global default) or the per-profile `llm_model` / `node_model_overrides` fields instead. Node-level overrides win over the global default.
 
-**Cache behavior**: Cache lookup is model-agnostic by default - changing models will still use cached outputs if prompt_config matches. Use `LLM_BYPASS_CACHE=1` or `profile.bypass_cache=true` to force re-run all nodes. See `agent/AGENTS.md` §4 for details.
+**Cache behavior**: Cache lookup is model-agnostic by default. LLM node keys include the rendered prompts (templates and consumed upstream content), input context, and chart identity. A model-only change can reuse matching outputs; template/upstream/chart changes invalidate them. Older LLM entries miss once after this change. Use `LLM_BYPASS_CACHE=1` or `profile.bypass_cache=true` to force re-run all nodes.
+
+**HTTP concurrency and streaming**: Requests modifying the same profile share an OS file lease and conflicts return `409 profile_busy`. SSE sends heartbeats every 15 seconds and bounds each client's queue to 256 events / 2 MiB. Disconnect or overflow stops delivery; the worker finishes persistence and billing in the background. Pending charges left by process termination require explicit reconciliation with `scripts/reconcile_billing.py`; see `agent/billing/AGENTS.md`.
 
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
@@ -102,7 +109,8 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 - Use the in-repo virtual environment: `.venv/`
 - Create: `python3 -m venv .venv`
-- Install: `.venv/bin/pip install -r requirements.txt`
+- Install: `.venv/bin/pip install --require-hashes -r requirements.lock`
+- `requirements.txt` declares direct dependencies; regenerate `requirements.lock` with `pip-compile --generate-hashes --no-emit-index-url --output-file requirements.lock requirements.txt` and run dependency audits before updates.
 - Run tests: `.venv/bin/pytest`
 - **Do not rely on system global Python** (may be restricted by PEP 668)
 
@@ -114,25 +122,31 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 ```python
 from agent.orchestrator import run_turn
-from agent.storage.profile_store import load_profile, save_profile
+from agent.storage.profile_store import edit_profile
 from agent.storage.conversation_store import append_event, load_recent_rounds
 from agent.storage.paths import session_paths
 import datetime as dt
 
 user_id = "u_demo"
 profile_path, convo_path = session_paths(user_id, session_id="sess_1")
-profile = load_profile(profile_path)
 
 question = "How is my career this year?"
 now = dt.datetime.now()
-history_rounds = load_recent_rounds(convo_path, 5)
-append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
-
-result = run_turn(profile, question, now=now, history_rounds=history_rounds)
-# result = {"plan", "outputs", "time_context", "response", "tool_invocations"}
-
-save_profile(profile_path, profile)
+with edit_profile(profile_path) as profile:
+    history_rounds = load_recent_rounds(convo_path, 5)
+    append_event(convo_path, {"ts": now.isoformat(), "type": "user_message", "text": question})
+    result = run_turn(profile, question, now=now, history_rounds=history_rounds)
+    # Successful context exit saves atomically; exceptions preserve the previous file.
 ```
+
+`edit_profile` shares the HTTP lease and protects the whole read/compute/save operation. Raw `load_profile` / `save_profile` remain low-level primitives and must not be combined into an unprotected concurrent editor. The lock format changed to `<canonical-profile-path>.lock`; stop old service instances before upgrading.
+
+### Storage maintenance and acceptance
+
+- Portal API keys use authenticated encryption at rest; authentication still uses SHA-256 key hashes. Run `scripts/secure_billing_keys.py --help` for offline legacy migration, consistent backup, WAL cleanup and key rotation. Old backups remain sensitive.
+- Preview conversation retention with `.venv/bin/python scripts/prune_conversations.py --storage storage --days 90`. `--apply` removes eligible logs; active profile leases and external symlinks are excluded. No automatic deletion is scheduled.
+- Reproduce TLS, secure-cookie, signed-webhook replay and SSE billing acceptance using `docker-compose.audit.yml` and `scripts/smoke_local_https.py`. This stack is local-only with synthetic keys and tmpfs data, never a production deployment.
+- `scripts/check_live_service.py --base https://YOUR_HOST` only probes public health and anonymous access boundaries. It cannot certify deployed revision, paid model execution or real payment completion.
 
 ### HTTP API
 

@@ -102,7 +102,24 @@ def ensure_node(
     )
 
     cache = profile.setdefault("node_cache", {})
-    cache_key = _cache_key_inputs(inputs)  # Model-agnostic key for lookup
+    prompt = None
+    key_inputs = inputs
+    if node not in {"PAIPAN", "TIME_CONTEXT"}:
+        try:
+            prompt = build_prompt(
+                node, cache, prompt_config=inputs.get("prompt_config", "lingyun_cat"),
+                question=inputs.get("question"), history_rounds=inputs.get("history_rounds"),
+                runtime_context=inputs,
+            )
+        except Exception as exc:
+            output = _error_output(node, exc)
+            emit_event(event_sink, {"type": "node_end", "node": node, "output": output, "error": True})
+            return output
+        # Fingerprint the actual templates and upstream content consumed by this node.
+        # Model routing stays intentionally excluded. Old LLM entries miss once.
+        key_inputs = {**inputs, "rendered_prompt": prompt,
+                      "chart_identity": {k: profile.get(k) for k in ("birth", "gender", "birth_time_unknown")}}
+    cache_key = _cache_key_inputs(key_inputs)
     inputs_hash = _hash_inputs(inputs)     # Full hash for storage reference
     inflight_key = _inflight_key(profile, node, cache_key)  # Use cache_key for dedup
 
@@ -162,16 +179,12 @@ def ensure_node(
 
     started_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
     started_ts = time.perf_counter()
-    emit_event(
-        event_sink,
-        {
-            "type": "node_start",
-            "node": node,
-            "inputs_hash": inputs_hash,
-        },
-    )
     output: Any
     try:
+        emit_event(
+            event_sink,
+            {"type": "node_start", "node": node, "inputs_hash": inputs_hash},
+        )
         if node == "PAIPAN":
             emit_event(event_sink, {"type": "tool_call", "tool": "paipan_tool", "node": node})
             output = paipan_tool(inputs)
@@ -196,15 +209,7 @@ def ensure_node(
                     lambda delta: emit_event(event_sink, {"type": "node_delta", "node": node, "delta": delta}),
                 )
         else:
-            prompt_config = inputs.get("prompt_config", "lingyun_cat")
-            prompt = build_prompt(
-                node,
-                cache,
-                prompt_config=prompt_config,
-                question=inputs.get("question"),
-                history_rounds=inputs.get("history_rounds"),
-                runtime_context=inputs,
-            )
+            assert prompt is not None
             system_prompt = prompt.get("system_prompt", "")
             user_prompt = prompt.get("user_prompt", "")
             sleep_ms = inputs.get("sleep_ms")

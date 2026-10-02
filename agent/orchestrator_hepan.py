@@ -18,6 +18,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from .events import EventSink, emit_event
+from .response import llm_output_failed, LLM_FAILURE_MESSAGE
 from .llm_config import default_model
 from .tools.hepan_tool import hepan_tool
 from .tools.llm_tool import llm_report_tool
@@ -167,10 +168,14 @@ def run_hepan_turn(
     )
     emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "HEPAN_RESPONSE"})
     response_duration_ms = int((time.perf_counter() - response_started) * 1000)
+    response_failed = llm_output_failed(response_output)
     response_text = response_output.get("content") if isinstance(response_output, dict) else ""
     if not response_text:
         score = hepan_result.get("compatibility", {}).get("score", {}).get("overall")
         response_text = f"合盘已完成，综合分数为 {score}。"
+
+    if response_failed:
+        response_text = LLM_FAILURE_MESSAGE
 
     emit_event(
         event_sink,
@@ -192,4 +197,5 @@ def run_hepan_turn(
         "time": now.isoformat(),
         "hepan": hepan_result,
         "response": response_text,
+        "error": response_failed,
     }

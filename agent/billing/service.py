@@ -18,6 +18,7 @@ double-refunding. This lets callers retry without fear.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -96,18 +97,22 @@ class BillingService:
     # rate limit (per api key, sliding 60s window)
     # ------------------------------------------------------------------
 
-    def check_rate_limit(self, scope: str) -> None:
-        if self.rate_limit_per_minute <= 0:
-            return
+    def check_rate_limit(self, scope: str, limit: Optional[int] = None) -> None:
+        limit = self.rate_limit_per_minute if limit is None else max(1, int(limit))
         now_epoch = int(time.time())
         window_start = now_epoch - 60
-        recent = self.store.count_rate_events(scope, window_start)
-        if recent >= self.rate_limit_per_minute:
-            raise RateLimitError(scope, self.rate_limit_per_minute, 60)
-        self.store.record_rate_event(scope, now_epoch)
-        # Best-effort prune of old events to keep the table small.
-        if recent == 0:
-            self.store.prune_rate_events(now_epoch - 600)
+        # Count and reserve under the same writer lock, including across processes.
+        with self.store.transaction() as conn:
+            recent = conn.execute(
+                "SELECT COUNT(*) FROM rate_events WHERE scope = ? AND ts_epoch >= ?",
+                (scope, window_start),
+            ).fetchone()[0]
+            if recent >= limit:
+                raise RateLimitError(scope, limit, 60)
+            conn.execute("INSERT INTO rate_events (scope, ts_epoch) VALUES (?, ?)",
+                         (scope, now_epoch))
+            if recent == 0:
+                conn.execute("DELETE FROM rate_events WHERE ts_epoch < ?", (now_epoch - 600,))
 
     # ------------------------------------------------------------------
     # charge / settle / refund
@@ -132,6 +137,9 @@ class BillingService:
         if amount_credits < 0:
             raise ValueError("amount_credits must be >= 0")
         request_id = request_id or str(uuid.uuid4())
+        if (not isinstance(request_id, str) or len(request_id) > 200
+                or request_id.startswith(("stripe:", "topup-")) or "::refund" in request_id):
+            raise ValueError("Invalid or reserved request_id")
         now = _now_iso()
         meta_json = self.store.to_meta_json(meta)
 
@@ -151,7 +159,8 @@ class BillingService:
                 (request_id,),
             ).fetchone()
             if existing is not None:
-                raise DuplicateRequestError(request_id, int(existing["balance_after"]))
+                # Never expose another account's historical balance on collision.
+                raise DuplicateRequestError(request_id, int(user_row["balance_credits"]))
 
             inflight_n = conn.execute(
                 "SELECT COUNT(*) AS n FROM inflight WHERE user_id = ?",
@@ -165,15 +174,10 @@ class BillingService:
                 today_floor = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT00:00:00.000000Z")
                 charged_today = conn.execute(
                     "SELECT COALESCE(SUM(amount_credits), 0) AS s FROM ledger"
-                    " WHERE user_id = ? AND kind = 'charge' AND ts >= ?",
+                    " WHERE user_id = ? AND kind = 'charge' AND status != 'refunded' AND ts >= ?",
                     (user_id, today_floor),
                 ).fetchone()["s"]
-                refunded_today = conn.execute(
-                    "SELECT COALESCE(SUM(amount_credits), 0) AS s FROM ledger"
-                    " WHERE user_id = ? AND kind = 'refund' AND ts >= ?",
-                    (user_id, today_floor),
-                ).fetchone()["s"]
-                used_today = int(charged_today) - int(refunded_today)
+                used_today = int(charged_today)
                 if used_today + int(amount_credits) > int(daily_limit):
                     raise DailyLimitExceededError(
                         user_id,
@@ -239,7 +243,7 @@ class BillingService:
             return False
         return self.store.update_ledger_meta(request_id, patch)
 
-    def settle(self, request_id: str) -> Optional[ChargeReceipt]:
+    def settle(self, request_id: str, *, resolution_reason: Optional[str] = None) -> Optional[ChargeReceipt]:
         """Mark a pending charge as settled. Idempotent."""
         with self.store.transaction() as conn:
             row = conn.execute(
@@ -249,6 +253,10 @@ class BillingService:
             ).fetchone()
             if row is None:
                 return None
+            if resolution_reason is not None:
+                if row["status"] != "pending":
+                    raise ValueError("Only pending transactions can be manually resolved")
+                self._record_resolution(conn, request_id, "settle", resolution_reason)
             if row["status"] == "pending":
                 conn.execute(
                     "UPDATE ledger SET status = 'settled' WHERE request_id = ?"
@@ -262,13 +270,14 @@ class BillingService:
             endpoint=row["endpoint"] or "",
             amount_credits=int(row["amount_credits"]),
             balance_after=int(row["balance_after"]),
-            status="settled",
+            status="settled" if row["status"] == "pending" else row["status"],
         )
 
     def refund(
         self,
         request_id: str,
         reason: Optional[str] = None,
+        *, resolution_reason: Optional[str] = None,
     ) -> Optional[ChargeReceipt]:
         """Reverse a charge.
 
@@ -285,21 +294,32 @@ class BillingService:
             ).fetchone()
             if row is None:
                 return None
+            if resolution_reason is not None:
+                if row["status"] != "pending":
+                    raise ValueError("Only pending transactions can be manually resolved")
+                self._record_resolution(conn, request_id, "refund", resolution_reason)
 
             already_refunded = conn.execute(
-                "SELECT balance_after FROM ledger WHERE request_id = ?",
+                "SELECT balance_after, user_id, kind FROM ledger WHERE request_id = ?",
                 (refund_request_id,),
             ).fetchone()
-            if already_refunded is not None:
+            if row["status"] == "refunded":
+                balance = conn.execute("SELECT balance_credits FROM users WHERE user_id = ?",
+                                       (row["user_id"],)).fetchone()[0]
                 conn.execute("DELETE FROM inflight WHERE request_id = ?", (request_id,))
                 return ChargeReceipt(
                     request_id=request_id,
                     user_id=row["user_id"],
                     endpoint=row["endpoint"] or "",
                     amount_credits=int(row["amount_credits"]),
-                    balance_after=int(already_refunded["balance_after"]),
+                    balance_after=int(balance),
                     status="refunded",
                 )
+
+            if already_refunded is not None:
+                # Legacy clients could reserve the derived ID before it was protected.
+                # Do not mistake that unrelated row for a successful refund.
+                refund_request_id = f"{request_id}::refund:{uuid.uuid4().hex}"
 
             amount = int(row["amount_credits"])
             now = _now_iso()
@@ -346,8 +366,23 @@ class BillingService:
         )
 
     # ------------------------------------------------------------------
-    # topup
+    # manual recovery / topup
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _record_resolution(conn, request_id: str, action: str, reason: str) -> None:
+        if not reason or not reason.strip():
+            raise ValueError("A reconciliation reason is required")
+        row = conn.execute("SELECT meta_json FROM ledger WHERE request_id = ?", (request_id,)).fetchone()
+        try:
+            meta = json.loads(row["meta_json"] or "{}")
+        except (ValueError, TypeError):
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["manual_resolution"] = {"action": action, "reason": reason.strip(), "ts": _now_iso()}
+        conn.execute("UPDATE ledger SET meta_json = ? WHERE request_id = ?",
+                     (json.dumps(meta, ensure_ascii=False), request_id))
 
     def topup(
         self,
@@ -369,10 +404,13 @@ class BillingService:
                 raise UnknownUserError(user_id)
 
             existing = conn.execute(
-                "SELECT balance_after, kind FROM ledger WHERE request_id = ?",
+                "SELECT balance_after, kind, user_id, amount_credits FROM ledger WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
             if existing is not None:
+                if (existing["kind"] != "topup" or existing["user_id"] != user_id
+                        or int(existing["amount_credits"]) != int(amount_credits)):
+                    raise ValueError("request_id conflicts with a different transaction")
                 raise DuplicateRequestError(request_id, int(existing["balance_after"]))
 
             conn.execute(
@@ -427,8 +465,8 @@ class BillingService:
         Args:
             email / password_hash: optional auth credentials. Passed through to
                 the store, which enforces the partial UNIQUE index on email.
-            store_first_key_plaintext: when True, persist the first issued
-                API key's plaintext on the row so the dashboard can re-display
+            store_first_key_plaintext: compatibility flag; when True, encrypt
+                the first API key in storage so the dashboard can re-display
                 it. Defaults to False to preserve the historical behaviour of
                 the curl-only ``/v1/register`` endpoint.
         """
@@ -479,16 +517,16 @@ class BillingService:
         """Revoke every existing key for ``user_id`` and mint a fresh one.
 
         Used by the dashboard's "reset API key" button. The plaintext is
-        stored on the new row so the dashboard can re-display it later.
+        encrypted on the new row so the dashboard can re-display it later.
         Returns the new plaintext key (only readable here at issue time).
         """
         if self.store.get_user(user_id) is None:
             raise UnknownUserError(user_id)
-        self.store.revoke_all_user_api_keys(user_id)
         plaintext, _ = self.store.issue_api_key(
             user_id,
             label or "primary",
             store_plaintext=True,
+            revoke_existing=True,
         )
         return plaintext
 

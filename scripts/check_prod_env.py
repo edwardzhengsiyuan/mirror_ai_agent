@@ -240,6 +240,34 @@ def check_observability(env: Dict[str, str]) -> List[CheckResult]:
     return []
 
 
+def check_session_and_proxy(env: Dict[str, str]) -> List[CheckResult]:
+    issues: List[CheckResult] = []
+    secret = (env.get("APP_SECRET_KEY") or "").strip()
+    if len(secret) < 32:
+        issues.append(("error", "APP_SECRET_KEY must be a stable, random secret of at least 32 characters."))
+    if (env.get("APP_COOKIE_SECURE") or "1").lower() in {"0", "false", "no"}:
+        issues.append(("error", "APP_COOKIE_SECURE must be enabled for HTTPS production sessions."))
+    for name, default, minimum in (("APP_TRUSTED_PROXY_HOPS", "0", 0),
+                                    ("AUTH_LOGIN_PER_MIN", "20", 1),
+                                    ("AUTH_REGISTER_PER_MIN", "10", 1)):
+        try:
+            value = int(env.get(name, default))
+            if value < minimum:
+                raise ValueError
+        except ValueError:
+            issues.append(("error", name + " must be a valid integer within its supported range."))
+    keys = (env.get("BILLING_KEY_ENCRYPTION_KEYS") or "").strip()
+    if keys:
+        import base64
+        try:
+            if any(len(base64.b64decode(key.strip(), altchars=b"-_", validate=True)) != 32
+                   for key in keys.split(",")):
+                raise ValueError
+        except (ValueError, TypeError):
+            issues.append(("error", "BILLING_KEY_ENCRYPTION_KEYS must contain comma-separated Fernet keys."))
+    return issues
+
+
 CHECKS = (
     check_admin_token,
     check_llm_mode,
@@ -247,6 +275,7 @@ CHECKS = (
     check_stripe,
     check_admin_bypass,
     check_observability,
+    check_session_and_proxy,
 )
 
 
@@ -287,7 +316,7 @@ def main(argv=None) -> int:
     errors, warnings = run_checks(env)
 
     if not errors and not warnings:
-        print("[check_prod_env] all checks passed - safe to deploy.")
+        print("[check_prod_env] configuration checks passed; live service acceptance is still required.")
         return 0
 
     if warnings:

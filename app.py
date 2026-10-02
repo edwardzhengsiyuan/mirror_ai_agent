@@ -6,7 +6,7 @@ import argparse
 import json
 
 from agent.orchestrator import run_turn
-from agent.storage.profile_store import load_profile, save_profile
+from agent.storage.profile_store import edit_profile
 
 
 def main() -> None:
@@ -15,9 +15,8 @@ def main() -> None:
     parser.add_argument("--question", required=True)
     args = parser.parse_args()
 
-    profile = load_profile(args.profile)
-    result = run_turn(profile, args.question)
-    save_profile(args.profile, profile)
+    with edit_profile(args.profile) as profile:
+        result = run_turn(profile, args.question)
 
     print(result["response"])
 

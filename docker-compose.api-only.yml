@@ -8,6 +8,8 @@ x-logging: &default-logging
 
 services:
   bazi-agent-api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build: .
     container_name: bazi-agent-api
     env_file:

@@ -14,7 +14,7 @@ Cookie attributes:
     HttpOnly  -- prevents JS access (XSS mitigation).
     Secure    -- HTTPS-only. Disabled when ``cookie_secure=False`` for
                  local http://localhost dev.
-    SameSite=Lax -- blocks cross-site cookie leakage on top-level GETs.
+    SameSite=Lax -- withholds cookies on cross-site POSTs; allows top-level GETs.
 
 Threading model:
     :class:`SessionManager` instances are immutable after construction;
@@ -25,6 +25,9 @@ Threading model:
 from __future__ import annotations
 
 import functools
+import hashlib
+import secrets
+import time
 from typing import Any, Callable, Optional
 
 from flask import Flask, Response, current_app, g, jsonify, request
@@ -36,12 +39,12 @@ APP_EXTENSION_KEY = "auth_session_manager"
 
 
 class SessionManager:
-    """Sign + verify single-string session payloads via itsdangerous.
+    """Sign and verify minimal session payloads via itsdangerous.
 
-    The payload is always the user_id. Anything else the dashboard needs
-    (email, balance, etc.) is fetched from the billing store on each
-    request, so a stolen cookie cannot escalate beyond impersonating a
-    single user_id during the TTL.
+    Production payloads contain a user ID, credential version, and random nonce.
+    Version checks invalidate sessions after password changes; revocation callbacks
+    invalidate individual tokens on logout. Standalone callers without a version
+    callback retain the legacy user-ID payload. Account details stay in the store.
     """
 
     def __init__(
@@ -53,6 +56,9 @@ class SessionManager:
         cookie_secure: bool = True,
         cookie_samesite: str = "Lax",
         salt: str = "mirror-ai-session-v1",
+        identity_version: Optional[Callable[[str], Optional[str]]] = None,
+        is_revoked: Optional[Callable[[str], bool]] = None,
+        revoke: Optional[Callable[[str, int], None]] = None,
     ) -> None:
         if not secret_key:
             raise ValueError("SessionManager requires a non-empty secret_key")
@@ -61,11 +67,20 @@ class SessionManager:
         self.cookie_secure = bool(cookie_secure)
         self.cookie_samesite = cookie_samesite
         self._serializer = URLSafeTimedSerializer(secret_key, salt=salt)
+        self._identity_version = identity_version
+        self._is_revoked = is_revoked
+        self._revoke = revoke
 
     def sign(self, user_id: str) -> str:
         """Return the cookie value for ``user_id``. Opaque to the caller."""
         if not user_id:
             raise ValueError("user_id must not be empty")
+        if self._identity_version is not None:
+            version = self._identity_version(user_id)
+            if version is None:
+                raise ValueError("Account is not active")
+            return self._serializer.dumps({"user_id": user_id, "version": version,
+                                           "nonce": secrets.token_urlsafe(24)})
         return self._serializer.dumps(user_id)
 
     def load(self, token: str) -> Optional[str]:
@@ -82,6 +97,18 @@ class SessionManager:
             return None
         except BadSignature:
             return None
+        if self._is_revoked and self._is_revoked(hashlib.sha256(token.encode()).hexdigest()):
+            return None
+        if self._identity_version is not None:
+            if not isinstance(value, dict):
+                return None
+            user_id, version = value.get("user_id"), value.get("version")
+            if not isinstance(user_id, str) or not isinstance(version, str):
+                return None
+            current = self._identity_version(user_id)
+            if current is None or not secrets.compare_digest(current, version):
+                return None
+            return user_id
         if not isinstance(value, str) or not value:
             return None
         return value
@@ -101,6 +128,10 @@ class SessionManager:
 
     def clear_cookie(self, response: Response) -> None:
         """Invalidate any existing cookie on the client. Logout entry point."""
+        token = request.cookies.get(self.cookie_name)
+        if token and self._revoke and self.load(token) is not None:
+            self._revoke(hashlib.sha256(token.encode()).hexdigest(),
+                         int(time.time()) + self.max_age_seconds)
         response.set_cookie(
             self.cookie_name,
             "",

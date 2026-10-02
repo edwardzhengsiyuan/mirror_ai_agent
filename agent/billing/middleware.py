@@ -248,6 +248,8 @@ class BillingHelpers:
             )
         except UnknownUserError as e:
             return None, _api_error(404, "unknown_user", str(e))
+        except ValueError as e:
+            return None, _api_error(400, "invalid_request_id", str(e))
 
     def settle(self, request_id: str) -> Optional[ChargeReceipt]:
         return self.service.settle(request_id)

@@ -342,7 +342,13 @@ def llm_report_tool(
     mode = _env("LLM_MODE", "auto")
     api_base = route.get("api_base") or _env_any(["LLM_API_BASE", "OPENAI_API_BASE"])
     api_key = route.get("api_key") or _env_any(["LLM_API_KEY", "OPENAI_API_KEY"])
-    if mode == "stub" or not api_base or not api_key:
+    if mode != "stub" and (not api_base or not api_key):
+        message = "LLM provider credentials or endpoint are not configured"
+        emit_event(event_sink, {"type": "llm_error", "node": node_label,
+                               "error": message, "error_type": "ConfigurationError"})
+        return {"type": "error", "content": f"[LLM_ERROR:{node_label}] {message}",
+                "error": True, "reasoning_content": "", "structured": None}
+    if mode == "stub":
         _debug(
             f"stub response for {node_label} mode={mode} api_base={api_base} "
             f"api_key={'set' if api_key else 'missing'}"

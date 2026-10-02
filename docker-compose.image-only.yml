@@ -8,6 +8,8 @@ x-logging: &default-logging
 
 services:
   bazi-agent-api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # Image-only deployment: this compose file is copied to the server and
     # uses a prebuilt image from a private registry. The server no longer
     # needs a git checkout or Docker build context.

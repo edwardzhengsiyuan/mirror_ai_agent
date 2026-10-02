@@ -32,6 +32,7 @@ def _ok_env(**overrides) -> Dict[str, str]:
     env = {
         "DEMO_API_TOKEN": "qXc8GkP9aZ4tYwH3sFvJ2nB7mLc6E5RpTuVxKjNbMwQ",
         "LLM_MODE": "",
+        "APP_SECRET_KEY": "test-stable-secret-with-at-least-32-chars",
         "GPTPROTO_API_KEY": "sk-real-gptproto-key-here",
         "QWEN_API_KEY": "sk-real-qwen-key-here",
         "STRIPE_MODE": "live",
@@ -55,6 +56,16 @@ def test_clean_env_passes() -> None:
     errors, warnings = check_prod_env.run_checks(_ok_env())
     assert errors == [], _msgs(errors)
     assert warnings == [], _msgs(warnings)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"APP_SECRET_KEY": ""}, {"APP_COOKIE_SECURE": "0"},
+    {"APP_TRUSTED_PROXY_HOPS": "-1"}, {"AUTH_LOGIN_PER_MIN": "zero"},
+    {"BILLING_KEY_ENCRYPTION_KEYS": "invalid"},
+])
+def test_insecure_session_configuration_fails(overrides):
+    errors, _ = check_prod_env.run_checks(_ok_env(**overrides))
+    assert errors
 
 
 def test_default_admin_token_is_error() -> None:
@@ -107,7 +118,12 @@ def test_live_mode_without_live_secret_is_error() -> None:
 def test_live_mode_with_test_key_is_error() -> None:
     env = _ok_env(STRIPE_SECRET_KEY_LIVE="sk_test_wrong")
     errors, _ = check_prod_env.run_checks(env)
-    assert any("does not start with sk_live_" in m for _, m in errors)
+    assert any("STRIPE_SECRET_KEY_LIVE" in m and "sk_live_" in m and "rk_live_" in m for _, m in errors)
+
+
+def test_live_mode_accepts_restricted_live_key() -> None:
+    errors, _ = check_prod_env.run_checks(_ok_env(STRIPE_SECRET_KEY_LIVE="rk_live_valid"))
+    assert not any("STRIPE_SECRET_KEY_LIVE" in m for _, m in errors)
 
 
 def test_live_mode_with_http_success_url_is_error() -> None:
@@ -190,7 +206,7 @@ def test_main_exits_0_on_clean_env(tmp_path, capsys) -> None:
     rc = check_prod_env.main(["--env", path])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "safe to deploy" in out
+    assert "configuration checks passed" in out
 
 
 def test_main_exits_1_on_error(tmp_path, capsys) -> None:

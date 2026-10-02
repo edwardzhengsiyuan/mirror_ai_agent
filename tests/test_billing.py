@@ -36,7 +36,7 @@ from agent.billing import (
 
 @pytest.fixture
 def store(tmp_path) -> BillingStore:
-    return BillingStore(str(tmp_path / "billing.db"))
+    return BillingStore(str(tmp_path / "billing.db"), app_secret="billing-tests-secret")
 
 
 @pytest.fixture
@@ -424,9 +424,10 @@ def test_update_charge_meta_unknown_request_returns_false(service: BillingServic
 # ---------------------------------------------------------------------------
 
 
-def test_store_migrates_pre_auth_database(tmp_path) -> None:
+def test_store_migrates_pre_auth_database(tmp_path, monkeypatch) -> None:
     """A DB created before the auth feature must gain the new columns on open."""
     import sqlite3
+    monkeypatch.setenv("APP_SECRET_KEY", "migration-test-secret")
 
     db_path = str(tmp_path / "billing.db")
     # Hand-craft a database with the *original* schema (no email / password /

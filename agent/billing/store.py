@@ -21,8 +21,10 @@ import json
 import os
 import secrets
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+from .key_cipher import KeyCipher
 
 
 SCHEMA_SQL = """
@@ -47,6 +49,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_seen_at   TEXT,
     revoked        INTEGER NOT NULL DEFAULT 0,
     plaintext      TEXT,
+    ciphertext     TEXT,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
@@ -80,6 +83,12 @@ CREATE TABLE IF NOT EXISTS rate_events (
     ts_epoch  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rate_events_scope_ts ON rate_events(scope, ts_epoch);
+
+CREATE TABLE IF NOT EXISTS revoked_sessions (
+    token_hash TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_sessions_expiry ON revoked_sessions(expires_at);
 """
 
 
@@ -132,15 +141,17 @@ _POST_RELEASE_COLUMNS: Dict[str, List[Tuple[str, str]]] = {
     ],
     "api_keys": [
         ("plaintext", "TEXT"),
+        ("ciphertext", "TEXT"),
     ],
 }
 
 
 class BillingStore:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, app_secret: Optional[str] = None) -> None:
         self.db_path = db_path
+        self._key_cipher = KeyCipher.from_config(app_secret)
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             # Order matters: SCHEMA_SQL handles fresh databases and any old
             # tables that still need standalone CREATE TABLE statements;
             # _migrate_post_release_columns ALTERs old tables to add the new
@@ -151,6 +162,37 @@ class BillingStore:
             conn.executescript(POST_MIGRATION_SQL)
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
+        self.migrate_api_key_storage()
+
+    def migrate_api_key_storage(self, *, rotate: bool = False) -> int:
+        """Encrypt legacy values atomically; optionally rotate to the primary key.
+
+        Never fall back to plaintext if encryption material is absent or invalid.
+        Existing backups/WAL may retain old data: use the offline maintenance tool.
+        """
+        changed = 0
+        with self.transaction() as conn:
+            rows = conn.execute("SELECT api_key_hash, revoked, plaintext, ciphertext FROM api_keys"
+                                " WHERE plaintext IS NOT NULL OR ciphertext IS NOT NULL").fetchall()
+            for row in rows:
+                if row["revoked"]:
+                    conn.execute("UPDATE api_keys SET plaintext = NULL, ciphertext = NULL WHERE api_key_hash = ?",
+                                 (row["api_key_hash"],))
+                    changed += 1
+                    continue
+                if self._key_cipher is None:
+                    raise ValueError("Stored portal keys require BILLING_KEY_ENCRYPTION_KEYS or APP_SECRET_KEY")
+                value = (self._key_cipher.decrypt(row["ciphertext"]) if row["ciphertext"]
+                         else row["plaintext"])
+                if not secrets.compare_digest(hash_api_key(value), row["api_key_hash"]):
+                    raise ValueError("Stored API key integrity check failed")
+                if row["plaintext"] is not None or rotate:
+                    encrypted = (self._key_cipher.rotate(row["ciphertext"]) if row["ciphertext"]
+                                 else self._key_cipher.encrypt(value))
+                    conn.execute("UPDATE api_keys SET plaintext = NULL, ciphertext = ? WHERE api_key_hash = ?",
+                                 (encrypted, row["api_key_hash"]))
+                    changed += 1
+        return changed
 
     def _migrate_post_release_columns(self, conn: sqlite3.Connection) -> None:
         """Add columns that were introduced after the initial SCHEMA_SQL.
@@ -181,6 +223,7 @@ class BillingStore:
         conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA secure_delete = ON")
         return conn
 
     @contextmanager
@@ -251,7 +294,7 @@ class BillingStore:
         return user
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 f"SELECT {self._USER_COLUMNS} FROM users WHERE user_id = ?",
                 (user_id,),
@@ -261,7 +304,7 @@ class BillingStore:
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         if not email:
             return None
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 f"SELECT {self._USER_COLUMNS} FROM users WHERE email = ?",
                 (email,),
@@ -269,7 +312,7 @@ class BillingStore:
         return dict(row) if row else None
 
     def list_users(self, limit: int = 200) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 f"SELECT {self._USER_COLUMNS}"
                 " FROM users ORDER BY created_at DESC LIMIT ?",
@@ -303,25 +346,33 @@ class BillingStore:
         user_id: str,
         label: Optional[str] = None,
         store_plaintext: bool = False,
+        revoke_existing: bool = False,
     ) -> Tuple[str, str]:
         """Issue a fresh key. Returns ``(plaintext, key_hash)``.
 
         Args:
             user_id: owner.
             label: human-readable name (e.g. ``"primary"``).
-            store_plaintext: when True, persist the plaintext on the row so
-                the dashboard can re-display it later. When False (legacy
+            store_plaintext: compatibility flag; when True, retain an ENCRYPTED
+                value so the dashboard can re-display it. When False (legacy
                 /v1/register flow, /v1/api_keys [POST]), the plaintext is
                 only returned to the caller once and never stored.
         """
         plaintext = generate_api_key()
         key_hash = hash_api_key(plaintext)
         now = _now_iso()
-        stored = plaintext if store_plaintext else None
+        if store_plaintext and self._key_cipher is None:
+            raise ValueError("Portal keys require BILLING_KEY_ENCRYPTION_KEYS or APP_SECRET_KEY")
+        stored = self._key_cipher.encrypt(plaintext) if store_plaintext else None
         with self.transaction() as conn:
+            if revoke_existing:
+                conn.execute(
+                    "UPDATE api_keys SET revoked = 1, plaintext = NULL, ciphertext = NULL WHERE user_id = ?",
+                    (user_id,),
+                )
             conn.execute(
                 "INSERT INTO api_keys (api_key_hash, user_id, label, created_at,"
-                " last_seen_at, revoked, plaintext)"
+                " last_seen_at, revoked, ciphertext)"
                 " VALUES (?, ?, ?, ?, NULL, 0, ?)",
                 (key_hash, user_id, label, now, stored),
             )
@@ -331,7 +382,7 @@ class BillingStore:
         if not plaintext:
             return None
         key_hash = hash_api_key(plaintext)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT k.api_key_hash, k.user_id, k.label, k.created_at,"
                 " k.last_seen_at, k.revoked, u.status AS user_status,"
@@ -352,7 +403,7 @@ class BillingStore:
     def revoke_api_key(self, key_hash: str) -> bool:
         with self.transaction() as conn:
             cur = conn.execute(
-                "UPDATE api_keys SET revoked = 1, plaintext = NULL"
+                "UPDATE api_keys SET revoked = 1, plaintext = NULL, ciphertext = NULL"
                 " WHERE api_key_hash = ? AND revoked = 0",
                 (key_hash,),
             )
@@ -366,16 +417,16 @@ class BillingStore:
         """
         with self.transaction() as conn:
             cur = conn.execute(
-                "UPDATE api_keys SET revoked = 1, plaintext = NULL"
+                "UPDATE api_keys SET revoked = 1, plaintext = NULL, ciphertext = NULL"
                 " WHERE user_id = ? AND revoked = 0",
                 (user_id,),
             )
             return cur.rowcount
 
     def list_api_keys(self, user_id: str) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, plaintext"
+                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, NULL AS plaintext"
                 " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
                 (user_id,),
             ).fetchall()
@@ -384,17 +435,29 @@ class BillingStore:
     def get_current_user_api_key(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Return the most recent non-revoked key row for ``user_id``.
 
-        Includes ``plaintext`` when persisted (auth-flow keys). The dashboard
+        Decrypts ``plaintext`` only for this explicit portal read. The dashboard
         shows it directly; legacy keys (curl-only registration) show as masked.
         """
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, plaintext"
+                "SELECT api_key_hash, label, created_at, last_seen_at, revoked, ciphertext"
                 " FROM api_keys WHERE user_id = ? AND revoked = 0"
                 " ORDER BY created_at DESC LIMIT 1",
                 (user_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        result = dict(row)
+        ciphertext = result.pop("ciphertext")
+        result["plaintext"] = None
+        if ciphertext:
+            if self._key_cipher is None:
+                raise ValueError("API key encryption is not configured")
+            value = self._key_cipher.decrypt(ciphertext)
+            if not secrets.compare_digest(hash_api_key(value), result["api_key_hash"]):
+                raise ValueError("Stored API key integrity check failed")
+            result["plaintext"] = value
+        return result
 
     # ------------------------------------------------------------------
     # ledger writes (low level — service.py builds higher-level flows)
@@ -436,7 +499,7 @@ class BillingStore:
         return True
 
     def find_ledger(self, request_id: str) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT id, user_id, request_id, endpoint, kind, amount_credits,"
                 " balance_after, status, meta_json, ts FROM ledger WHERE request_id = ?",
@@ -460,7 +523,7 @@ class BillingStore:
             params.append(since_iso)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(max(1, int(limit)))
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT id, user_id, request_id, endpoint, kind, amount_credits,"
                 " balance_after, status, meta_json, ts FROM ledger"
@@ -475,7 +538,7 @@ class BillingStore:
     # ------------------------------------------------------------------
 
     def count_inflight(self, user_id: str) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS n FROM inflight WHERE user_id = ?",
                 (user_id,),
@@ -498,7 +561,7 @@ class BillingStore:
             )
 
     def count_rate_events(self, scope: str, since_epoch: int) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS n FROM rate_events WHERE scope = ? AND ts_epoch >= ?",
                 (scope, int(since_epoch)),
@@ -524,3 +587,24 @@ class BillingStore:
             return json.dumps(meta, ensure_ascii=False, sort_keys=True)
         except (TypeError, ValueError):
             return json.dumps({"_serialize_error": True})
+
+    def session_revoked(self, token_hash: str) -> bool:
+        with closing(self._connect()) as conn:
+            return conn.execute("SELECT 1 FROM revoked_sessions WHERE token_hash = ?",
+                                (token_hash,)).fetchone() is not None
+
+    def list_pending_charges(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT l.*, i.started_at FROM ledger l LEFT JOIN inflight i ON i.request_id = l.request_id"
+                " WHERE l.kind = 'charge' AND l.status = 'pending' ORDER BY l.ts LIMIT ?",
+                (max(1, min(10000, int(limit))),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def revoke_session(self, token_hash: str, expires_at: int) -> None:
+        import time
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM revoked_sessions WHERE expires_at < ?", (int(time.time()),))
+            conn.execute("INSERT OR REPLACE INTO revoked_sessions VALUES (?, ?)",
+                         (token_hash, expires_at))

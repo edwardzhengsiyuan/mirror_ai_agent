@@ -119,7 +119,8 @@ def _fake_najia_turn(
     }
 
 
-def test_web_api_flow(tmp_path) -> None:
+def test_web_api_flow(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "legacy-test-admin")
     def fake_run_turn(profile, question, now=None, event_sink=None, stream=False, history_rounds=None):
         if event_sink:
             event_sink({"type": "llm_prompt", "node": "OVERALL", "system_prompt": "sys", "user_prompt": "user"})
@@ -140,6 +141,7 @@ def test_web_api_flow(tmp_path) -> None:
 
     app = create_app(run_turn_func=fake_run_turn, storage_root=str(tmp_path))
     client = app.test_client()
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer legacy-test-admin"
 
     resp = client.post(
         "/api/users",
@@ -184,11 +186,12 @@ def test_web_api_flow(tmp_path) -> None:
     assert "OVERALL" in data["llm_prompts"]
 
 
-def test_models_api_uses_route_config(tmp_path) -> None:
+def test_models_api_uses_route_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "legacy-test-admin")
     app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
     client = app.test_client()
 
-    resp = client.get("/api/models")
+    resp = client.get("/api/models", headers={"Authorization": "Bearer legacy-test-admin"})
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["models"] == ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "qwen3-max"]
@@ -199,9 +202,12 @@ def test_models_api_uses_route_config(tmp_path) -> None:
     assert "claude-sonnet-4-6" not in data["models"]
 
 
-def test_profile_node_model_overrides(tmp_path) -> None:
+def test_profile_node_model_overrides(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_API_TOKEN", "legacy-test-admin")
     app = create_app(run_turn_func=_fake_turn, storage_root=str(tmp_path))
     client = app.test_client()
+
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer legacy-test-admin"
 
     resp = client.post(
         "/api/users",

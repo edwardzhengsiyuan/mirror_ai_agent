@@ -9,7 +9,7 @@ from .deps import COMMON_PREREQS
 from .events import EventSink, emit_event
 from .execution import ensure_node, run_nodes_parallel, run_tool, run_response
 from .llm_config import default_model
-from .response import compose_response
+from .response import llm_output_failed, LLM_FAILURE_MESSAGE
 
 
 def run_turn(
@@ -199,8 +199,9 @@ def run_turn(
     )
 
     response_text = response_output.get("content") if isinstance(response_output, dict) else None
-    if not response_text:
-        response_text = compose_response(question, plan_result, outputs, time_context)
+    response_failed = llm_output_failed(response_output)
+    if response_failed:
+        response_text = LLM_FAILURE_MESSAGE
 
     # Build input summary for response event
     input_summary = {
@@ -228,6 +229,8 @@ def run_turn(
         "time_context": time_context,
         "response": response_text,
         "tool_invocations": tool_invocations,
+        "error": response_failed,
+        "failed_nodes": ["RESPONSE"] if response_failed else [],
     }
 
 

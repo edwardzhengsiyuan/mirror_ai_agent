@@ -89,7 +89,7 @@ tr.disabled td { opacity: 0.55; }
     <h1>Admin Console</h1>
     <span class="pill">DEMO_API_TOKEN required</span>
   </header>
-  <div class="sub">所有动作均使用服务器配置的 <span class="kbd">DEMO_API_TOKEN</span>。Token 仅保存在浏览器 <span class="kbd">localStorage</span>，不会发往第三方。</div>
+  <div class="sub">所有动作均使用服务器配置的 <span class="kbd">DEMO_API_TOKEN</span>。Token 仅在当前页面内存中使用，刷新或关闭页面后需重新填写。</div>
 
   <div class="card">
     <h2>Admin Token</h2>
@@ -166,12 +166,19 @@ tr.disabled td { opacity: 0.55; }
 
 <script>
 const STORAGE_KEY = "bazi_admin_token";
+let adminToken = "";
+// Remove tokens retained by older versions without loading them into this page.
+try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
 const $ = (id) => document.getElementById(id);
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
 
-function getTok() { return localStorage.getItem(STORAGE_KEY) || ""; }
+function getTok() { return adminToken; }
 function setTok(t) {
-  if (t) localStorage.setItem(STORAGE_KEY, t);
-  else localStorage.removeItem(STORAGE_KEY);
+  adminToken = t;
 }
 
 function showMsg(elId, text, ok = true) {
@@ -218,18 +225,18 @@ async function refreshUsers() {
       return;
     }
     tbody.innerHTML = d.users.map(u => `
-      <tr class="${u.status === 'disabled' ? 'disabled' : ''}" data-user="${u.user_id}">
-        <td><span class="kbd">${u.user_id}</span></td>
-        <td>${u.display_name || "<i class='muted'>(无)</i>"}</td>
+      <tr class="${u.status === 'disabled' ? 'disabled' : ''}" data-user="${escapeHtml(u.user_id)}">
+        <td><span class="kbd">${escapeHtml(u.user_id)}</span></td>
+        <td>${u.display_name ? escapeHtml(u.display_name) : "<i class='muted'>(无)</i>"}</td>
         <td>${u.balance_credits}</td>
-        <td>${u.status}</td>
+        <td>${escapeHtml(u.status)}</td>
         <td>${u.daily_credits_limit ?? "<i class='muted'>无限制</i>"}</td>
         <td>${(u.created_at || "").slice(0,19).replace("T"," ")}</td>
         <td>
-          <button class="ghost" data-act="ledger" data-user="${u.user_id}">查 ledger</button>
+          <button class="ghost" data-act="ledger" data-user="${escapeHtml(u.user_id)}">查 ledger</button>
           ${u.status === 'active'
-            ? `<button class="warn" data-act="disable" data-user="${u.user_id}">停用</button>`
-            : `<button data-act="activate" data-user="${u.user_id}">启用</button>`}
+            ? `<button class="warn" data-act="disable" data-user="${escapeHtml(u.user_id)}">停用</button>`
+            : `<button data-act="activate" data-user="${escapeHtml(u.user_id)}">启用</button>`}
         </td>
       </tr>
     `).join("");
@@ -338,13 +345,13 @@ async function loadLedger() {
     tbody.innerHTML = d.rows.map(r => `
       <tr>
         <td>${(r.ts || "").slice(0,19).replace("T"," ")}</td>
-        <td><span class="kbd">${r.user_id}</span></td>
-        <td class="kind-${r.kind}">${r.kind}</td>
-        <td>${r.endpoint || "-"}</td>
+        <td><span class="kbd">${escapeHtml(r.user_id)}</span></td>
+        <td class="kind-${escapeHtml(r.kind)}">${escapeHtml(r.kind)}</td>
+        <td>${escapeHtml(r.endpoint || "-")}</td>
         <td>${r.amount_credits}</td>
         <td>${r.balance_after}</td>
-        <td>${r.status}</td>
-        <td><span class="kbd" style="font-size:11px;">${(r.request_id || "").slice(0,30)}</span></td>
+        <td>${escapeHtml(r.status)}</td>
+        <td><span class="kbd" style="font-size:11px;">${escapeHtml((r.request_id || "").slice(0,30))}</span></td>
       </tr>
     `).join("");
   } catch (e) {
@@ -356,7 +363,7 @@ $("adminToken").value = getTok();
 $("btnSaveTok").addEventListener("click", () => {
   const v = $("adminToken").value.trim();
   setTok(v);
-  showMsg("tokStatus", v ? "已保存到 localStorage" : "已清除", !!v);
+  showMsg("tokStatus", v ? "已应用于当前页面；刷新后需重新填写" : "已清除", !!v);
   if (v) { refreshUsers(); refreshPricing(); }
 });
 $("btnReveal").addEventListener("click", () => {

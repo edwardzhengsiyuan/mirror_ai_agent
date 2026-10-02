@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Bazi Agent Web</title>
     <!-- Markdown rendering -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/vendor/marked.min.js" integrity="sha384-2vpGtuKqJvFlwJqYnf/wUMuzUfhUnYBt9oay0e2yaFcq0Dh6/aEbQ8YAOeKGzlYo"></script>
+    <script src="/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL"></script>
     <style>
       :root {
         --bg: #f6f4ef;
@@ -848,6 +849,13 @@
       <div class="modal">
         <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
         <h2>设置</h2>
+        <div class="settings-section">
+          <h3>管理员访问</h3>
+          <label for="adminToken">管理员令牌（仅在当前页面内存中使用）</label>
+          <input id="adminToken" type="password" autocomplete="off" />
+          <button id="connectAdminBtn">连接</button>
+          <span id="adminConnectStatus" role="status"></span>
+        </div>
 
         <!-- User Selection Section -->
         <div class="settings-section">
@@ -964,9 +972,9 @@
       // Markdown rendering
       function renderMarkdown(text) {
         if (!text) return "";
-        if (typeof marked !== "undefined") {
+        if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
           marked.setOptions({ breaks: true, gfm: true });
-          return marked.parse(text);
+          return DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
         }
         // Fallback: escape HTML and convert newlines
         return escapeHtml(text).replace(/\n/g, "<br>");
@@ -974,7 +982,7 @@
 
       function escapeHtml(text) {
         const div = document.createElement("div");
-        div.textContent = text || "";
+        div.textContent = String(text ?? "");
         return div.innerHTML;
       }
 
@@ -1034,7 +1042,7 @@
         div.innerHTML = `
           <div class="tool-header">
             <span class="tool-icon">&#x1F527;</span>
-            <span class="tool-name">${toolName}</span>
+            <span class="tool-name">${escapeHtml(toolName)}</span>
             <span class="tool-status">处理中...</span>
           </div>
           <div class="tool-stream-content"></div>
@@ -1070,17 +1078,17 @@
         toolCard.element.innerHTML = `
           <div class="tool-header">
             <span class="tool-icon">&#x1F527;</span>
-            <span class="tool-name">${toolName}</span>
+            <span class="tool-name">${escapeHtml(toolName)}</span>
             <span class="tool-status done">完成</span>
             <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
           </div>
-          <div class="tool-summary">${summary}</div>
+          <div class="tool-summary">${escapeHtml(summary)}</div>
           <div class="tool-details hidden">
             <div><strong>输入:</strong></div>
-            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <pre style="margin:4px 0;max-height:120px;">${escapeHtml(JSON.stringify(evt.input, null, 2))}</pre>
             <div><strong>输出:</strong></div>
-            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
-            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
+            <pre style="margin:4px 0;max-height:120px;">${escapeHtml(JSON.stringify(evt.output, null, 2))}</pre>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${escapeHtml(evt.duration_ms || 0)}ms</div>
           </div>
         `;
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1099,17 +1107,17 @@
         div.innerHTML = `
           <div class="tool-header">
             <span class="tool-icon">&#x1F527;</span>
-            <span class="tool-name">${toolName}</span>
+            <span class="tool-name">${escapeHtml(toolName)}</span>
             <span class="tool-status done">完成</span>
             <button class="expand-btn" onclick="toggleToolDetails(this)">展开</button>
           </div>
-          <div class="tool-summary">${formatToolSummary(evt)}</div>
+          <div class="tool-summary">${escapeHtml(formatToolSummary(evt))}</div>
           <div class="tool-details hidden">
             <div><strong>输入:</strong></div>
-            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.input, null, 2)}</pre>
+            <pre style="margin:4px 0;max-height:120px;">${escapeHtml(JSON.stringify(evt.input, null, 2))}</pre>
             <div><strong>输出:</strong></div>
-            <pre style="margin:4px 0;max-height:120px;">${JSON.stringify(evt.output, null, 2)}</pre>
-            <div style="color:var(--muted);font-size:11px;">耗时: ${evt.duration_ms || 0}ms</div>
+            <pre style="margin:4px 0;max-height:120px;">${escapeHtml(JSON.stringify(evt.output, null, 2))}</pre>
+            <div style="color:var(--muted);font-size:11px;">耗时: ${escapeHtml(evt.duration_ms || 0)}ms</div>
           </div>
         `;
         messagesEl.appendChild(div);
@@ -1155,12 +1163,12 @@
           inputSummaryHtml = `
             <div class="response-input hidden">
               <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
-              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${escapeHtml((summary.aspects || []).join(", "))}</div>
               ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
               ${summary.node_summaries ? `
                 <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
                 <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
-                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${escapeHtml(getChineseNodeName(k))}:</strong> ${escapeHtml(v)}</li>`).join("")}
                 </ul>
               ` : ""}
               ${evt.llm_prompt ? `
@@ -1191,12 +1199,12 @@
           inputSummaryHtml = `
             <div class="response-input hidden">
               <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
-              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${escapeHtml((summary.aspects || []).join(", "))}</div>
               ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
               ${summary.node_summaries ? `
                 <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
                 <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
-                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${escapeHtml(getChineseNodeName(k))}:</strong> ${escapeHtml(v)}</li>`).join("")}
                 </ul>
               ` : ""}
               ${evt.llm_prompt ? `
@@ -1401,7 +1409,7 @@
               renderResponse(evt);
             }
             currentTurnTools = [];
-            logEvent(`response: 完成 (${evt.duration_ms || 0}ms)`);
+            logEvent(`response: 完成 (${escapeHtml(evt.duration_ms || 0)}ms)`);
             break;
 
           case "assistant_final":
@@ -1427,11 +1435,17 @@
       }
 
       async function fetchJson(url, options = {}) {
-        const resp = await fetch(url, options);
+        const resp = await adminFetch(url, options);
         if (!resp.ok) {
           throw new Error(await resp.text());
         }
         return resp.json();
+      }
+
+      function adminFetch(url, options = {}) {
+        const headers = new Headers(options.headers || {});
+        headers.set("Authorization", "Bearer " + document.getElementById("adminToken").value.trim());
+        return fetch(url, { ...options, headers });
       }
 
       // Conversation list functions
@@ -1461,7 +1475,7 @@
               item.className = "conversation-item" + (isActive ? " active" : "");
               item.innerHTML = `
                 <div class="conv-preview">${escapeHtml(session.preview || "新对话")}</div>
-                <div class="conv-time">${formatSessionTime(session.timestamp)}</div>
+                <div class="conv-time">${escapeHtml(formatSessionTime(session.timestamp))}</div>
               `;
               item.onclick = () => selectSession(session.session_id);
               conversationListEl.appendChild(item);
@@ -1640,10 +1654,10 @@
           const birth = profile.birth || {};
           const userInfoEl = document.getElementById("userInfo");
           userInfoEl.innerHTML = `
-            <div class="user-avatar">${userId.charAt(0).toUpperCase()}</div>
+            <div class="user-avatar">${escapeHtml(userId.charAt(0).toUpperCase())}</div>
             <div class="user-details">
               <div class="user-name">${escapeHtml(userId)}</div>
-              <div class="user-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日</div>
+              <div class="user-birth">${escapeHtml(birth.year || "?")}年${escapeHtml(birth.month || "?")}月${escapeHtml(birth.day || "?")}日</div>
             </div>
           `;
 
@@ -1652,8 +1666,8 @@
           const genderText = profile.gender === "male" ? "男" : profile.gender === "female" ? "女" : profile.gender;
           profileSection.innerHTML = `
             <h3>用户档案</h3>
-            <div class="profile-birth">${birth.year || "?"}年${birth.month || "?"}月${birth.day || "?"}日 ${birth.hour || 0}时${birth.minute || 0}分</div>
-            <div class="profile-gender">性别: ${genderText}${profile.birth_time_unknown ? " (时辰未知)" : ""}</div>
+            <div class="profile-birth">${escapeHtml(birth.year || "?")}年${escapeHtml(birth.month || "?")}月${escapeHtml(birth.day || "?")}日 ${escapeHtml(birth.hour || 0)}时${escapeHtml(birth.minute || 0)}分</div>
+            <div class="profile-gender">性别: ${escapeHtml(genderText)}${profile.birth_time_unknown ? " (时辰未知)" : ""}</div>
           `;
 
           // Update model selector from profile
@@ -1740,12 +1754,12 @@
           inputSummaryHtml = `
             <div class="response-input hidden">
               <div class="input-summary-item"><span class="input-summary-label">问题:</span> ${escapeHtml(summary.question || "")}</div>
-              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${(summary.aspects || []).join(", ")}</div>
+              <div class="input-summary-item"><span class="input-summary-label">方面:</span> ${escapeHtml((summary.aspects || []).join(", "))}</div>
               ${summary.time_context_summary ? `<div class="input-summary-item"><span class="input-summary-label">时间:</span> ${escapeHtml(summary.time_context_summary)}</div>` : ""}
               ${summary.node_summaries ? `
                 <div class="input-summary-item"><span class="input-summary-label">节点摘要:</span></div>
                 <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;">
-                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${getChineseNodeName(k)}:</strong> ${escapeHtml(v)}</li>`).join("")}
+                  ${Object.entries(summary.node_summaries).map(([k, v]) => `<li><strong>${escapeHtml(getChineseNodeName(k))}:</strong> ${escapeHtml(v)}</li>`).join("")}
                 </ul>
               ` : ""}
               ${msg.llm_prompt ? `
@@ -1959,7 +1973,7 @@
         appendMessage("user", question);
 
         try {
-          const resp = await fetch("/api/ask_stream", {
+          const resp = await adminFetch("/api/ask_stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2054,9 +2068,19 @@
 
       // Initialize
       createNodeCards();
-      loadModels().then(() => {
-        loadUsers().catch((err) => logEvent("init error: " + err.message));
-      }).catch((err) => logEvent("init error: " + err.message));
+      document.getElementById("connectAdminBtn").addEventListener("click", async () => {
+        const status = document.getElementById("adminConnectStatus");
+        try {
+          await loadModels();
+          await loadUsers();
+          status.textContent = "已连接";
+          closeSettingsModal();
+        } catch (err) {
+          status.textContent = "连接失败，请检查管理员令牌";
+          logEvent("connect error: " + err.message);
+        }
+      });
+      openSettingsModal();
     </script>
   </body>
 </html>

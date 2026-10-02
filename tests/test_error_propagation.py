@@ -69,17 +69,9 @@ def test_workflow_stops_on_prerequisite_failure(monkeypatch) -> None:
     assert outputs["OVERALL"].get("error"), "OVERALL should be marked as error"
     assert not outputs["OVERALL"].get("skipped"), "OVERALL should not be marked as skipped"
 
-    # GEJU_ROUTER depends on OVERALL, should be skipped
-    assert outputs["GEJU_ROUTER"].get("error"), "GEJU_ROUTER should be marked as error"
-    assert outputs["GEJU_ROUTER"].get("skipped"), "GEJU_ROUTER should be marked as skipped"
-
-    # GEJU_ANALYSIS depends on GEJU_ROUTER, should be skipped
-    assert outputs["GEJU_ANALYSIS"].get("error"), "GEJU_ANALYSIS should be marked as error"
-    assert outputs["GEJU_ANALYSIS"].get("skipped"), "GEJU_ANALYSIS should be marked as skipped"
-
-    # GEJU_LEVEL depends on GEJU_ANALYSIS, should be skipped
-    assert outputs["GEJU_LEVEL"].get("error"), "GEJU_LEVEL should be marked as error"
-    assert outputs["GEJU_LEVEL"].get("skipped"), "GEJU_LEVEL should be marked as skipped"
+    # GEJU is a sibling branch over PAIPAN; OVERALL failure must not stop it.
+    for node in ("GEJU_ROUTER", "GEJU_ANALYSIS", "GEJU_LEVEL"):
+        assert not outputs[node].get("error"), f"{node} should succeed independently"
 
     # WUXING_PREFS depends on OVERALL and GEJU_LEVEL, should be skipped
     assert outputs["WUXING_PREFS"].get("error"), "WUXING_PREFS should be marked as error"
@@ -89,7 +81,7 @@ def test_workflow_stops_on_prerequisite_failure(monkeypatch) -> None:
     assert outputs["CAREER"].get("error"), "CAREER should be marked as error"
     assert outputs["CAREER"].get("skipped"), "CAREER should be marked as skipped"
 
-    # Only PAIPAN and SHISHEN should have succeeded (they don't depend on OVERALL)
+    # PAIPAN and SHISHEN also do not depend on OVERALL.
     assert not outputs["PAIPAN"].get("error"), "PAIPAN should succeed"
     assert not outputs["SHISHEN"].get("error"), "SHISHEN should succeed"
 

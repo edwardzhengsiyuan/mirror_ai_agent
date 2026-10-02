@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
-import queue
 import re
 import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from agent.auth import (
     SessionManager,
@@ -36,6 +37,7 @@ from agent.billing.errors import (
     InsufficientFundsError,
     UnknownApiKeyError,
     UnknownUserError,
+    RateLimitError,
 )
 from agent.billing.middleware import BillingHelpers
 from agent.llm_config import available_models, configurable_nodes, default_model, validate_model
@@ -46,6 +48,9 @@ from agent.orchestrator_zwds import run_zwds_turn
 from agent.orchestrator import run_turn
 from agent.storage.conversation_store import append_event, load_recent_rounds, load_latest_llm_prompts, log_event_to_conversation
 from agent.storage.profile_store import load_profile, save_profile
+from agent.storage.paths import valid_storage_id
+from agent.storage.locking import ProfileBusyError, ProfileLease, profile_lock_path
+from agent.streaming import EventBuffer, sse_events
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
@@ -113,6 +118,19 @@ def create_app(
     load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
     _maybe_init_sentry()
     app = Flask(__name__, static_folder="web", static_url_path="")
+    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
+    auth_limits = {
+        "login": int(os.environ.get("AUTH_LOGIN_PER_MIN", "20")),
+        "register": int(os.environ.get("AUTH_REGISTER_PER_MIN", "10")),
+    }
+    if any(limit < 1 for limit in auth_limits.values()):
+        raise ValueError("Authentication rate limits must be positive")
+    proxy_hops = int(os.environ.get("APP_TRUSTED_PROXY_HOPS", "0"))
+    if proxy_hops < 0:
+        raise ValueError("APP_TRUSTED_PROXY_HOPS must be non-negative")
+    if proxy_hops:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops)
 
     root = storage_root or os.path.join(os.path.dirname(__file__), "storage")
 
@@ -128,12 +146,49 @@ def create_app(
     def ensure_user_dirs(user_id: str) -> None:
         os.makedirs(conversation_dir(user_id), exist_ok=True)
 
+    def acquire_profile(user_id: str) -> None:
+        if not hasattr(g, "profile_lease"):
+            g.profile_lease = ProfileLease(profile_lock_path(profile_path(user_id)))
+
+    @app.errorhandler(ProfileBusyError)
+    def profile_busy(_exc):
+        return api_error(409, "profile_busy", "Another request is updating this profile; retry after it finishes.")
+
+    @app.teardown_request
+    def release_profile(_exc):
+        lease = getattr(g, "profile_lease", None)
+        if lease and not getattr(g, "profile_lease_transferred", False):
+            lease.release()
+
+    def start_stream_worker(worker, event_q):
+        lease = getattr(g, "profile_lease", None)
+
+        def guarded_worker():
+            try:
+                worker()
+            except Exception:
+                app.logger.exception("Streaming worker failed during cleanup")
+                event_q.put({"type": "error", "message": "Request cleanup failed."})
+            finally:
+                try:
+                    if lease:
+                        lease.release()
+                finally:
+                    event_q.put(None)
+
+        g.profile_lease_transferred = True
+        try:
+            threading.Thread(target=guarded_worker, daemon=True).start()
+        except Exception:
+            g.profile_lease_transferred = False
+            raise
+
     def normalize_session_id(session_id: str) -> str:
         return session_id if session_id.endswith(".jsonl") else f"{session_id}.jsonl"
 
     def new_session_path(user_id: str) -> str:
         ensure_user_dirs(user_id)
-        session_id = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
+        session_id = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:12]
         return os.path.join(conversation_dir(user_id), f"{session_id}.jsonl")
 
     def normalize_history_n(value: Optional[object]) -> int:
@@ -144,6 +199,8 @@ def create_app(
         return max(0, history_n)
 
     def validate_birth(birth: Dict[str, object]) -> Optional[str]:
+        if not isinstance(birth, dict):
+            return "birth must be an object"
         required_fields = {
             "year": (None, None),
             "month": (1, 12),
@@ -175,6 +232,10 @@ def create_app(
             if value < min_value or value > max_value:
                 return f"birth.{field} out of range"
 
+        try:
+            dt.date(int(birth["year"]), int(birth["month"]), int(birth["day"]))
+        except (ValueError, OverflowError):
+            return "birth date invalid"
         return None
 
     def validate_person_payload(person: object, field: str) -> Optional[str]:
@@ -236,7 +297,7 @@ def create_app(
     def validate_safe_id(value: str, field: str) -> Optional[str]:
         if not value:
             return f"{field} required"
-        if not SAFE_ID_RE.match(value):
+        if not valid_storage_id(value):
             return f"{field} may only contain letters, numbers, underscore, dash, and dot"
         return None
 
@@ -269,6 +330,67 @@ def create_app(
             return api_error(401, "unauthorized", "Valid Bearer token required.")
         return None
 
+    @app.errorhandler(BadRequest)
+    def bad_request(_exc):
+        return api_error(400, "invalid_json", "A valid JSON object is required.")
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def request_too_large(_exc):
+        return api_error(413, "request_too_large", "Request body exceeds 1 MiB.")
+
+    @app.before_request
+    def validate_api_request():
+        # The legacy UI exposes raw profiles/traces and unmetered execution.
+        # It is an administrator interface, never a public alternate API.
+        if request.path.startswith("/api/"):
+            error = require_demo_auth()
+            if error:
+                return error
+        if not request.path.startswith(("/api/", "/v1/", "/admin/")):
+            return None
+        data = {}
+        if request.method in {"POST", "PUT", "PATCH"} and request.get_data():
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                return api_error(400, "invalid_json", "Request body must be a JSON object.")
+        if request.path in {"/v1/auth/login", "/v1/auth/register", "/v1/register"} and request.method == "POST":
+            operation = "login" if request.path.endswith("/login") else "register"
+            limit = auth_limits[operation]
+            ip_hash = hashlib.sha256((request.remote_addr or "unknown").encode()).hexdigest()
+            try:
+                billing_service.check_rate_limit("auth:" + operation + ":ip:" + ip_hash, limit=limit)
+                email = data.get("email")
+                if operation == "login" and isinstance(email, str):
+                    email_hash = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+                    billing_service.check_rate_limit("auth:login:email:" + email_hash, limit=limit)
+            except RateLimitError:
+                response, status = api_error(429, "rate_limited", "Too many attempts; retry in one minute.")
+                response.headers["Retry-After"] = "60"
+                return response, status
+        # Reject wrong types before handlers call .strip(), use dict keys, or
+        # construct paths. Validate both query and body parameters.
+        for source in (request.args, data):
+            for field in ("user_id", "session_id"):
+                value = source.get(field)
+                if value is not None and value != "":
+                    error = validate_safe_id(value, field)
+                    if error:
+                        return api_error(400, "invalid_" + field, error)
+            for field in ("question", "character", "gender", "prompt_config", "llm_model",
+                          "display_name", "key_label", "label"):
+                if field in source and source[field] is not None and not isinstance(source[field], str):
+                    return api_error(400, "invalid_" + field, field + " must be a string.")
+        if "gender" in data and data["gender"] not in ("male", "female"):
+            return api_error(400, "invalid_gender", "gender must be male or female.")
+        if "birth" in data:
+            error = validate_birth(data["birth"])
+            if error:
+                return api_error(400, "invalid_birth", error)
+        if (request.path in {"/api/users", "/api/profile", "/api/ask", "/api/ask_stream"}
+                and request.method in {"POST", "PUT"} and data.get("user_id")):
+            acquire_profile(data["user_id"])
+        return None
+
     # ------------------------------------------------------------------
     # billing wiring
     # ------------------------------------------------------------------
@@ -277,7 +399,14 @@ def create_app(
         os.environ.get("BILLING_DB_PATH")
         or os.path.join(root, "billing.db")
     )
-    billing_store = BillingStore(billing_db_path)
+    app_secret = (os.environ.get("APP_SECRET_KEY") or "").strip()
+    if not app_secret:
+        if os.environ.get("LLM_MODE", "").strip().lower() != "stub":
+            raise ValueError("APP_SECRET_KEY must be configured before starting the service")
+        import secrets as _secrets
+        app_secret = _secrets.token_urlsafe(48)
+        app.logger.warning("APP_SECRET_KEY is unset; sessions and encrypted portal keys require a stable secret across restarts.")
+    billing_store = BillingStore(billing_db_path, app_secret=app_secret)
     billing_pricing = Pricing.load()
     try:
         billing_inflight_limit = int(os.environ.get("BILLING_INFLIGHT_LIMIT", "2"))
@@ -308,29 +437,40 @@ def create_app(
     # ------------------------------------------------------------------
     # session / auth wiring (Phase 1: email + password dashboard login)
     # ------------------------------------------------------------------
-    app_secret = (os.environ.get("APP_SECRET_KEY") or "").strip()
-    if not app_secret:
-        # Dev fallback: generate a one-time random secret so the app starts.
-        # All previously-issued cookies are invalidated on every restart,
-        # which is fine for local dev but disastrous for prod — log loudly.
-        import secrets as _secrets
-        app_secret = _secrets.token_urlsafe(48)
-        print(
-            "[auth] WARNING: APP_SECRET_KEY is unset; generated an ephemeral"
-            " secret. All dashboard sessions reset on restart. Set"
-            " APP_SECRET_KEY in production .env.",
-            flush=True,
-        )
     cookie_secure_env = (os.environ.get("APP_COOKIE_SECURE") or "").strip().lower()
     # Default to secure cookies in prod. Local dev / tests opt out via
     # APP_COOKIE_SECURE=0 so the dashboard works over http://localhost.
     cookie_secure = cookie_secure_env not in {"0", "false", "no"}
+
+    def session_identity_version(user_id: str) -> Optional[str]:
+        user = billing_store.get_user(user_id)
+        if user is None or user["status"] != "active":
+            return None
+        # Bind sessions to the current password without exposing its hash.
+        return hashlib.sha256((user.get("password_hash") or "").encode()).hexdigest()
+
     session_manager = SessionManager(
         secret_key=app_secret,
         cookie_secure=cookie_secure,
+        identity_version=session_identity_version,
+        is_revoked=billing_store.session_revoked,
+        revoke=billing_store.revoke_session,
     )
     session_manager.install(app)
     app.secret_key = app_secret  # also feeds Flask's signing helpers
+
+    @app.teardown_request
+    def refund_unfinished_request(_exc):
+        pending = getattr(g, "pending_billing", None)
+        if pending is None:
+            return
+        state, refund = pending
+        if state.get("worker_owned") or state.get("finalized"):
+            return
+        try:
+            refund("unfinished_request")
+        except Exception:
+            app.logger.exception("Could not refund unfinished request %s", state["receipt"].request_id)
 
     def _annotate_billing(response, charge, balance_after: Optional[int] = None):
         """Attach X-Charged-Credits / X-Balance-After / X-Request-Id headers."""
@@ -341,7 +481,7 @@ def create_app(
                 balance_after = billing_service.get_balance(charge.user_id)
             except UnknownUserError:
                 balance_after = charge.balance_after
-        response.headers["X-Charged-Credits"] = str(charge.amount_credits)
+        response.headers["X-Charged-Credits"] = str(0 if charge.status == "refunded" else charge.amount_credits)
         response.headers["X-Balance-After"] = str(balance_after)
         response.headers["X-Request-Id"] = charge.request_id
         return response
@@ -393,6 +533,7 @@ def create_app(
             if err_resp is not None:
                 return err_resp
             state["receipt"] = receipt
+            g.pending_billing = (state, do_refund)
             return None
 
         def track_event(event: Dict[str, Any]) -> None:
@@ -463,12 +604,14 @@ def create_app(
         def do_settle() -> None:
             if state["receipt"] is not None:
                 _persist_meta()
-                billing.settle(state["receipt"].request_id)
+                state["receipt"] = billing.settle(state["receipt"].request_id) or state["receipt"]
+                state["finalized"] = True
 
         def do_refund(reason: str = "error") -> None:
             if state["receipt"] is not None:
                 _persist_meta()
-                billing.refund(state["receipt"].request_id, reason)
+                state["receipt"] = billing.refund(state["receipt"].request_id, reason) or state["receipt"]
+                state["finalized"] = True
 
         def do_annotate(response):
             return _annotate_billing(response, state["receipt"])
@@ -530,11 +673,13 @@ def create_app(
             "cached_nodes": sorted((profile.get("node_cache") or {}).keys()),
         }
 
-    def upsert_profile_from_payload(data: Dict[str, Any]):
+    def upsert_profile_from_payload(data: Dict[str, Any], *, persist: bool = True):
         user_id = (data.get("user_id") or "").strip()
         id_error = validate_safe_id(user_id, "user_id")
         if id_error:
             return None, api_error(400, "invalid_user_id", id_error)
+
+        acquire_profile(user_id)
 
         path = profile_path(user_id)
         profile_exists = os.path.exists(path)
@@ -569,7 +714,8 @@ def create_app(
                 "node_cache": {},
             }
             ensure_user_dirs(user_id)
-            save_profile(path, profile)
+            if persist:
+                save_profile(path, profile)
             return profile, None
 
         chart_changed = False
@@ -608,7 +754,8 @@ def create_app(
             profile["node_cache"] = {}
         profile.setdefault("node_cache", {})
         ensure_user_dirs(user_id)
-        save_profile(path, profile)
+        if persist:
+            save_profile(path, profile)
         return profile, None
 
     def conversation_path_for_payload(user_id: str, session_id: Optional[str]) -> str:
@@ -642,7 +789,7 @@ def create_app(
         if not question:
             return None, api_error(400, "question_required", "question required")
 
-        profile, error_response = upsert_profile_from_payload(data)
+        profile, error_response = upsert_profile_from_payload(data, persist=False)
         if error_response:
             return None, error_response
         assert profile is not None
@@ -660,16 +807,6 @@ def create_app(
         history_rounds = load_recent_rounds(convo_path, history_n)
         now = dt.datetime.now()
         request_id = f"req_{uuid.uuid4().hex[:16]}"
-        append_event(
-            convo_path,
-            {
-                "ts": now.isoformat(),
-                "type": "user_message",
-                "text": question,
-                "request_id": request_id,
-                "api_version": "v1",
-            },
-        )
         return {
             "profile": profile,
             "question": question,
@@ -679,6 +816,13 @@ def create_app(
             "request_id": request_id,
             "stream": stream,
         }, None
+
+    def activate_v1_request(prepared):
+        save_profile(profile_path(prepared["profile"]["user_id"]), prepared["profile"])
+        append_event(prepared["convo_path"], {
+            "ts": prepared["now"].isoformat(), "type": "user_message",
+            "text": prepared["question"], "request_id": prepared["request_id"], "api_version": "v1",
+        })
 
     def public_stream_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         event_type = event.get("type")
@@ -1724,6 +1868,7 @@ def create_app(
         if err:
             return err
 
+        activate_v1_request(prepared)
         profile = prepared["profile"]
         convo_path = prepared["convo_path"]
 
@@ -1756,9 +1901,9 @@ def create_app(
                 "session_id": os.path.basename(convo_path),
                 "user_id": profile["user_id"],
                 "answer": result["response"],
+                "error": bool(result.get("error")),
                 "plan": result["plan"],
                 "time_context": result["time_context"],
-                "error": bool(result.get("error", False)),
                 "failed_nodes": result.get("failed_nodes", []),
                 "skipped_nodes": result.get("skipped_nodes", []),
                 "usage": ctx["usage"](),
@@ -1786,9 +1931,10 @@ def create_app(
         if err:
             return err
 
+        activate_v1_request(prepared)
         profile = prepared["profile"]
         convo_path = prepared["convo_path"]
-        event_q: queue.Queue = queue.Queue()
+        event_q = EventBuffer()
 
         receipt = ctx["state"]["receipt"]
         billing_kickoff_event = None
@@ -1811,7 +1957,6 @@ def create_app(
         sink = ctx["wrap_sink"](base_sink)
 
         def worker() -> None:
-            settled = False
             try:
                 result = run_turn_func(
                     profile,
@@ -1832,7 +1977,6 @@ def create_app(
                     ctx["refund"]("orchestrator_error")
                 else:
                     ctx["settle"]()
-                    settled = True
             except Exception as exc:
                 ctx["refund"]("endpoint_exception")
                 event_q.put({"type": "error", "message": str(exc)})
@@ -1846,28 +1990,29 @@ def create_app(
                     event_q.put(
                         {
                             "type": "billing",
-                            "stage": "settled" if settled else "refunded",
+                            "stage": ctx["state"]["receipt"].status,
                             "request_id": receipt.request_id,
                             "amount_credits": receipt.amount_credits,
                             "balance_after": balance_after,
                             "endpoint": receipt.endpoint,
                         }
                     )
-                event_q.put(None)
+        ctx["state"]["worker_owned"] = True
+        try:
+            start_stream_worker(worker, event_q)
+        except Exception:
+            ctx["state"]["worker_owned"] = False
+            ctx["refund"]("worker_start_failed")
+            raise
 
-        threading.Thread(target=worker, daemon=True).start()
-
-        def gen():
-            yield f"data: {json.dumps({'type': 'session', 'request_id': prepared['request_id'], 'session_id': os.path.basename(convo_path)}, ensure_ascii=False)}\n\n"
-            if billing_kickoff_event is not None:
-                yield f"data: {json.dumps(billing_kickoff_event, ensure_ascii=False)}\n\n"
-            while True:
-                event = event_q.get()
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-        return Response(gen(), mimetype="text/event-stream")
+        initial_events = [{"type": "session", "request_id": prepared["request_id"],
+                           "session_id": os.path.basename(convo_path)}]
+        if billing_kickoff_event:
+            initial_events.append(billing_kickoff_event)
+        response = Response(sse_events(event_q, initial_events), mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        response.call_on_close(event_q.close)
+        return response
 
     @app.route("/v1/hepan/ask", methods=["POST"])
     def v1_hepan_ask() -> Response:
@@ -1945,11 +2090,15 @@ def create_app(
                 "user_id": context["user_id"],
                 "method": "hepan",
                 "answer": result["response"],
+                "error": bool(result.get("error")),
                 "compatibility": result["hepan"]["compatibility"],
                 "usage": ctx["usage"](),
             }
         )
-        ctx["settle"]()
+        if result.get("error"):
+            ctx["refund"]("orchestrator_error")
+        else:
+            ctx["settle"]()
         return ctx["annotate"](response)
 
     @app.route("/v1/cezi/ask", methods=["POST"])
@@ -2025,11 +2174,15 @@ def create_app(
                 "user_id": context["user_id"],
                 "method": "cezi",
                 "answer": result["response"],
+                "error": bool(result.get("error")),
                 "character": result["character"],
                 "usage": ctx["usage"](),
             }
         )
-        ctx["settle"]()
+        if result.get("error"):
+            ctx["refund"]("orchestrator_error")
+        else:
+            ctx["settle"]()
         return ctx["annotate"](response)
 
     @app.route("/v1/najia/ask", methods=["POST"])
@@ -2106,6 +2259,7 @@ def create_app(
                 "user_id": context["user_id"],
                 "method": "najia",
                 "answer": result["response"],
+                "error": bool(result.get("error")),
                 "gua": {
                     "yao_values": najia_result["yao_values"],
                     "time_info": najia_result["time_info"],
@@ -2116,7 +2270,10 @@ def create_app(
                 "usage": ctx["usage"](),
             }
         )
-        ctx["settle"]()
+        if result.get("error"):
+            ctx["refund"]("orchestrator_error")
+        else:
+            ctx["settle"]()
         return ctx["annotate"](response)
 
     @app.route("/v1/zwds/ask", methods=["POST"])
@@ -2221,6 +2378,7 @@ def create_app(
                 "user_id": context["user_id"],
                 "method": "zwds",
                 "answer": result["response"],
+                "error": bool(result.get("error")),
                 "chart": {
                     "birth": zwds_result["birth"],
                     "gender": zwds_result["gender"],
@@ -2232,7 +2390,10 @@ def create_app(
                 "usage": ctx["usage"](),
             }
         )
-        ctx["settle"]()
+        if result.get("error"):
+            ctx["refund"]("orchestrator_error")
+        else:
+            ctx["settle"]()
         return ctx["annotate"](response)
 
     @app.route("/api/users", methods=["GET"])
@@ -2498,7 +2659,7 @@ def create_app(
             session_id = os.path.basename(convo_path)
 
         history_rounds = load_recent_rounds(convo_path, history_n)
-        event_q: queue.Queue = queue.Queue()
+        event_q = EventBuffer()
 
         def sink(event: Dict) -> None:
             log_event_to_conversation(convo_path, event)
@@ -2526,20 +2687,14 @@ def create_app(
                 save_profile(profile_path(user_id), profile)
             except Exception as exc:
                 event_q.put({"type": "server_error", "error": str(exc)})
-            finally:
-                event_q.put(None)
 
-        threading.Thread(target=worker, daemon=True).start()
+        start_stream_worker(worker, event_q)
 
-        def gen():
-            yield f"data: {json.dumps({'type': 'session', 'session_id': session_id}, ensure_ascii=False)}\n\n"
-            while True:
-                event = event_q.get()
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-        return Response(gen(), mimetype="text/event-stream")
+        response = Response(sse_events(event_q, [{"type": "session", "session_id": session_id}]),
+                            mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        response.call_on_close(event_q.close)
+        return response
 
     # ======================================================================
     # Billing endpoints (user self-service + admin)
@@ -2874,7 +3029,9 @@ def create_app(
         if pw_err:
             return api_error(400, "weak_password", pw_err)
         billing_service.update_password(user_id, hash_password(new_password))  # type: ignore[arg-type]
-        return jsonify({"ok": True})
+        response = jsonify({"ok": True})
+        session_manager.set_cookie(response, user_id)
+        return response
 
     @app.route("/v1/register", methods=["POST"])
     def v1_register() -> Response:
@@ -3034,6 +3191,8 @@ def create_app(
             # Stripe retries are expected; surface 200 OK so it stops.
             duplicate = True
             balance_after = dup.balance_after
+        except ValueError:
+            return api_error(409, "idempotency_conflict", "Payment identifier conflicts with another transaction.")
         except UnknownUserError as e:
             return api_error(404, "unknown_user", str(e))
         return jsonify(
@@ -3153,6 +3312,8 @@ def create_app(
                     "duplicate": True,
                 }
             )
+        except ValueError:
+            return api_error(409, "idempotency_conflict", "Request identifier conflicts with another transaction.")
         return jsonify(
             {
                 "user_id": user_id,

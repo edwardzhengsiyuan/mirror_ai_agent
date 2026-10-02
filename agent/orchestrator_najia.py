@@ -21,6 +21,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from .events import EventSink, emit_event
+from .response import llm_output_failed, LLM_FAILURE_MESSAGE
 from .llm_config import default_model
 from .tools.llm_tool import llm_report_tool
 from .tools.najia_tool import najia_tool
@@ -170,12 +171,13 @@ def run_najia_turn(
     )
     emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "NAJIA_RESPONSE"})
     response_duration_ms = int((time.perf_counter() - response_started) * 1000)
+    response_failed = llm_output_failed(response_output)
     technical_text = response_output.get("content") if isinstance(response_output, dict) else ""
     if not technical_text:
         technical_text = najia_result["raw_text"]
 
     paraphrase_text = ""
-    if paraphrase and technical_text:
+    if paraphrase and technical_text and not response_failed:
         paraphrase_prompt = _build_paraphrase_prompt(technical_text)
         emit_event(
             event_sink,
@@ -209,6 +211,7 @@ def run_najia_turn(
             event_sink=event_sink,
         )
         emit_event(event_sink, {"type": "tool_result", "tool": "llm_report_tool", "node": "NAJIA_PARAPHRASE"})
+        response_failed = llm_output_failed(paraphrase_output)
         paraphrase_text = paraphrase_output.get("content") if isinstance(paraphrase_output, dict) else ""
 
     if paraphrase and paraphrase_text:
@@ -219,6 +222,9 @@ def run_najia_turn(
         )
     else:
         response_text = technical_text
+
+    if response_failed:
+        response_text = LLM_FAILURE_MESSAGE
 
     emit_event(
         event_sink,
@@ -241,4 +247,5 @@ def run_najia_turn(
         "time": now.isoformat(),
         "najia": najia_result,
         "response": response_text,
+        "error": response_failed,
     }

@@ -5,6 +5,17 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
+def llm_output_failed(output: Any) -> bool:
+    if not isinstance(output, dict):
+        return True
+    content = output.get("content")
+    return (bool(output.get("error")) or not isinstance(content, str)
+            or not content.strip() or content.startswith(("[LLM_ERROR:", "[NODE_ERROR:")))
+
+
+LLM_FAILURE_MESSAGE = "暂时无法完成分析，请稍后重试。"
+
+
 def compose_response(question: str, plan: Dict[str, Any], outputs: Dict[str, Any], time_context: Dict[str, Any] | None) -> str:
     sections: List[str] = []
     if time_context:

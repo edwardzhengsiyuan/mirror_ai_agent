@@ -14,12 +14,39 @@ on:
   push:
     branches:
       - master
+  pull_request:
 
 env:
   IMAGE_NAME: mirror-ai-agent
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      LLM_MODE: stub
+      LLM_PLANNER_MODE: rule
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Offline regression suite
+        run: .venv/bin/python -m pytest tests -m 'not llm_live' -q
+      - name: Dependency vulnerability checks
+        run: |
+          .venv/bin/python -m pip install pip-audit==2.10.1
+          .venv/bin/python -m pip_audit --require-hashes -r requirements.lock
+          .venv/bin/python scripts/audit_frontend.py
+
   build:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,11 +58,25 @@ jobs:
       - name: Set image tags
         id: meta
         shell: bash
+        env:
+          REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
+          REGISTRY_NAMESPACE: ${{ secrets.REGISTRY_NAMESPACE }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${{ secrets.REGISTRY_HOST }}"
-          : "${{ secrets.REGISTRY_NAMESPACE }}"
-          image="${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_NAMESPACE }}/${IMAGE_NAME}"
+          if [[ -z "$REGISTRY_HOST$REGISTRY_NAMESPACE$REGISTRY_USERNAME$REGISTRY_PASSWORD" ]]; then
+            echo '::notice::No registry configured; validating the image without publishing.'
+            image="${IMAGE_NAME}"
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            : "${REGISTRY_HOST:?Missing REGISTRY_HOST}"
+            : "${REGISTRY_NAMESPACE:?Missing REGISTRY_NAMESPACE}"
+            : "${REGISTRY_USERNAME:?Missing REGISTRY_USERNAME}"
+            : "${REGISTRY_PASSWORD:?Missing REGISTRY_PASSWORD}"
+            image="${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}"
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
           short_sha="${GITHUB_SHA::12}"
           tags="${image}:${short_sha}"
           if [[ "${{ github.event_name }}" == "push" || "${{ inputs.push_latest || 'true' }}" == "true" ]]; then
@@ -53,6 +94,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to registry
+        if: steps.meta.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.REGISTRY_HOST }}
@@ -64,7 +106,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
+          push: ${{ steps.meta.outputs.publish == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

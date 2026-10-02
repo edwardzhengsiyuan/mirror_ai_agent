@@ -1,0 +1,31 @@
+# Disposable local acceptance only. No production volumes, keys or public ports.
+services:
+  api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: mirror-ai-audit:20261002
+    environment:
+      LLM_MODE: stub
+      LLM_PLANNER_MODE: rule
+      APP_SECRET_KEY: audit-only-stable-secret-never-use-in-production
+      APP_COOKIE_SECURE: "1"
+      APP_TRUSTED_PROXY_HOPS: "1"
+      BILLING_ADMIN_BYPASS: "0"
+      BILLING_RATE_LIMIT_PER_MIN: "100"
+      DEMO_API_TOKEN: audit-only-admin-never-use-in-production
+      STRIPE_MODE: test
+      STRIPE_SECRET_KEY_TEST: sk_test_audit_only
+      STRIPE_WEBHOOK_SECRET_TEST: whsec_audit_only
+    tmpfs:
+      - /app/storage
+  proxy:
+    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    ports:
+      - "127.0.0.1:18443:18443"
+    volumes:
+      - ./tests/integration/Caddyfile.audit:/etc/caddy/Caddyfile:ro
+    tmpfs:
+      - /data
+      - /config
+    depends_on:
+      - api

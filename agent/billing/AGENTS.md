@@ -12,7 +12,7 @@ in-flight limits, and rate limiting.
 
 | File | Purpose |
 |------|---------|
-| `store.py` | Low-level SQLite CRUD. Owns the schema (`users` / `api_keys` / `ledger` / `inflight` / `rate_events`). |
+| `store.py` | Low-level SQLite CRUD. Owns the schema (`users` / `api_keys` / `ledger` / `inflight` / `rate_events` / `revoked_sessions`). |
 | `service.py` | High-level operations: `authenticate`, `charge`, `settle`, `refund`, `topup`, `issue_api_key`, `revoke_api_key`, `get_balance`, `list_usage`, `update_charge_meta`. Idempotent on `request_id`. |
 | `pricing.py` | Loads `config/pricing.json`. `Pricing.cost(endpoint, variant_params)` returns credits. |
 | `middleware.py` | Flask helpers: `BillingHelpers.authenticate_request`, `try_charge`, `settle`, `refund`, `with_billing` decorator. |
@@ -25,15 +25,30 @@ in-flight limits, and rate limiting.
 
 ---
 
-## Schema (5 tables)
+## Schema (6 tables)
 
 - `users(user_id PK, balance_credits, status active|disabled, daily_credits_limit, ...)`
-- `api_keys(api_key_hash PK, user_id FK, label, created_at, last_seen_at, revoked)` — keys stored as `sha256(plaintext)`; plaintext is shown only once.
+- `api_keys(api_key_hash PK, user_id FK, label, created_at, last_seen_at, revoked, plaintext, ciphertext)` — authentication uses SHA-256 hashes. Dashboard keys are encrypted with Fernet; the legacy `plaintext` column is cleared on migration and never receives new values. Only the explicit current-key portal read decrypts a key. Revocation clears retained ciphertext.
 - `ledger(id PK, user_id, request_id UNIQUE, endpoint, kind charge|refund|topup, amount_credits, balance_after, status pending|settled|refunded, meta_json, ts)`
 - `inflight(request_id PK, user_id, endpoint, started_at)` — cleared on settle / refund.
-- `rate_events(id PK, scope, ts_epoch)` — rolling 60s window keyed by `key:<api_key_hash>`.
+- `rate_events(id PK, scope, ts_epoch)` — rolling 60s window for API keys and hashed authentication IP/email scopes; count and reserve atomically.
+- `revoked_sessions(token_hash PK, expires_at)` — SHA-256 cookie hashes revoked at logout, shared by all workers using this database. Expired records are pruned on logout.
 
 All write paths use `BEGIN IMMEDIATE` to take the writer lock up front.
+
+## Portal key encryption and migration
+
+Encryption uses `cryptography` Fernet/MultiFernet. Configure a stable random `APP_SECRET_KEY` (HKDF-SHA256 derives a separate billing key) or an independent `BILLING_KEY_ENCRYPTION_KEYS` ring of comma-separated Fernet keys, primary first. Wrong/missing material or a ciphertext/hash mismatch fails closed; API keys are never silently stored unencrypted. Keep encryption material outside SQLite and preserve it separately from backups.
+
+Stop all service instances before upgrading old databases. Export the same environment used by the server, then run:
+
+```powershell
+.venv\Scripts\python scripts/secure_billing_keys.py --db storage/billing.db --backup PRIVATE_BACKUP_PATH --service-stopped
+```
+
+The tool uses SQLite's backup API (including committed WAL), migrates live values, checkpoints/truncates WAL and compacts the database. The backup deliberately retains the previous state and may contain plaintext; protect it. Startup also performs transactional logical migration but cannot erase historical copies or external snapshots. Neither path revokes existing user API keys.
+
+For a dedicated key ring, prepend a new key while retaining previous keys, run the tool with `--rotate` and a fresh backup path, verify restart, then retire old keys only after accounting for backup recovery. Moving from APP_SECRET_KEY-derived encryption to a dedicated ring requires retaining the derived old Fernet key during rotation (`KeyCipher.from_config()` derives it); do not simply replace APP_SECRET_KEY and expect encrypted records to survive. Reference: https://cryptography.io/en/latest/fernet/.
 
 ---
 
@@ -41,11 +56,11 @@ All write paths use `BEGIN IMMEDIATE` to take the writer lock up front.
 
 1. **Authenticate** — `BillingHelpers.authenticate_request(allow_admin_bypass=True)` resolves the bearer token to either `{user_id, key_hash, ...}` or `{is_admin: True}`. Admin requests skip steps 2–5 entirely **iff** the env var `BILLING_ADMIN_BYPASS` is not `0/false/no/off`. When the toggle is off, admin tokens on `/v1/*` endpoints return 403 with code `admin_bypass_disabled`; `/admin/*` is unaffected. Recommended setting for production is `0` so a leaked admin token cannot burn LLM credits.
 2. **Validate the payload** — return early on 4xx without touching credits.
-3. **Charge** — `service.charge(user_id, endpoint, cost, request_id)` deducts credits atomically and inserts a `pending` ledger row + an `inflight` slot. Raises `InsufficientFundsError` (→ 402, code `insufficient_funds`), `DailyLimitExceededError` (→ 402, code `daily_limit_exceeded`, computed from today's UTC charges − refunds vs. `users.daily_credits_limit`), `InflightLimitError` (→ 429), `DuplicateRequestError` (→ 409).
+3. **Charge** — `service.charge(user_id, endpoint, cost, request_id)` deducts credits atomically and inserts a `pending` ledger row + an `inflight` slot. Raises `InsufficientFundsError` (→ 402, code `insufficient_funds`), `DailyLimitExceededError` (→ 402, code `daily_limit_exceeded`, computed from today's UTC non-refunded charges vs. `users.daily_credits_limit`), `InflightLimitError` (→ 429), `DuplicateRequestError` (→ 409). `/v1/ask` and `/v1/ask_stream` persist profile changes and the user message only after charge succeeds.
 4. **Run the work** through a sink wrapped by `ctx["wrap_sink"]`, which observes `llm_usage` events from `llm_tool` and aggregates `prompt_tokens` / `completion_tokens` / `node_count`.
 5. **Settle on success** (`service.settle(request_id)`) or **refund on failure** (`service.refund(request_id, reason)`). The wrapper persists the aggregated token counts and `duration_ms` into the charge row's `meta_json` via `update_charge_meta` immediately before settle/refund. Both calls clear the inflight slot and are idempotent.
 
-For SSE (`/v1/ask_stream`), step 3 happens before launching the worker so failed-charge errors return as plain HTTP 402; steps 4–5 execute inside the worker's `finally`, and a `billing` SSE event is emitted on settle/refund.
+For SSE (`/v1/ask_stream`), step 3 happens before launching the worker so failed-charge errors return as plain HTTP 402. The worker settles or refunds after execution and emits the actual receipt status (`settled`, `refunded`, or still `pending` on database failure). Disconnect/queue overflow ends delivery but processing continues, persists the result, and finalizes billing. OS leases are released even if worker cleanup fails.
 
 ---
 
@@ -54,10 +69,28 @@ For SSE (`/v1/ask_stream`), step 3 happens before launching the worker so failed
 `charge`, `settle`, `refund`, and `topup` are all idempotent on `request_id`:
 
 - Re-sending the same `request_id` to `charge` raises `DuplicateRequestError` (→ HTTP 409) without double-charging.
-- Re-calling `settle` / `refund` after the first call is a no-op.
-- `topup` with the same `request_id` returns the original receipt (HTTP 200 with `duplicate: true`).
+- Re-calling the same `settle` / `refund` operation is a no-op. Settling an already-refunded charge reports `refunded`; refunding a settled charge reverses it once.
+- `topup` with the same `request_id`, user and amount raises `DuplicateRequestError`, mapped to HTTP 200 with `duplicate: true`; a different kind/user/amount returns a conflict.
+- Client charge IDs cannot start with `stripe:` / `topup-` or contain `::refund`. Old collisions in the refund namespace use a fresh derived refund ID; the original charge status prevents duplicate refunds.
+- Duplicate charge responses disclose only the requesting user's balance, never the colliding account's balance. IDs remain globally unique: reuse identifies a retry, but does not replay the original answer.
 
 Clients can safely retry network-flapping calls by reusing `X-Request-Id`.
+
+## Recovering interrupted billing
+
+Do not automatically refund by age: a terminated process may already have delivered an answer. Inspect pending rows read-only:
+
+```powershell
+.venv\Scripts\python scripts/reconcile_billing.py --db storage/billing.db
+```
+
+Before modifying production state, stop every serving process that uses the database, make a consistent SQLite backup (including outstanding WAL changes), and use request logs to decide the outcome. Resolve one known pending request explicitly:
+
+```powershell
+.venv\Scripts\python scripts/reconcile_billing.py --db storage/billing.db --action refund --request-id REQUEST_ID --reason "Logs confirm failed execution" --service-stopped
+```
+
+Use `--action settle` for verified completed work. `--service-stopped` is an operator acknowledgement, not process detection. The resolution and reason are saved atomically in the original charge's `meta_json.manual_resolution`, together with the balance/status change and inflight cleanup. Non-pending transactions are rejected by this manual path. Inspection never creates a missing database or initializes its schema. This tool is local and is not exposed through an unauthenticated HTTP endpoint.
 
 ---
 
