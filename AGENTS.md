@@ -105,6 +105,13 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
+### Windows Docker execution
+
+- Before local Docker work, use the existing audited `../autoworker/scripts/docker-preflight.ps1` when available; its default mode is read-only. Read that project's `docs/DOCKER_EXECUTION_TROUBLESHOOTING.md` before diagnosing startup failures on this machine.
+- Never start Docker Desktop using `Start-Process`, `docker desktop start`, or a newly created `Shell.Application.ShellExecute`. The Codex MSIX command context has reproduced AF_UNIX endpoint access failures through these paths.
+- When startup is needed, use the audited preflight's explicit `-StartDesktop`: it obtains the existing Explorer desktop through `FindWindowSW(...SWC_DESKTOP...)` and calls that desktop's `Document.Application.ShellExecute`. Existing Desktop/backend processes must not be started again; if the desktop interface is unavailable, stop and report it.
+- Do not delete or rename endpoints, reset Docker data, alter ACLs/isolation, or create scheduled-task workarounds. Distinguish permission failures from an unavailable daemon, and verify engine readiness independently of process startup.
+
 ### Python Environment
 
 - Use the in-repo virtual environment: `.venv/`
