@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Mirror conversation retention preview
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 Asia/Shanghai
+RandomizedDelaySec=10min
+Persistent=true
+Unit=mirror-retention.service
+
+[Install]
+WantedBy=timers.target

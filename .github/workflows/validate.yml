@@ -1,0 +1,37 @@
+name: Validate changes
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      LLM_MODE: stub
+      LLM_PLANNER_MODE: rule
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements-bootstrap.lock
+          .venv/bin/python -m pip install --require-hashes -r requirements.lock
+          .venv/bin/python -m pip install --require-hashes -r requirements-test.lock
+      - name: Offline regression suite
+        run: .venv/bin/python -m pytest tests -m 'not llm_live' -q
+      - name: Dependency vulnerability checks
+        run: |
+          .venv/bin/python -m pip install pip-audit==2.10.1
+          .venv/bin/python -m pip_audit --require-hashes -r requirements.lock
+          .venv/bin/python -m pip_audit --require-hashes -r requirements-bootstrap.lock
+          .venv/bin/python -m pip_audit --require-hashes -r requirements-test.lock
+          .venv/bin/python scripts/audit_frontend.py
+

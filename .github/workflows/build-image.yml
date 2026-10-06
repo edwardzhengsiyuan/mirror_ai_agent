@@ -1,4 +1,4 @@
-name: Build and push API image
+name: Manually release API image
 
 on:
   workflow_dispatch:
@@ -11,46 +11,19 @@ on:
         options:
           - "true"
           - "false"
-  push:
-    branches:
-      - master
-  pull_request:
 
 env:
   IMAGE_NAME: mirror-ai-agent
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/validate.yml
     permissions:
       contents: read
-    env:
-      LLM_MODE: stub
-      LLM_PLANNER_MODE: rule
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install test environment
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --require-hashes -r requirements-bootstrap.lock
-          .venv/bin/python -m pip install --require-hashes -r requirements.lock
-          .venv/bin/python -m pip install --require-hashes -r requirements-test.lock
-      - name: Offline regression suite
-        run: .venv/bin/python -m pytest tests -m 'not llm_live' -q
-      - name: Dependency vulnerability checks
-        run: |
-          .venv/bin/python -m pip install pip-audit==2.10.1
-          .venv/bin/python -m pip_audit --require-hashes -r requirements.lock
-          .venv/bin/python -m pip_audit --require-hashes -r requirements-bootstrap.lock
-          .venv/bin/python -m pip_audit --require-hashes -r requirements-test.lock
-          .venv/bin/python scripts/audit_frontend.py
 
   build:
     needs: test
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,7 +56,7 @@ jobs:
           fi
           short_sha="${GITHUB_SHA::12}"
           tags="${image}:${short_sha}"
-          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.push_latest || 'true' }}" == "true" ]]; then
+          if [[ "${{ inputs.push_latest }}" == "true" ]]; then
             tags="${tags}"$'\n'"${image}:latest"
           fi
           echo "image=${image}" >> "$GITHUB_OUTPUT"

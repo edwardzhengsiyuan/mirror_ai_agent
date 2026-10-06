@@ -158,7 +158,8 @@ with edit_profile(profile_path) as profile:
 ### Storage maintenance and acceptance
 
 - Portal API keys use authenticated encryption at rest; authentication still uses SHA-256 key hashes. Run `scripts/secure_billing_keys.py --help` for offline legacy migration, consistent backup, WAL cleanup and key rotation. Old backups remain sensitive.
-- Preview conversation retention with `.venv/bin/python scripts/prune_conversations.py --storage storage --days 90`. `--apply` removes eligible logs; active profile leases and external symlinks are excluded. No automatic deletion is scheduled.
+- Preview conversation retention with `.venv/bin/python scripts/prune_conversations.py --storage storage --days 90`. `--apply` removes eligible logs; active profile leases and external symlinks are excluded. `deploy/mirror-retention.timer` schedules daily preview reports at 03:40–03:50 Asia/Shanghai; installation and report paths are in `deploy/RETENTION.md`. No automatic deletion is scheduled.
+- `validate.yml` checks master pushes and pull requests. Image builds and publication in `build-image.yml` require manual dispatch and successful validation, image regression and all-severity scanning; production service cutover remains a separate operation.
 - Reproduce TLS, secure-cookie, signed-webhook replay and SSE billing acceptance using `docker-compose.audit.yml` and `scripts/smoke_local_https.py`. This stack is local-only with synthetic keys and tmpfs data, never a production deployment.
 - `scripts/check_live_service.py --base https://YOUR_HOST` only probes public health and anonymous access boundaries. It cannot certify deployed revision, paid model execution or real payment completion.
 
