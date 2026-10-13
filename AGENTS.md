@@ -103,6 +103,8 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 **HTTP concurrency and streaming**: Requests modifying the same profile share an OS file lease and conflicts return `409 profile_busy`. SSE sends heartbeats every 15 seconds and bounds each client's queue to 256 events / 2 MiB. Disconnect or overflow stops delivery; the worker finishes persistence and billing in the background. Pending charges left by process termination require explicit reconciliation with `scripts/reconcile_billing.py`; see `agent/billing/AGENTS.md`.
 
+All conversation-writing methods (including hepan, cezi, najia and zwds) acquire that lease before reading history and charging. JSON boolean options must be actual booleans; `"false"` is rejected, not treated as true. Checkout requires either a string pack ID or an integer custom amount, never both. Browser mutations under `/v1/auth/` and `/v1/me/` reject foreign or opaque Origin headers; same-origin portal and clients without Origin remain supported.
+
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
 ### Windows Docker execution
@@ -124,6 +126,7 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 ### Production image security
 
 - The production image uses digest-pinned Python 3.12 on supported Alpine 3.23. Install tooling is pinned in `requirements-bootstrap.lock`; application dependencies remain in `requirements.lock` with hashes.
+- Release CI supplies a unique `OS_SECURITY_REFRESH` build argument per run/attempt so Docker does not reuse a stale OS-upgrade layer. For local security rebuilds, pass a fresh value (for example the current UTC date). The image also requires `zlib>=1.3.2-r1` for CVE-2026-85091; the all-severity scan remains mandatory.
 - `pip` and `ensurepip` are removed after installation and dependency validation. Production dependencies are immutable: rebuild and redeploy the image to update them, rather than installing packages inside a running container. OS package and application distribution metadata remain available for vulnerability scans.
 - Before publishing, CI runs the complete offline suite inside the actual image and scans OS plus Python packages at **all severities**. The scanner must fail on any finding; do not add vulnerability ignores, `--ignore-unfixed`, or remove package metadata to obtain a pass. Database download and offline image scanning are separated so the downloader cannot access application contents.
 - Local HTTPS acceptance accepts `AUDIT_IMAGE` to select the exact candidate image without overwriting previous release tags. A clean scan describes known advisories at its database timestamp, not proof that unknown vulnerabilities cannot exist.

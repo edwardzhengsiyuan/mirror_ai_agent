@@ -246,7 +246,7 @@ class StripeGateway:
             }
         if custom_yuan is None:
             raise ValueError("must provide pack_id or custom_yuan")
-        if not isinstance(custom_yuan, int) or custom_yuan <= 0:
+        if type(custom_yuan) is not int or custom_yuan <= 0:
             raise ValueError("custom_yuan must be a positive integer")
         if custom_yuan < cfg.min_custom_yuan or custom_yuan > cfg.max_custom_yuan:
             raise ValueError(

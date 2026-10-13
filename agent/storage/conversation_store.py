@@ -30,6 +30,8 @@ def load_recent_rounds(path: str, max_rounds: int = 5) -> List[Dict[str, str]]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(event, dict):
+                continue
             etype = event.get("type")
             if etype == "user_message":
                 pending_user = event.get("text", "")
@@ -54,6 +56,8 @@ def load_latest_llm_prompts(path: str) -> Dict[str, Dict[str, str]]:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
                 continue
             if event.get("type") != "llm_prompt":
                 continue
@@ -89,6 +93,8 @@ def load_tool_invocations(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(event, dict):
+                continue
             if event.get("type") != "tool_invocation":
                 continue
             if tool and event.get("tool") != tool:
@@ -113,6 +119,8 @@ def load_responses(path: str) -> List[Dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             # Support both new 'response' and legacy 'assistant_final'
+            if not isinstance(event, dict):
+                continue
             if event.get("type") in ("response", "assistant_final"):
                 responses.append(event)
     return responses
@@ -140,6 +148,8 @@ def load_llm_traces(
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
                 continue
             if event.get("type") not in trace_types:
                 continue

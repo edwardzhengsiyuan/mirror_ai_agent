@@ -28,10 +28,12 @@
 # so cron will email you (assuming an MTA + /etc/aliases is configured).
 
 set -euo pipefail
+umask 077
 
 BILLING_DB="${BILLING_DB:-/opt/bazi/storage/billing.db}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/bazi-billing}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
+[[ "$RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid backup retention days' >&2; exit 2; }
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${BACKUP_DIR}/billing-${TIMESTAMP}.db"
 

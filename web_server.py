@@ -194,7 +194,7 @@ def create_app(
     def normalize_history_n(value: Optional[object]) -> int:
         try:
             history_n = int(value) if value is not None else 5
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             history_n = 5
         return max(0, history_n)
 
@@ -217,7 +217,7 @@ def create_app(
                 return f"birth.{field} required"
             try:
                 value = int(birth.get(field))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return f"birth.{field} invalid"
             if min_value is not None and (value < min_value or value > max_value):
                 return f"birth.{field} out of range"
@@ -227,7 +227,7 @@ def create_app(
                 continue
             try:
                 value = int(birth.get(field))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return f"birth.{field} invalid"
             if value < min_value or value > max_value:
                 return f"birth.{field} out of range"
@@ -340,6 +340,14 @@ def create_app(
 
     @app.before_request
     def validate_api_request():
+        # Cookie-authenticated mutations (including login) must not accept
+        # browser requests initiated by another origin. Non-browser clients
+        # without Origin remain supported; the portal is same-origin.
+        if (request.method in {"POST", "PUT", "PATCH", "DELETE"}
+                and request.path.startswith(("/v1/auth/", "/v1/me/"))):
+            origin = request.headers.get("Origin")
+            if origin is not None and origin != request.host_url.rstrip("/"):
+                return api_error(403, "cross_origin_request", "Same-origin request required.")
         # The legacy UI exposes raw profiles/traces and unmetered execution.
         # It is an administrator interface, never a public alternate API.
         if request.path.startswith("/api/"):
@@ -382,6 +390,9 @@ def create_app(
                     return api_error(400, "invalid_" + field, field + " must be a string.")
         if "gender" in data and data["gender"] not in ("male", "female"):
             return api_error(400, "invalid_gender", "gender must be male or female.")
+        for field in ("paraphrase", "bypass_cache", "birth_time_unknown"):
+            if field in data and not isinstance(data[field], bool):
+                return api_error(400, "invalid_" + field, field + " must be bool.")
         if "birth" in data:
             error = validate_birth(data["birth"])
             if error:
@@ -777,6 +788,9 @@ def create_app(
             convo_path = conversation_path_for_payload(user_id, data.get("session_id"))
         except ValueError as exc:
             return None, api_error(400, "invalid_session_id", str(exc))
+        # All methods share the same history and retention exclusion lease.
+        # Acquire before reading history, and release via request teardown.
+        acquire_profile(user_id)
         history_n = normalize_history_n(data.get("history_n"))
         return {
             "user_id": user_id,
@@ -2315,7 +2329,7 @@ def create_app(
                 return api_error(400, "invalid_target_years", "target_years must be list[int]")
             try:
                 target_years = [int(y) for y in target_years]
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return api_error(400, "invalid_target_years", "target_years entries must be int")
 
         include_star_gong = include_star_gong_raw
@@ -2500,6 +2514,8 @@ def create_app(
                 for line in f:
                     try:
                         event = json.loads(line)
+                        if not isinstance(event, dict):
+                            continue
                         if event.get("type") == "user_message":
                             text = event.get("text", "").strip()
                             if text:
@@ -2565,6 +2581,8 @@ def create_app(
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
                     continue
                 event_type = event.get("type")
                 if event_type == "user_message":
@@ -3106,13 +3124,15 @@ def create_app(
                 "Stripe SDK is not configured on this server. Contact the admin.",
             )
         data = request.get_json(force=True, silent=True) or {}
-        pack_id = (data.get("pack_id") or "").strip() or None
+        pack_id = data.get("pack_id")
+        if pack_id is not None and not isinstance(pack_id, str):
+            return api_error(400, "invalid_pack_id", "pack_id must be a string")
+        pack_id = (pack_id or "").strip() or None
         custom_yuan = data.get("custom_yuan")
-        if custom_yuan is not None:
-            try:
-                custom_yuan = int(custom_yuan)
-            except (TypeError, ValueError):
-                return api_error(400, "invalid_custom_yuan", "custom_yuan must be int")
+        if custom_yuan is not None and type(custom_yuan) is not int:
+            return api_error(400, "invalid_custom_yuan", "custom_yuan must be int")
+        if pack_id is not None and custom_yuan is not None:
+            return api_error(400, "invalid_amount", "Provide only pack_id or custom_yuan")
         try:
             amount = stripe_gateway.resolve_amount(pack_id=pack_id, custom_yuan=custom_yuan)
         except ValueError as e:
@@ -3219,7 +3239,7 @@ def create_app(
             return api_error(400, "invalid_user_id", id_error)
         try:
             initial_credits = int(data.get("initial_credits", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return api_error(400, "invalid_initial_credits", "initial_credits must be int")
         if initial_credits < 0:
             return api_error(400, "invalid_initial_credits", "initial_credits must be >= 0")
@@ -3227,7 +3247,7 @@ def create_app(
         if daily_limit is not None:
             try:
                 daily_limit = int(daily_limit)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return api_error(400, "invalid_daily_limit", "daily_credits_limit must be int")
             if daily_limit < 0:
                 return api_error(400, "invalid_daily_limit", "daily_credits_limit must be >= 0")
@@ -3288,7 +3308,7 @@ def create_app(
             return api_error(400, "user_id_required", "user_id required")
         try:
             amount = int(data.get("amount_credits", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return api_error(400, "invalid_amount", "amount_credits must be int")
         if amount <= 0:
             return api_error(400, "invalid_amount", "amount_credits must be > 0")

@@ -2,6 +2,8 @@
 
 Instructions for the coding agent and maintainers on how to run and extend tests.
 
+The 2026-10-13 follow-up regressions are in `test_audit_followup.py`: all-method leases, typed request options, corrupt log records, successful-but-invalid model output, incomplete SSE, sync/SSE refunds, private migration backup and browser-origin checks. `test_backup_schedule.py` exercises the host backup wrapper with synthetic SQLite data. Host Bash tests run in the Ubuntu validation job and skip on Windows or images without Bash; they do not require adding Bash to the production image.
+
 ---
 
 ## Quick Reference

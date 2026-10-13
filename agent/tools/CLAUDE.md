@@ -2,6 +2,8 @@
 
 API reference for agent tools: paipan, time_context, llm_report.
 
+Model transport validation (2026-10-13): a successful HTTP status must contain a choices/message object with nonblank text. Malformed, empty or wrong-type answers return an error and follow existing refund/cache-failure handling. SSE requires valid JSON/text frames and a completion marker (`[DONE]` or a non-null finish reason); premature EOF fails instead of accepting a partial answer. Providers must support this completion contract.
+
 ---
 
 ## paipan_tool(inputs)
