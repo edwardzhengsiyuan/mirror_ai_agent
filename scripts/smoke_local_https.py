@@ -19,8 +19,11 @@ def main(argv=None):
     client.trust_env = False
     client.verify = str(args.ca)
     def call(method, path, **kwargs):
+        kwargs['headers'] = {'Origin': base, **kwargs.get('headers', {})}
         return client.request(method, base + path, timeout=120, **kwargs)
     assert call("GET", "/health").status_code == 200
+    rejected = call("POST", "/v1/auth/login", json={}, headers={'Origin': 'https://foreign.example'})
+    assert rejected.status_code == 403 and rejected.json()['error']['code'] == 'cross_origin_request'
     credentials = {"email": f"audit-{uuid.uuid4().hex}@example.invalid", "password": uuid.uuid4().hex}
     response = call("POST", "/v1/auth/register", json=credentials)
     assert response.status_code == 201, response.text
@@ -61,7 +64,9 @@ def main(argv=None):
     assert call("POST", "/v1/auth/logout").status_code == 200
     replay = call("GET", "/v1/me", headers={"Cookie": "mirror_session=" + copied_cookie})
     assert replay.status_code == 401
-    print(json.dumps({"tls_verified": True, "secure_cookie": True, "signed_webhook": True,
+    assert call("POST", "/v1/auth/login", json=credentials).status_code == 200
+    print(json.dumps({"tls_verified": True, "same_origin_auth": True, "foreign_origin_blocked": True,
+                      "secure_cookie": True, "signed_webhook": True,
                       "webhook_replay_credited_once": True, "bad_signature_rejected": True,
                       "sse_settled": True, "duplicate_not_charged": True, "logout_replay_rejected": True,
                       "models": "stub", "payment": "synthetic signed event"}, indent=2))

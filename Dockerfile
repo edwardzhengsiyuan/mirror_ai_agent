@@ -39,4 +39,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # --threads=8 matches the local stress-test sweet spot and matters for SSE
 # concurrency (one thread per long-running /v1/ask_stream request).
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--threads=8", "--call", "web_server:create_app"]
+# Flask ProxyFix applies the explicit APP_TRUSTED_PROXY_HOPS policy. Preserve
+# forwarded headers for that middleware; Waitress must not strip them first.
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--threads=8", "--no-clear-untrusted-proxy-headers", "--call", "web_server:create_app"]

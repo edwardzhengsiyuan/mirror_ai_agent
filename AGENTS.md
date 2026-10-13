@@ -105,6 +105,8 @@ LLM_MODE=stub .venv/bin/python app.py --profile storage/users/u_demo/profile.jso
 
 All conversation-writing methods (including hepan, cezi, najia and zwds) acquire that lease before reading history and charging. JSON boolean options must be actual booleans; `"false"` is rejected, not treated as true. Checkout requires either a string pack ID or an integer custom amount, never both. Browser mutations under `/v1/auth/` and `/v1/me/` reject foreign or opaque Origin headers; same-origin portal and clients without Origin remain supported.
 
+The container preserves forwarded headers through Waitress so Flask's explicit `APP_TRUSTED_PROXY_HOPS` policy can process them. The default `0` trusts none. Set `1` only behind the existing single proxy with the origin bound to loopback. HTTPS acceptance must include a browser Origin header on registration, login and logout; requests without it cannot verify this boundary.
+
 **Note**: LLM tracing is always-on and integrated with per-session conversation storage. All LLM calls emit `llm_request`, `llm_response`, and `llm_error` events to the session's conversation JSONL file.
 
 ### Windows Docker execution
