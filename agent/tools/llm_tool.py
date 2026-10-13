@@ -90,30 +90,49 @@ def _stream_sse_response(
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     usage: Optional[Dict[str, Any]] = None
+    completed = False
     for raw_line in resp:
         line = raw_line.decode("utf-8").strip()
         if not line or not line.startswith("data:"):
             continue
         data = line[len("data:") :].strip()
         if data == "[DONE]":
+            completed = True
             break
         try:
             payload = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        chunk_usage = payload.get("usage") if isinstance(payload, dict) else None
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid model stream JSON") from exc
+        if not isinstance(payload, dict) or payload.get("error"):
+            raise ValueError("Invalid model stream payload")
+        chunk_usage = payload.get("usage")
         if isinstance(chunk_usage, dict):
             usage = chunk_usage
-        choice = (payload.get("choices") or [{}])[0]
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            raise ValueError("Invalid model stream choices")
+        if not choices:  # Final usage-only frames are valid.
+            continue
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError("Invalid model stream choice")
+        if choice.get("finish_reason") is not None:
+            completed = True
         delta = choice.get("delta") or {}
+        if not isinstance(delta, dict):
+            raise ValueError("Invalid model stream delta")
         content_delta = delta.get("content") or ""
         reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content") or ""
+        if not isinstance(content_delta, str) or not isinstance(reasoning_delta, str):
+            raise ValueError("Model stream content must be text")
         if content_delta:
             content_parts.append(content_delta)
         if reasoning_delta:
             reasoning_parts.append(reasoning_delta)
         if on_delta and (content_delta or reasoning_delta):
             on_delta({"content": content_delta, "reasoning_content": reasoning_delta})
+    if not completed:
+        raise ValueError("Model stream ended before completion")
     return "".join(content_parts), "".join(reasoning_parts), usage
 
 
@@ -204,6 +223,10 @@ def _do_llm_api_call(
                     body = resp.read().decode("utf-8")
             last_err = None
             break
+        except (ValueError, UnicodeError) as e:
+            # A malformed successful response is a protocol failure, not an
+            # answer. Do not retry after having delivered partial deltas.
+            return None, None, e
         except (
             urllib.error.HTTPError,
             urllib.error.URLError,
@@ -234,13 +257,22 @@ def _do_llm_api_call(
 
     try:
         parsed = json.loads(body)
-    except json.JSONDecodeError as e:
+        if not isinstance(parsed, dict):
+            raise ValueError("Model response must be an object")
+        choices = parsed.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("Model response is missing choices")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ValueError("Model response is missing a message")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Model response is missing answer text")
+        reasoning_content = message.get("reasoning") or message.get("reasoning_content") or ""
+        if not isinstance(reasoning_content, str):
+            raise ValueError("Model reasoning must be text")
+    except (ValueError, TypeError) as e:
         return None, None, e
-
-    choice = (parsed.get("choices") or [{}])[0]
-    message = choice.get("message", {})
-    content = message.get("content", "")
-    reasoning_content = message.get("reasoning") or message.get("reasoning_content") or ""
 
     # OpenAI-compatible providers (gptproto, DashScope/Qwen) include a
     # ``usage`` block on non-stream responses. Surface it as a separate

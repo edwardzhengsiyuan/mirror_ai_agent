@@ -13,7 +13,11 @@ WORKDIR /app
 
 # Use the supported Alpine runtime without Debian's unused mount/login/systemd
 # packages; retain its package inventory so vulnerability scans remain complete.
-RUN apk upgrade --no-cache
+# Release CI changes this value for every run so Docker cannot reuse an old
+# security-upgrade layer. Refresh it for local rebuilds as well.
+ARG OS_SECURITY_REFRESH=2026-10-13
+RUN test -n "$OS_SECURITY_REFRESH" && apk upgrade --no-cache \
+ && apk add --no-cache 'zlib>=1.3.2-r1'
 
 COPY requirements-bootstrap.lock requirements.lock ./
 # The base image's installer has separate advisories from application packages.

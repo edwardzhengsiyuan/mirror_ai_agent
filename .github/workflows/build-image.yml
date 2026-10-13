@@ -85,6 +85,8 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
+          build-args: |
+            OS_SECURITY_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha

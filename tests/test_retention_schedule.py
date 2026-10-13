@@ -3,11 +3,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 
 import pytest
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Linux production host wrapper")
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="Host scheduler requires Bash; not installed in the runtime image")
 def test_scheduled_preview_preserves_report_on_failure(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

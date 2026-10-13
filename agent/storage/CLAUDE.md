@@ -2,6 +2,8 @@
 
 API reference for profile and conversation storage.
 
+Conversation readers skip malformed JSON and non-object JSON records, allowing intact later events to remain readable. This does not recover lost or overwritten data. All HTTP conversation writers share the profile lease with retention. On POSIX hosts, billing migration backups are exclusively created with mode 0600 and the host backup wrapper uses umask 077; Windows ACLs remain the operator's responsibility. Existing backups are not retroactively changed.
+
 ---
 
 ## Profile Path Helper

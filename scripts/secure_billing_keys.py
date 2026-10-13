@@ -2,6 +2,7 @@
 import argparse
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -22,7 +23,9 @@ def main(argv=None):
     if args.backup.resolve() == args.db.resolve() or args.backup.exists():
         parser.error("Backup must be a new, distinct file")
     # Exclusive creation, SQLite backup API includes committed WAL contents.
-    with args.backup.open("xb"):
+    # This snapshot can contain legacy plaintext keys. Restrict permissions
+    # at creation, before SQLite writes any sensitive pages (POSIX hosts).
+    with os.fdopen(os.open(args.backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"):
         pass
     with closing(sqlite3.connect(args.db.resolve().as_uri() + "?mode=ro", uri=True)) as src:
         with closing(sqlite3.connect(str(args.backup))) as dst:
