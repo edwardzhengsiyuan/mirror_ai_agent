@@ -109,6 +109,19 @@ jobs:
             -v "$GITHUB_WORKSPACE/web/app.html:/app/web/app.html:ro" \
             "$IMAGE" python -m pytest tests -m 'not llm_live' -q
 
+      - name: Verify browser authentication through HTTPS proxy
+        env:
+          AUDIT_IMAGE: ${{ steps.meta.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          trap 'docker compose -f docker-compose.audit.yml down' EXIT
+          docker compose -f docker-compose.audit.yml up -d --wait --wait-timeout 90
+          docker compose -f docker-compose.audit.yml exec -T proxy \
+            cat /data/caddy/pki/authorities/local/root.crt > "$RUNNER_TEMP/audit-ca.crt"
+          docker run --rm --network host \
+            -v "$RUNNER_TEMP/audit-ca.crt:/audit-ca.crt:ro" \
+            "$AUDIT_IMAGE" python scripts/smoke_local_https.py --ca /audit-ca.crt
+
       - name: Scan all image vulnerabilities before publication
         env:
           IMAGE: ${{ steps.meta.outputs.sha_tag }}
